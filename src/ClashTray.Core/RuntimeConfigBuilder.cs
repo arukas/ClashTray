@@ -41,6 +41,11 @@ public sealed class RuntimeConfigBuilder
 
     private static bool IsManagedLine(string line)
     {
+        if (line.Length > 0 && char.IsWhiteSpace(line[0]))
+        {
+            return false;
+        }
+
         var trimmed = line.TrimStart();
         return trimmed.StartsWith("external-controller:", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("secret:", StringComparison.OrdinalIgnoreCase)

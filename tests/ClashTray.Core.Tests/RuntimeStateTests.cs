@@ -58,6 +58,34 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task RuntimeConfigBuilderPreservesNestedPortFields()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        var source = Path.Combine(paths.ConfigurationsRoot, "source.yaml");
+        var destination = Path.Combine(paths.RuntimeRoot, "mihomo", "active.yaml");
+        await File.WriteAllTextAsync(
+            source,
+            "proxies:\n  - name: node\n    server: example.com\n    port: 443\nport: 1000\n");
+
+        try
+        {
+            var builder = new RuntimeConfigBuilder(new ControllerSecretStore(paths));
+            await builder.BuildAsync(source, destination, new AppSettings(HttpPort: 8899, ControllerPort: 9191));
+            var generated = await File.ReadAllTextAsync(destination);
+
+            StringAssert.Contains(generated, "    port: 443");
+            StringAssert.Contains(generated, "port: 8899");
+            Assert.IsFalse(generated.Contains("port: 1000", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task CoreUpdaterRejectsUnapprovedSourceBeforeNetworkAccess()
     {
         var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
