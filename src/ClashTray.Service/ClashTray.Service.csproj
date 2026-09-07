@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RootNamespace>ClashTray.Service</RootNamespace>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.ServiceProcess.ServiceController" />
+    <ProjectReference Include="..\ClashTray.Contracts\ClashTray.Contracts.csproj" />
+    <ProjectReference Include="..\ClashTray.Core\ClashTray.Core.csproj" />
+  </ItemGroup>
+</Project>

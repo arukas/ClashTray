@@ -1,0 +1,32 @@
+<UserControl
+    x:Class="ClashTray.App.ConnectionsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel Spacing="8" Padding="0,12,0,0">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="活动连接" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Content="关闭全部" Click="CloseAllButton_Click" />
+        </Grid>
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="SearchBox" PlaceholderText="搜索连接" TextChanged="SearchBox_TextChanged" />
+            <ComboBox x:Name="SortBox" Grid.Column="1" SelectedIndex="0" SelectionChanged="SortBox_SelectionChanged">
+                <ComboBoxItem Content="最新" />
+                <ComboBoxItem Content="上传" />
+                <ComboBoxItem Content="下载" />
+            </ComboBox>
+        </Grid>
+        <ListView x:Name="ConnectionsListView" MaxHeight="220" SelectionChanged="ConnectionsListView_SelectionChanged" />
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="关闭选中" Click="CloseSelectedButton_Click" />
+            <TextBlock x:Name="DetailsText" Text="选择连接查看详情" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

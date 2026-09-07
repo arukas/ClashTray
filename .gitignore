@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+packaging/.stage/
+packaging/out/
+*.user
+*.suo
+*.pfx
+*.cer
+*.msix
+*.appinstaller
+*.zip
+*.log
+user-data/

@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.4.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="MSTest.TestAdapter" Version="3.10.2" />
+    <PackageVersion Include="MSTest.TestFramework" Version="3.10.2" />
+    <PackageVersion Include="System.ServiceProcess.ServiceController" Version="10.0.11" />
+  </ItemGroup>
+</Project>

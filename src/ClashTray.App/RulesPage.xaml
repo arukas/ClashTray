@@ -1,0 +1,21 @@
+<UserControl
+    x:Class="ClashTray.App.RulesPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel Spacing="8" Padding="0,12,0,0">
+        <TextBlock Text="规则" FontSize="16" FontWeight="SemiBold" />
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBox x:Name="SearchBox" PlaceholderText="搜索规则" TextChanged="SearchBox_TextChanged" />
+            <ComboBox x:Name="FilterBox" Grid.Column="1" SelectedIndex="0" SelectionChanged="FilterBox_SelectionChanged">
+                <ComboBoxItem Content="全部" />
+                <ComboBoxItem Content="域名" />
+                <ComboBoxItem Content="IP" />
+            </ComboBox>
+        </Grid>
+        <ListView x:Name="RulesListView" MaxHeight="220" AutomationProperties.Name="规则列表" />
+    </StackPanel>
+</UserControl>
