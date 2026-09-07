@@ -10,5 +10,6 @@
     <PackageReference Include="MSTest.TestFramework" />
     <ProjectReference Include="..\..\src\ClashTray.Core\ClashTray.Core.csproj" />
     <ProjectReference Include="..\..\src\ClashTray.Contracts\ClashTray.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\ClashTray.Service\ClashTray.Service.csproj" />
   </ItemGroup>
 </Project>
