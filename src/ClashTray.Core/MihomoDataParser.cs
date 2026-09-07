@@ -61,15 +61,25 @@ public static class MihomoDataParser
     public static TrafficSnapshot ParseTraffic(JsonDocument document)
     {
         var root = document.RootElement;
-        var upTotal = GetLong(root, "upTotal");
-        var downTotal = GetLong(root, "downTotal");
-        var upSpeed = GetDouble(root, "up");
-        var downSpeed = GetDouble(root, "down");
+        var upTotal = GetLongOrNull(root, "upTotal")
+            ?? GetLongOrNull(root, "uploadTotal")
+            ?? GetLongOrNull(root, "upload")
+            ?? 0;
+        var downTotal = GetLongOrNull(root, "downTotal")
+            ?? GetLongOrNull(root, "downloadTotal")
+            ?? GetLongOrNull(root, "download")
+            ?? 0;
+        var upSpeed = GetDoubleOrNull(root, "up")
+            ?? GetDoubleOrNull(root, "upSpeed")
+            ?? 0;
+        var downSpeed = GetDoubleOrNull(root, "down")
+            ?? GetDoubleOrNull(root, "downSpeed")
+            ?? 0;
         return new TrafficSnapshot(
-            upTotal != 0 ? upTotal : GetLong(root, "up"),
-            downTotal != 0 ? downTotal : GetLong(root, "down"),
-            upSpeed != 0 ? upSpeed : GetDouble(root, "upSpeed"),
-            downSpeed != 0 ? downSpeed : GetDouble(root, "downSpeed"),
+            upTotal,
+            downTotal,
+            upSpeed,
+            downSpeed,
             DateTimeOffset.UtcNow);
     }
 
@@ -277,10 +287,19 @@ public static class MihomoDataParser
             ? number
             : 0;
 
-    private static double GetDouble(JsonElement element, string property) =>
-        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out var value) && value.TryGetDouble(out var number)
-            ? number
-            : 0;
+    private static long? GetLongOrNull(JsonElement element, string property) =>
+        element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(property, out var value)
+            && value.TryGetInt64(out var number)
+                ? number
+                : null;
+
+    private static double? GetDoubleOrNull(JsonElement element, string property) =>
+        element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(property, out var value)
+            && value.TryGetDouble(out var number)
+                ? number
+                : null;
 
     private static int GetInt(JsonElement element, string property) =>
         element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out var value) && value.TryGetInt32(out var number)

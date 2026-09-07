@@ -31,6 +31,20 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public void MihomoDataParserPreservesZeroTrafficTotals()
+    {
+        using var document = JsonDocument.Parse(
+            "{\"upTotal\":0,\"downTotal\":0,\"up\":128,\"down\":256}");
+
+        var traffic = MihomoDataParser.ParseTraffic(document);
+
+        Assert.AreEqual(0, traffic.UploadBytes);
+        Assert.AreEqual(0, traffic.DownloadBytes);
+        Assert.AreEqual(128, traffic.UploadBytesPerSecond);
+        Assert.AreEqual(256, traffic.DownloadBytesPerSecond);
+    }
+
+    [TestMethod]
     public async Task RuntimeConfigBuilderReplacesManagedSettings()
     {
         var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
