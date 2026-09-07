@@ -8,6 +8,8 @@ public sealed record CoreUpdateManifest(string Version, Uri DownloadUri, string 
 
 public sealed class CoreUpdater
 {
+    private const long MaxArchiveBytes = 128L * 1024 * 1024;
+    private const long MaxExecutableBytes = 128L * 1024 * 1024;
     private readonly HttpClient _httpClient;
     private readonly AppPaths _paths;
 
@@ -24,7 +26,7 @@ public sealed class CoreUpdater
         var stagingRoot = Path.Combine(_paths.LocalRoot, "core-update", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stagingRoot);
         var archivePath = Path.Combine(stagingRoot, "mihomo.zip");
-        var extractedPath = Path.Combine(stagingRoot, "extracted");
+        var extractedCorePath = Path.Combine(stagingRoot, "mihomo.exe");
         var coreDirectory = Path.Combine(_paths.LocalRoot, "core");
         var targetPath = Path.Combine(coreDirectory, "mihomo.exe");
         var backupPath = targetPath + ".previous";
@@ -33,11 +35,7 @@ public sealed class CoreUpdater
         {
             using var response = await _httpClient.GetAsync(manifest.DownloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             response.EnsureSuccessStatusCode();
-            await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken))
-            await using (var output = File.Create(archivePath))
-            {
-                await input.CopyToAsync(output, cancellationToken);
-            }
+            await DownloadToFileAsync(response.Content, archivePath, cancellationToken);
 
             await using (var hashStream = File.OpenRead(archivePath))
             {
@@ -48,18 +46,21 @@ public sealed class CoreUpdater
                 }
             }
 
-            ZipFile.ExtractToDirectory(archivePath, extractedPath);
-            var extractedCore = Directory.EnumerateFiles(extractedPath, "mihomo.exe", SearchOption.AllDirectories).FirstOrDefault();
-            if (extractedCore is null)
+            using var archive = ZipFile.OpenRead(archivePath);
+            var coreEntries = archive.Entries
+                .Where(entry => string.Equals(entry.Name, "mihomo.exe", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (coreEntries.Length != 1)
             {
-                throw new InvalidDataException("The Mihomo archive did not contain mihomo.exe.");
+                throw new InvalidDataException("The Mihomo archive must contain exactly one mihomo.exe.");
             }
 
-            ValidateWindowsAmd64Executable(extractedCore);
+            await ExtractEntryAsync(coreEntries[0], extractedCorePath, cancellationToken);
+            ValidateWindowsAmd64Executable(extractedCorePath);
 
             Directory.CreateDirectory(coreDirectory);
             var candidatePath = targetPath + ".new";
-            File.Copy(extractedCore, candidatePath, overwrite: true);
+            File.Copy(extractedCorePath, candidatePath, overwrite: true);
             if (File.Exists(targetPath))
             {
                 File.Replace(candidatePath, targetPath, backupPath, ignoreMetadataErrors: true);
@@ -118,6 +119,11 @@ public sealed class CoreUpdater
             throw new InvalidDataException("The Mihomo executable is too small to be a Windows PE file.");
         }
 
+        if (stream.Length > MaxExecutableBytes)
+        {
+            throw new InvalidDataException("The Mihomo executable exceeds the maximum allowed size.");
+        }
+
         Span<byte> dosHeader = stackalloc byte[0x40];
         stream.ReadExactly(dosHeader);
         if (dosHeader[0] != (byte)'M' || dosHeader[1] != (byte)'Z')
@@ -141,6 +147,82 @@ public sealed class CoreUpdater
             || BinaryPrimitives.ReadUInt16LittleEndian(peHeader[4..]) != 0x8664)
         {
             throw new InvalidDataException("The Mihomo executable is not a Windows x64 binary.");
+        }
+    }
+
+    private static async Task DownloadToFileAsync(
+        HttpContent content,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is > MaxArchiveBytes)
+        {
+            throw new InvalidDataException("The Mihomo archive exceeds the maximum allowed size.");
+        }
+
+        await using var input = await content.ReadAsStreamAsync(cancellationToken);
+        await using var output = new FileStream(
+            destinationPath,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            64 * 1024,
+            FileOptions.Asynchronous);
+        var buffer = new byte[64 * 1024];
+        long totalBytes = 0;
+        while (true)
+        {
+            var count = await input.ReadAsync(buffer.AsMemory(), cancellationToken);
+            if (count == 0)
+            {
+                return;
+            }
+
+            if (totalBytes > MaxArchiveBytes - count)
+            {
+                throw new InvalidDataException("The Mihomo archive exceeds the maximum allowed size.");
+            }
+
+            await output.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
+            totalBytes += count;
+        }
+    }
+
+    private static async Task ExtractEntryAsync(
+        ZipArchiveEntry entry,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        if (entry.Length <= 0 || entry.Length > MaxExecutableBytes)
+        {
+            throw new InvalidDataException("The Mihomo executable entry exceeds the maximum allowed size.");
+        }
+
+        await using var input = entry.Open();
+        await using var output = new FileStream(
+            destinationPath,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            64 * 1024,
+            FileOptions.Asynchronous);
+        var buffer = new byte[64 * 1024];
+        long totalBytes = 0;
+        while (true)
+        {
+            var count = await input.ReadAsync(buffer.AsMemory(), cancellationToken);
+            if (count == 0)
+            {
+                return;
+            }
+
+            if (totalBytes > MaxExecutableBytes - count)
+            {
+                throw new InvalidDataException("The Mihomo executable entry exceeds the maximum allowed size.");
+            }
+
+            await output.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
+            totalBytes += count;
         }
     }
 }

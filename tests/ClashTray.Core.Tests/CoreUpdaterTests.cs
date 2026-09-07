@@ -70,6 +70,28 @@ public sealed class CoreUpdaterTests
         }
     }
 
+    [TestMethod]
+    public async Task CoreUpdaterRejectsOversizedArchiveBeforeDownloadingBody()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+
+        try
+        {
+            using var httpClient = new HttpClient(new OversizedArchiveHandler());
+            var updater = new CoreUpdater(paths, httpClient);
+
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(
+                CreateManifest([])));
+            Assert.IsFalse(File.Exists(Path.Combine(paths.LocalRoot, "core", "mihomo.exe")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static CoreUpdateManifest CreateManifest(byte[] archiveBytes) =>
         new(
             "v0.0.0-test",
@@ -87,5 +109,18 @@ public sealed class CoreUpdaterTests
             {
                 Content = new ByteArrayContent(_archiveBytes)
             });
+    }
+
+    private sealed class OversizedArchiveHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var content = new ByteArrayContent([0]);
+            content.Headers.ContentLength = 128L * 1024 * 1024 + 1;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = content
+            });
+        }
     }
 }
