@@ -36,7 +36,7 @@ public sealed partial class ConnectionsPage : UserControl
         var search = SearchBox.Text.Trim();
         var sort = (SortBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
         var filtered = _connections.Where(connection => string.IsNullOrWhiteSpace(search)
-            || $"{connection.Source} {connection.Destination} {connection.Rule} {connection.Chain}".Contains(search, StringComparison.OrdinalIgnoreCase));
+            || $"{connection.Source} {connection.Destination} {connection.Rule} {connection.RulePayload} {connection.Chain}".Contains(search, StringComparison.OrdinalIgnoreCase));
         filtered = sort switch
         {
             "上传" => filtered.OrderByDescending(connection => connection.UploadBytes),
@@ -48,7 +48,7 @@ public sealed partial class ConnectionsPage : UserControl
         {
             ConnectionsListView.Items.Add(new ListViewItem
             {
-                Content = $"{connection.Source} → {connection.Destination} · {connection.Rule}",
+                Content = $"{connection.Source} → {connection.Destination} · {connection.Rule} {connection.RulePayload}",
                 Tag = connection
             });
         }
@@ -62,7 +62,7 @@ public sealed partial class ConnectionsPage : UserControl
             return;
         }
 
-        DetailsText.Text = $"{connection.Network} · {connection.Chain}\n上传 {connection.UploadBytes} B · 下载 {connection.DownloadBytes} B";
+        DetailsText.Text = $"{connection.Network} · {connection.Chain}\n规则：{connection.Rule} {connection.RulePayload}\n上传 {connection.UploadBytes} B · 下载 {connection.DownloadBytes} B";
     }
 
     private async void CloseSelectedButton_Click(object sender, RoutedEventArgs e)

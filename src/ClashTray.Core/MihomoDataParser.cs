@@ -126,7 +126,8 @@ public static class MihomoDataParser
                 string.Join(" → ", chains),
                 GetLong(connection, "upload"),
                 GetLong(connection, "download"),
-                ParseTimestamp(GetString(connection, "start"))));
+                ParseTimestamp(GetString(connection, "start")),
+                GetString(connection, "rulePayload") ?? "-"));
         }
 
         return result;

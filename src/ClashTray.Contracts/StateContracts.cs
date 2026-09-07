@@ -108,7 +108,8 @@ public sealed record ConnectionInfo(
     string Chain,
     long UploadBytes,
     long DownloadBytes,
-    DateTimeOffset StartTime);
+    DateTimeOffset StartTime,
+    string RulePayload = "-");
 
 public sealed record RuleInfo(string Type, string Payload, string Proxy, int Size);
 

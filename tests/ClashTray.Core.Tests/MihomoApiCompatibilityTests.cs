@@ -66,6 +66,19 @@ public sealed class MihomoApiCompatibilityTests
         Assert.AreEqual("mihomo", logs[0].Source);
     }
 
+    [TestMethod]
+    public void ConnectionsParserReadsOfficialRulePayload()
+    {
+        using var document = JsonDocument.Parse(
+            "{\"connections\":[{\"id\":\"connection-1\",\"metadata\":{\"network\":\"tcp\",\"sourceIP\":\"127.0.0.1:1000\",\"destinationIP\":\"example.com:443\"},\"upload\":10,\"download\":20,\"start\":\"2026-09-07T12:34:56Z\",\"chains\":[\"Proxy\"],\"rule\":\"DOMAIN\",\"rulePayload\":\"example.com\"}]}");
+
+        var connections = MihomoDataParser.ParseConnections(document);
+
+        Assert.AreEqual(1, connections.Count);
+        Assert.AreEqual("DOMAIN", connections[0].Rule);
+        Assert.AreEqual("example.com", connections[0].RulePayload);
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public HttpMethod? Method { get; private set; }
