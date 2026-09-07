@@ -43,9 +43,12 @@ public sealed class SystemProxyManager
     public async Task EnableAsync(int port, string bypassList, CancellationToken cancellationToken = default)
     {
         State = SystemProxyState.Enabling;
+        var current = default(ProxyRegistryState);
+        var registryChanged = false;
+        var backupCreated = false;
         try
         {
-            var current = ReadCurrentState();
+            current = ReadCurrentState();
             var existingOwnership = ReadOwnership();
             if (existingOwnership is not null && !IsOwnedByClashTray(current, existingOwnership))
             {
@@ -55,23 +58,46 @@ public sealed class SystemProxyManager
 
             if (!File.Exists(_paths.ProxyBackupFile))
             {
-                await File.WriteAllTextAsync(_paths.ProxyBackupFile, JsonSerializer.Serialize(current, _jsonOptions), cancellationToken);
+                await AtomicFile.WriteJsonAsync(_paths.ProxyBackupFile, current, _jsonOptions, cancellationToken);
+                backupCreated = true;
             }
 
             using var key = Registry.CurrentUser.OpenSubKey(InternetSettingsPath, writable: true)
                 ?? throw new InvalidOperationException("Windows Internet Settings registry key is unavailable.");
+            registryChanged = true;
             key.SetValue("ProxyEnable", 1, RegistryValueKind.DWord);
             key.SetValue("ProxyServer", $"127.0.0.1:{port}", RegistryValueKind.String);
             key.SetValue("ProxyOverride", bypassList, RegistryValueKind.String);
-            await File.WriteAllTextAsync(
+            await AtomicFile.WriteJsonAsync(
                 _paths.ProxyOwnershipFile,
-                JsonSerializer.Serialize(new ProxyOwnershipState($"127.0.0.1:{port}", bypassList), _jsonOptions),
+                new ProxyOwnershipState($"127.0.0.1:{port}", bypassList),
+                _jsonOptions,
                 cancellationToken);
             InternetSettingsNotifier.Notify();
             State = SystemProxyState.On;
         }
         catch
         {
+            var restored = !registryChanged;
+            if (registryChanged && current is not null)
+            {
+                try
+                {
+                    WriteState(current);
+                    InternetSettingsNotifier.Notify();
+                    restored = true;
+                }
+                catch
+                {
+                    State = SystemProxyState.RestoreRequired;
+                }
+            }
+
+            if (backupCreated && restored && File.Exists(_paths.ProxyBackupFile))
+            {
+                File.Delete(_paths.ProxyBackupFile);
+            }
+
             if (State is not SystemProxyState.RestoreRequired)
             {
                 State = SystemProxyState.Failed;
