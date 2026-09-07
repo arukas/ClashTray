@@ -7,6 +7,8 @@ namespace ClashTray.Core;
 
 public sealed class ConfigurationStore
 {
+    private const int MaxConfigurationBytes = 16 * 1024 * 1024;
+    private const int MaxMetadataBytes = 256 * 1024;
     private static readonly string[] SupportedExtensions = [".yaml", ".yml"];
     private readonly AppPaths _paths;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -22,11 +24,28 @@ public sealed class ConfigurationStore
         var profiles = new List<ConfigurationProfile>();
         foreach (var path in Directory.EnumerateFiles(_paths.ConfigurationsRoot, "*.json"))
         {
-            await using var stream = File.OpenRead(path);
-            var profile = await JsonSerializer.DeserializeAsync<ConfigurationProfile>(stream, _jsonOptions, cancellationToken);
-            if (profile is not null)
+            if (new FileInfo(path).Length > MaxMetadataBytes)
             {
-                profiles.Add(profile);
+                continue;
+            }
+
+            try
+            {
+                await using var stream = File.OpenRead(path);
+                var profile = await JsonSerializer.DeserializeAsync<ConfigurationProfile>(stream, _jsonOptions, cancellationToken);
+                if (profile is not null && IsConfigurationPathAllowed(profile.Path))
+                {
+                    profiles.Add(profile with { Path = Path.GetFullPath(profile.Path) });
+                }
+            }
+            catch (JsonException)
+            {
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
             }
         }
 
@@ -41,12 +60,13 @@ public sealed class ConfigurationStore
             throw new InvalidDataException("Only .yaml and .yml configuration files are supported.");
         }
 
-        var bytes = await File.ReadAllBytesAsync(sourcePath, cancellationToken);
+        await using var source = File.OpenRead(sourcePath);
+        var bytes = await ReadBytesWithLimitAsync(source, cancellationToken);
         ValidateYaml(bytes);
         var id = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()[..16];
         var safeName = SanitizeName(displayName ?? Path.GetFileNameWithoutExtension(sourcePath));
         var destination = Path.Combine(_paths.ConfigurationsRoot, $"{id}{extension.ToLowerInvariant()}");
-        await File.WriteAllBytesAsync(destination, bytes, cancellationToken);
+        await AtomicFile.WriteBytesAsync(destination, bytes, cancellationToken);
         var profile = new ConfigurationProfile(id, safeName, destination, null, DateTimeOffset.UtcNow, false);
         await SaveMetadataAsync(profile, cancellationToken);
         return profile;
@@ -60,14 +80,15 @@ public sealed class ConfigurationStore
         }
 
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        using var response = await httpClient.GetAsync(subscriptionUri, cancellationToken);
+        using var response = await httpClient.GetAsync(subscriptionUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
-        var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var bytes = await ReadBytesWithLimitAsync(responseStream, cancellationToken);
         ValidateYaml(bytes);
         var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(subscriptionUri.ToString()))).ToLowerInvariant()[..16];
         var safeName = SanitizeName(displayName ?? subscriptionUri.Host);
         var destination = Path.Combine(_paths.ConfigurationsRoot, $"{id}.yaml");
-        await File.WriteAllBytesAsync(destination, bytes, cancellationToken);
+        await AtomicFile.WriteBytesAsync(destination, bytes, cancellationToken);
         var profile = new ConfigurationProfile(id, safeName, destination, subscriptionUri, DateTimeOffset.UtcNow, false);
         await SaveMetadataAsync(profile, cancellationToken);
         return profile;
@@ -80,12 +101,14 @@ public sealed class ConfigurationStore
             throw new InvalidOperationException("订阅配置应使用刷新操作。");
         }
 
-        if (!File.Exists(profile.Path))
+        var path = ValidateConfigurationPath(profile.Path);
+        if (!File.Exists(path))
         {
-            throw new FileNotFoundException("配置文件不存在。", profile.Path);
+            throw new FileNotFoundException("配置文件不存在。", path);
         }
 
-        var bytes = await File.ReadAllBytesAsync(profile.Path, cancellationToken);
+        await using var source = File.OpenRead(path);
+        var bytes = await ReadBytesWithLimitAsync(source, cancellationToken);
         ValidateYaml(bytes);
         var refreshed = profile with { LastRefreshed = DateTimeOffset.UtcNow };
         await SaveMetadataAsync(refreshed, cancellationToken);
@@ -94,9 +117,10 @@ public sealed class ConfigurationStore
 
     public async Task DeleteAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
     {
-        if (File.Exists(profile.Path))
+        var path = ValidateConfigurationPath(profile.Path);
+        if (File.Exists(path))
         {
-            File.Delete(profile.Path);
+            File.Delete(path);
         }
 
         var metadataPath = MetadataPath(profile.Id);
@@ -127,11 +151,53 @@ public sealed class ConfigurationStore
 
     private async Task SaveMetadataAsync(ConfigurationProfile profile, CancellationToken cancellationToken)
     {
-        await using var stream = File.Create(MetadataPath(profile.Id));
-        await JsonSerializer.SerializeAsync(stream, profile, _jsonOptions, cancellationToken);
+        await AtomicFile.WriteJsonAsync(MetadataPath(profile.Id), profile, _jsonOptions, cancellationToken);
     }
 
     private string MetadataPath(string id) => Path.Combine(_paths.ConfigurationsRoot, $"{id}.json");
+
+    private string ValidateConfigurationPath(string path)
+    {
+        if (!IsConfigurationPathAllowed(path))
+        {
+            throw new InvalidDataException("配置文件路径不在 ClashTray 配置目录中。");
+        }
+
+        return Path.GetFullPath(path);
+    }
+
+    private bool IsConfigurationPathAllowed(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_paths.ConfigurationsRoot))
+            + Path.DirectorySeparatorChar;
+        var directory = Path.GetDirectoryName(fullPath);
+        return directory is not null
+            && directory.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(_paths.ConfigurationsRoot)), StringComparison.OrdinalIgnoreCase)
+            && fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+            && SupportedExtensions.Contains(Path.GetExtension(fullPath), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static async Task<byte[]> ReadBytesWithLimitAsync(Stream source, CancellationToken cancellationToken)
+    {
+        using var buffer = new MemoryStream();
+        var chunk = new byte[64 * 1024];
+        while (true)
+        {
+            var count = await source.ReadAsync(chunk.AsMemory(), cancellationToken);
+            if (count == 0)
+            {
+                return buffer.ToArray();
+            }
+
+            if (buffer.Length > MaxConfigurationBytes - count)
+            {
+                throw new InvalidDataException("配置文件超过 16 MiB 大小限制。");
+            }
+
+            await buffer.WriteAsync(chunk.AsMemory(0, count), cancellationToken);
+        }
+    }
 
     private static string SanitizeName(string name)
     {

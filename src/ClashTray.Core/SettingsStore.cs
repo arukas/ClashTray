@@ -27,7 +27,6 @@ public sealed class SettingsStore
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
     {
-        await using var stream = File.Create(_paths.SettingsFile);
-        await JsonSerializer.SerializeAsync(stream, settings, _options, cancellationToken);
+        await AtomicFile.WriteJsonAsync(_paths.SettingsFile, settings, _options, cancellationToken);
     }
 }

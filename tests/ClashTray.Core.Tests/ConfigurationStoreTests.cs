@@ -1,4 +1,5 @@
 using ClashTray.Core;
+using ClashTray.Contracts;
 
 namespace ClashTray.Core.Tests;
 
@@ -28,5 +29,25 @@ public sealed class ConfigurationStoreTests
         buffer.Add(3);
 
         CollectionAssert.AreEqual(ExpectedNewestItems, buffer.Snapshot().ToArray());
+    }
+
+    [TestMethod]
+    public async Task ReloadRejectsConfigurationPathOutsideStore()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        var store = new ConfigurationStore(paths);
+        var outsidePath = Path.Combine(root, "outside.yaml");
+        await File.WriteAllTextAsync(outsidePath, "mixed-port: 7890\n");
+
+        try
+        {
+            var profile = new ConfigurationProfile("outside", "outside", outsidePath, null, null, false);
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => store.ReloadAsync(profile));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 }
