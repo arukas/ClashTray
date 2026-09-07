@@ -382,7 +382,14 @@ public sealed partial class MainWindow : Window
         var selected = GetSelectedConfiguration();
         if (selected is not null && _runtime is not null)
         {
-            await _runtime.DeleteConfigurationAsync(selected);
+            try
+            {
+                await _runtime.DeleteConfigurationAsync(selected);
+            }
+            catch (Exception exception)
+            {
+                ShowError(exception.Message);
+            }
         }
     }
 

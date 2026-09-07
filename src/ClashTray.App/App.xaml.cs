@@ -60,13 +60,32 @@ public partial class App : Application, IAsyncDisposable
 
     internal async Task ToggleCoreAsync()
     {
-        if (_runtime.Snapshot.Core.State == CoreState.Running)
+        try
         {
-            await _runtime.RestartCoreAsync();
+            if (_runtime.Snapshot.Core.State == CoreState.Running)
+            {
+                await _runtime.RestartCoreAsync();
+            }
+            else
+            {
+                await _runtime.StartCoreAsync();
+            }
         }
-        else
+        catch (Exception exception)
         {
-            await _runtime.StartCoreAsync();
+            _mainWindow?.ShowError(exception.Message);
+        }
+    }
+
+    private async Task StopCoreAsync()
+    {
+        try
+        {
+            await _runtime.StopCoreAsync();
+        }
+        catch (Exception exception)
+        {
+            _mainWindow?.ShowError(exception.Message);
         }
     }
 
@@ -177,7 +196,7 @@ public partial class App : Application, IAsyncDisposable
                     _ = ToggleCoreAsync();
                     break;
                 case 1003:
-                    _ = _runtime.StopCoreAsync();
+                    _ = StopCoreAsync();
                     break;
                 case 1004:
                     _ = ToggleSystemProxyAsync();

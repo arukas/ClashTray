@@ -69,9 +69,26 @@ public sealed partial class ConnectionsPage : UserControl
     {
         if (ConnectionsListView.SelectedItem is ListViewItem { Tag: ConnectionInfo connection })
         {
-            await _runtime.CloseConnectionAsync(connection.Id);
+            try
+            {
+                await _runtime.CloseConnectionAsync(connection.Id);
+            }
+            catch (Exception exception)
+            {
+                DetailsText.Text = $"关闭连接失败：{exception.Message}";
+            }
         }
     }
 
-    private async void CloseAllButton_Click(object sender, RoutedEventArgs e) => await _runtime.CloseAllConnectionsAsync();
+    private async void CloseAllButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await _runtime.CloseAllConnectionsAsync();
+        }
+        catch (Exception exception)
+        {
+            DetailsText.Text = $"关闭连接失败：{exception.Message}";
+        }
+    }
 }
