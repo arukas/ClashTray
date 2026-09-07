@@ -10,6 +10,7 @@ public sealed class SubscriptionSchedulerTests
     public async Task SchedulerReportsProfileFailureAndKeepsRunning()
     {
         var failure = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondDelayStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var profile = new ConfigurationProfile(
             "subscription",
             "测试订阅",
@@ -25,12 +26,20 @@ public sealed class SubscriptionSchedulerTests
             () => new AppSettings(),
             (_, exception) => failure.TrySetResult(exception),
             null,
-            (_, cancellationToken) => Interlocked.Increment(ref delayCount) == 1
-                ? Task.CompletedTask
-                : Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
+            (_, cancellationToken) =>
+            {
+                if (Interlocked.Increment(ref delayCount) == 1)
+                {
+                    return Task.CompletedTask;
+                }
+
+                secondDelayStarted.TrySetResult(true);
+                return Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            });
 
         scheduler.Start();
         var exception = await failure.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await secondDelayStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.AreEqual(typeof(HttpRequestException), exception.GetType());
         Assert.AreEqual("订阅不可用", exception.Message);
