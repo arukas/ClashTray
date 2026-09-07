@@ -49,10 +49,13 @@ internal sealed class TrayIconService : IDisposable
         extendedStyle |= NativeMethods.WS_EX_TOOLWINDOW;
         extendedStyle &= ~NativeMethods.WS_EX_APPWINDOW;
         NativeMethods.SetWindowLongPtr(_windowHandle, NativeMethods.GWL_EXSTYLE, new IntPtr(extendedStyle));
-        _previousWindowProc = NativeMethods.SetWindowLongPtr(
-            _windowHandle,
-            -4,
-            Marshal.GetFunctionPointerForDelegate(_windowProc));
+        if (_previousWindowProc == IntPtr.Zero)
+        {
+            _previousWindowProc = NativeMethods.SetWindowLongPtr(
+                _windowHandle,
+                -4,
+                Marshal.GetFunctionPointerForDelegate(_windowProc));
+        }
 
         _data = new NativeMethods.NotifyIconData
         {
