@@ -8,6 +8,7 @@ namespace ClashTray.Core;
 public sealed class ClashTrayRuntime : IAsyncDisposable
 {
     private readonly SemaphoreSlim _operationLock = new(1, 1);
+    private readonly SemaphoreSlim _subscriptionOperationLock = new(1, 1);
     private readonly CancellationTokenSource _runtimeCts = new();
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(8) };
     private readonly BoundedLogBuffer _logBuffer = new(500);
@@ -47,7 +48,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _subscriptionScheduler = new SubscriptionScheduler(
             cancellation => _configurationStore.ListAsync(cancellation),
             (profile, cancellation) => RefreshSubscriptionAsync(profile, cancellation),
-            () => _settings);
+            () => _settings,
+            OnScheduledSubscriptionRefreshFailed,
+            OnScheduledSubscriptionCycleFailed);
         _processManager.StateChanged += (_, state) => UpdateCoreState(state, state == CoreState.Failed ? "Mihomo 进程已退出" : null);
         _processManager.LogLineReceived += OnProcessLogLine;
     }
@@ -282,22 +285,43 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task<ConfigurationProfile> ImportSubscriptionAsync(Uri uri, string? name = null, CancellationToken cancellationToken = default)
     {
-        UpdateSubscriptionState(SubscriptionState.Downloading, null);
+        await _subscriptionOperationLock.WaitAsync(cancellationToken);
         try
         {
-            var profile = await _configurationStore.ImportSubscriptionAsync(uri, name, cancellationToken);
-            UpdateSubscriptionState(SubscriptionState.Succeeded, null);
-            await SetActiveConfigurationAsync(profile.Id, cancellationToken);
-            return profile;
+            UpdateSubscriptionState(SubscriptionState.Downloading, null);
+            try
+            {
+                var profile = await _configurationStore.ImportSubscriptionAsync(uri, name, cancellationToken);
+                UpdateSubscriptionState(SubscriptionState.Succeeded, null);
+                await SetActiveConfigurationAsync(profile.Id, cancellationToken);
+                return profile;
+            }
+            catch (Exception exception)
+            {
+                UpdateSubscriptionState(SubscriptionState.Failed, exception.Message);
+                throw;
+            }
         }
-        catch (Exception exception)
+        finally
         {
-            UpdateSubscriptionState(SubscriptionState.Failed, exception.Message);
-            throw;
+            _subscriptionOperationLock.Release();
         }
     }
 
     public async Task RefreshSubscriptionAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
+    {
+        await _subscriptionOperationLock.WaitAsync(cancellationToken);
+        try
+        {
+            await RefreshSubscriptionCoreAsync(profile, cancellationToken);
+        }
+        finally
+        {
+            _subscriptionOperationLock.Release();
+        }
+    }
+
+    private async Task RefreshSubscriptionCoreAsync(ConfigurationProfile profile, CancellationToken cancellationToken)
     {
         if (profile.SubscriptionUri is null)
         {
@@ -730,6 +754,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         await _processManager.DisposeAsync();
         _httpClient.Dispose();
+        _subscriptionOperationLock.Dispose();
         _operationLock.Dispose();
         _runtimeCts.Dispose();
     }
@@ -1156,6 +1181,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         _snapshot = _snapshot with { Subscription = state, ErrorMessage = error, Logs = _logBuffer.Snapshot() };
         Publish();
+    }
+
+    private void OnScheduledSubscriptionRefreshFailed(ConfigurationProfile profile, Exception exception)
+    {
+        UpdateSubscriptionState(SubscriptionState.Failed, $"订阅 {profile.Name} 定时刷新失败：{exception.Message}");
+    }
+
+    private void OnScheduledSubscriptionCycleFailed(Exception exception)
+    {
+        UpdateSubscriptionState(SubscriptionState.Failed, $"定时订阅任务失败：{exception.Message}");
     }
 
     private void Publish() => SnapshotChanged?.Invoke(this, _snapshot);
