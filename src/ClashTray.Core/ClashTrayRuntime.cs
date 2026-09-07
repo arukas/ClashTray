@@ -171,11 +171,21 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             catch (TimeoutException)
             {
             }
-            catch (IOException)
+            catch (ServiceUnavailableException)
             {
             }
             catch (UnauthorizedAccessException)
             {
+            }
+            catch (ServiceRequestUnknownException exception)
+            {
+                UpdateCoreState(CoreState.Failed, $"ClashTray 服务启动结果无法确认，请检查服务状态后重试：{exception.Message}");
+                return;
+            }
+            catch (IOException exception)
+            {
+                UpdateCoreState(CoreState.Failed, $"ClashTray 服务通信失败，启动结果无法确认：{exception.Message}");
+                return;
             }
 
             if (serviceResponse is not null)
@@ -238,20 +248,45 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     var response = await _servicePipeClient.SendAsync(ServiceCommand.StopCore, cancellationToken: cancellationToken);
                     if (!response.Succeeded)
                     {
-                        throw new InvalidOperationException(response.Error ?? "ClashTray 服务无法停止 Mihomo。");
+                        _snapshot = _snapshot with { Tun = response.Tun };
+                        if (response.Core == CoreState.Stopped)
+                        {
+                            _usingServiceCore = false;
+                        }
+
+                        UpdateCoreState(response.Core, response.Error ?? "ClashTray 服务无法停止 Mihomo。");
+                        return;
                     }
                 }
-                catch (TimeoutException)
+                catch (TimeoutException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务不可用，停止结果无法确认：{exception.Message}");
+                    return;
                 }
-                catch (IOException)
+                catch (ServiceUnavailableException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务不可用，停止结果无法确认：{exception.Message}");
+                    return;
                 }
-                catch (UnauthorizedAccessException)
+                catch (UnauthorizedAccessException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务访问被拒绝，停止结果无法确认：{exception.Message}");
+                    return;
+                }
+                catch (ServiceRequestUnknownException exception)
+                {
+                    _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务停止结果无法确认，请检查服务状态后重试：{exception.Message}");
+                    return;
+                }
+                catch (IOException exception)
+                {
+                    _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务通信失败，停止结果无法确认：{exception.Message}");
+                    return;
                 }
 
                 _usingServiceCore = false;
@@ -619,6 +654,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = exception.Message };
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
+        }
+        catch (ServiceRequestUnknownException exception)
+        {
+            _snapshot = _snapshot with { Tun = TunState.Failed, ErrorMessage = exception.Message };
+            Publish();
+            throw new InvalidOperationException("TUN 操作结果无法确认，请检查服务状态后重试。", exception);
         }
         catch (IOException exception)
         {

@@ -14,23 +14,62 @@ public sealed class ServicePipeClient
     {
         var request = new ServiceRequest(Guid.NewGuid(), command, payload);
         await using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        await pipe.ConnectAsync(2000, cancellationToken);
+        try
+        {
+            await pipe.ConnectAsync(2000, cancellationToken);
+        }
+        catch (IOException exception)
+        {
+            throw new ServiceUnavailableException("ClashTray service is unavailable.", exception);
+        }
+
         await using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
         using var reader = new StreamReader(pipe, leaveOpen: true);
-        await writer.WriteLineAsync(JsonSerializer.Serialize(request, _options));
-        var line = await reader.ReadLineAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(line))
+        try
         {
-            throw new IOException("ClashTray service returned no response.");
-        }
+            await writer.WriteLineAsync(JsonSerializer.Serialize(request, _options));
+            var line = await reader.ReadLineAsync(cancellationToken);
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                throw new InvalidDataException("ClashTray service returned no response.");
+            }
 
-        var response = JsonSerializer.Deserialize<ServiceResponse>(line, _options)
-            ?? throw new InvalidDataException("ClashTray service returned an invalid response.");
-        if (response.RequestId != request.RequestId)
+            var response = JsonSerializer.Deserialize<ServiceResponse>(line, _options)
+                ?? throw new InvalidDataException("ClashTray service returned an invalid response.");
+            if (response.RequestId != request.RequestId)
+            {
+                throw new InvalidDataException("ClashTray service returned a mismatched response.");
+            }
+
+            return response;
+        }
+        catch (OperationCanceledException)
         {
-            throw new InvalidDataException("ClashTray service returned a mismatched response.");
+            throw;
         }
+        catch (JsonException exception)
+        {
+            throw new ServiceRequestUnknownException("ClashTray service returned invalid data.", exception);
+        }
+        catch (IOException exception)
+        {
+            throw new ServiceRequestUnknownException("ClashTray service request result is unknown.", exception);
+        }
+    }
+}
 
-        return response;
+internal sealed class ServiceUnavailableException : IOException
+{
+    public ServiceUnavailableException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+internal sealed class ServiceRequestUnknownException : IOException
+{
+    public ServiceRequestUnknownException(string message, Exception innerException)
+        : base(message, innerException)
+    {
     }
 }
