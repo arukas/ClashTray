@@ -6,6 +6,11 @@ namespace ClashTray.Core;
 
 public static class MihomoDataParser
 {
+    private const int MaxProxyEntries = 2_000;
+    private const int MaxConnectionEntries = 2_000;
+    private const int MaxRuleEntries = 5_000;
+    private const int MaxProviderEntries = 500;
+
     public static string? ParseVersion(JsonDocument document) =>
         GetString(document.RootElement, "version");
 
@@ -36,7 +41,7 @@ public static class MihomoDataParser
 
         var groups = new List<ProxyGroup>();
         var nodes = new List<ProxyNode>();
-        foreach (var property in proxies.EnumerateObject())
+        foreach (var property in proxies.EnumerateObject().Take(MaxProxyEntries))
         {
             var value = property.Value;
             var type = GetString(value, "type") ?? "Unknown";
@@ -123,7 +128,7 @@ public static class MihomoDataParser
         }
 
         var result = new List<ConnectionInfo>();
-        foreach (var connection in connections.EnumerateArray())
+        foreach (var connection in connections.EnumerateArray().Take(MaxConnectionEntries))
         {
             var metadata = connection.TryGetProperty("metadata", out var metadataElement) ? metadataElement : default;
             var chains = GetStringArray(connection, "chains");
@@ -152,7 +157,7 @@ public static class MihomoDataParser
         }
 
         var result = new List<RuleInfo>();
-        foreach (var rule in rules.EnumerateArray())
+        foreach (var rule in rules.EnumerateArray().Take(MaxRuleEntries))
         {
             if (rule.ValueKind == JsonValueKind.Object)
             {
@@ -187,7 +192,7 @@ public static class MihomoDataParser
         }
 
         var result = new List<ProviderStatus>();
-        foreach (var property in providers.EnumerateObject())
+        foreach (var property in providers.EnumerateObject().Take(MaxProviderEntries))
         {
             var value = property.Value;
             result.Add(new ProviderStatus(

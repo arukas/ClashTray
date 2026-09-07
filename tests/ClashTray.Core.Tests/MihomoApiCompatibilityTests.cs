@@ -107,6 +107,25 @@ public sealed class MihomoApiCompatibilityTests
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => api.GetVersionAsync());
     }
 
+    [TestMethod]
+    public void ParserBoundsConnectionAndRuleLists()
+    {
+        var connectionItems = string.Join(
+            ",",
+            Enumerable.Range(0, 2_100)
+                .Select(index => $"{{\"id\":\"connection-{index}\",\"metadata\":{{\"network\":\"tcp\"}}}}"));
+        var ruleItems = string.Join(
+            ",",
+            Enumerable.Range(0, 5_100)
+                .Select(index => $"{{\"type\":\"DOMAIN\",\"payload\":\"example-{index}.com\",\"proxy\":\"Proxy\"}}"));
+
+        using var connectionsDocument = JsonDocument.Parse($"{{\"connections\":[{connectionItems}]}}");
+        using var rulesDocument = JsonDocument.Parse($"{{\"rules\":[{ruleItems}]}}");
+
+        Assert.AreEqual(2_000, MihomoDataParser.ParseConnections(connectionsDocument).Count);
+        Assert.AreEqual(5_000, MihomoDataParser.ParseRules(rulesDocument).Count);
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public HttpMethod? Method { get; private set; }
