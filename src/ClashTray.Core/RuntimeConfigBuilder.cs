@@ -18,6 +18,7 @@ public sealed class RuntimeConfigBuilder
         AppSettings settings,
         CancellationToken cancellationToken = default)
     {
+        SettingsValidator.Validate(settings);
         var source = await File.ReadAllLinesAsync(sourcePath, cancellationToken);
         var filtered = source.Where(line => !IsManagedLine(line)).ToList();
         filtered.Add(string.Empty);
@@ -26,7 +27,7 @@ public sealed class RuntimeConfigBuilder
         filtered.Add($"allow-lan: {(settings.AllowLan ? "true" : "false")}");
         filtered.Add($"ipv6: {(settings.Ipv6 ? "true" : "false")}");
         filtered.Add($"tcp-concurrent: {(settings.TcpConcurrent ? "true" : "false")}");
-        filtered.Add($"log-level: {settings.LogLevel}");
+        filtered.Add($"log-level: {settings.LogLevel.Trim().ToLowerInvariant()}");
         filtered.Add($"port: {settings.HttpPort}");
         filtered.Add($"mixed-port: {settings.MixedPort}");
         filtered.Add($"socks-port: {settings.SocksPort}");

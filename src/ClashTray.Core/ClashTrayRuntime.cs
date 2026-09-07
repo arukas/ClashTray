@@ -1173,23 +1173,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     }
 
     private static void ValidateSettings(AppSettings settings)
-    {
-        var ports = new[] { settings.HttpPort, settings.SocksPort, settings.MixedPort, settings.ControllerPort };
-        if (ports.Any(port => port is < 1 or > 65535))
-        {
-            throw new ArgumentOutOfRangeException(nameof(settings), "端口必须在 1 到 65535 之间。");
-        }
-
-        if (ports.Distinct().Count() != ports.Length)
-        {
-            throw new ArgumentException("HTTP、SOCKS、Mixed 和控制器端口不能重复。", nameof(settings));
-        }
-
-        if (settings.SubscriptionRefreshHours is < 1 or > 168)
-        {
-            throw new ArgumentOutOfRangeException(nameof(settings), "订阅刷新间隔必须在 1 到 168 小时之间。");
-        }
-    }
+        => SettingsValidator.Validate(settings);
 
     private static RuntimeSnapshot CreateInitialSnapshot() => new(
         new CoreStatus(CoreState.Missing, null, null, ProxyMode.Rule, 0, 0, 0, 0, 0, 0, null),

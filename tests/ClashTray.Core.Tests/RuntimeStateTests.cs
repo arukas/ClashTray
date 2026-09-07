@@ -159,6 +159,24 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task RuntimeRejectsInvalidLogLevel()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        await using var runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => runtime.UpdateSettingsAsync(
+                runtime.Settings with { LogLevel = "trace" }));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task RuntimeInitializationKeepsOnlyOneActiveConfiguration()
     {
         var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
