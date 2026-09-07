@@ -5,6 +5,7 @@ namespace ClashTray.Core;
 
 public sealed class SettingsStore
 {
+    private const int MaxSettingsBytes = 256 * 1024;
     private readonly AppPaths _paths;
     private readonly JsonSerializerOptions _options = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
@@ -23,6 +24,11 @@ public sealed class SettingsStore
 
         try
         {
+            if (new FileInfo(_paths.SettingsFile).Length > MaxSettingsBytes)
+            {
+                return new AppSettings();
+            }
+
             await using var stream = File.OpenRead(_paths.SettingsFile);
             var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken)
                 ?? new AppSettings();
@@ -34,6 +40,14 @@ public sealed class SettingsStore
             return new AppSettings();
         }
         catch (ArgumentException)
+        {
+            return new AppSettings();
+        }
+        catch (IOException)
+        {
+            return new AppSettings();
+        }
+        catch (UnauthorizedAccessException)
         {
             return new AppSettings();
         }
