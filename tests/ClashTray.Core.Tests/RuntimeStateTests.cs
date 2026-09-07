@@ -50,6 +50,9 @@ public sealed class RuntimeStateTests
             StringAssert.Contains(generated, "mixed-port: 8899");
             Assert.IsFalse(generated.Contains("0.0.0.0:9999", StringComparison.Ordinal));
             Assert.IsFalse(generated.Contains("secret: old", StringComparison.Ordinal));
+            Assert.AreEqual(
+                0,
+                Directory.EnumerateFiles(Path.GetDirectoryName(destination)!, "*.tmp").Count());
         }
         finally
         {

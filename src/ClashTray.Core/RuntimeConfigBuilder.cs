@@ -33,9 +33,20 @@ public sealed class RuntimeConfigBuilder
         filtered.Add($"socks-port: {settings.SocksPort}");
 
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-        var tempPath = destinationPath + ".tmp";
-        await File.WriteAllLinesAsync(tempPath, filtered, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
-        File.Move(tempPath, destinationPath, overwrite: true);
+        var tempPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await File.WriteAllLinesAsync(tempPath, filtered, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+            File.Move(tempPath, destinationPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
+
         WindowsPathSecurity.ProtectRuntimeFile(destinationPath);
         return destinationPath;
     }
