@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Buffers.Binary;
 
 namespace ClashTray.Core;
 
@@ -54,6 +55,8 @@ public sealed class CoreUpdater
                 throw new InvalidDataException("The Mihomo archive did not contain mihomo.exe.");
             }
 
+            ValidateWindowsAmd64Executable(extractedCore);
+
             Directory.CreateDirectory(coreDirectory);
             var candidatePath = targetPath + ".new";
             File.Copy(extractedCore, candidatePath, overwrite: true);
@@ -104,6 +107,40 @@ public sealed class CoreUpdater
             || manifest.Sha256.Any(character => !Uri.IsHexDigit(character)))
         {
             throw new ArgumentException("Mihomo update manifest is not an approved official release manifest.", nameof(manifest));
+        }
+    }
+
+    private static void ValidateWindowsAmd64Executable(string path)
+    {
+        using var stream = File.OpenRead(path);
+        if (stream.Length < 0x40)
+        {
+            throw new InvalidDataException("The Mihomo executable is too small to be a Windows PE file.");
+        }
+
+        Span<byte> dosHeader = stackalloc byte[0x40];
+        stream.ReadExactly(dosHeader);
+        if (dosHeader[0] != (byte)'M' || dosHeader[1] != (byte)'Z')
+        {
+            throw new InvalidDataException("The Mihomo archive did not contain a Windows executable.");
+        }
+
+        var peHeaderOffset = BinaryPrimitives.ReadInt32LittleEndian(dosHeader[0x3C..]);
+        if (peHeaderOffset < 0 || peHeaderOffset > stream.Length - 6)
+        {
+            throw new InvalidDataException("The Mihomo executable has an invalid PE header.");
+        }
+
+        stream.Position = peHeaderOffset;
+        Span<byte> peHeader = stackalloc byte[6];
+        stream.ReadExactly(peHeader);
+        if (peHeader[0] != (byte)'P'
+            || peHeader[1] != (byte)'E'
+            || peHeader[2] != 0
+            || peHeader[3] != 0
+            || BinaryPrimitives.ReadUInt16LittleEndian(peHeader[4..]) != 0x8664)
+        {
+            throw new InvalidDataException("The Mihomo executable is not a Windows x64 binary.");
         }
     }
 }
