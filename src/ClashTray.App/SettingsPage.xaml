@@ -9,6 +9,14 @@
         <ToggleSwitch x:Name="AllowLanSwitch" Header="允许局域网连接" />
         <ToggleSwitch x:Name="Ipv6Switch" Header="启用 IPv6" />
         <ToggleSwitch x:Name="TcpConcurrentSwitch" Header="启用 TCP 并发" />
+        <NumberBox x:Name="SubscriptionRefreshHoursBox"
+                   Header="订阅刷新间隔（小时）"
+                   Minimum="1"
+                   Maximum="168"
+                   SmallChange="1"
+                   Value="24"
+                   Width="240"
+                   HorizontalAlignment="Left" />
         <TextBox x:Name="BypassListBox" Header="系统代理绕过列表" PlaceholderText="使用分号分隔，例如 localhost;127.*" />
         <TextBlock Text="端口" FontWeight="SemiBold" Margin="0,6,0,0" />
         <Grid ColumnSpacing="8">

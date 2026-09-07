@@ -998,6 +998,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             throw new ArgumentException("HTTP、SOCKS、Mixed 和控制器端口不能重复。", nameof(settings));
         }
+
+        if (settings.SubscriptionRefreshHours is < 1 or > 168)
+        {
+            throw new ArgumentOutOfRangeException(nameof(settings), "订阅刷新间隔必须在 1 到 168 小时之间。");
+        }
     }
 
     private static RuntimeSnapshot CreateInitialSnapshot() => new(

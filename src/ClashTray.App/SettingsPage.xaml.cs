@@ -24,6 +24,12 @@ public sealed partial class SettingsPage : UserControl
 
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryReadSubscriptionRefreshHours(out var subscriptionRefreshHours))
+        {
+            StatusText.Text = "订阅刷新间隔必须是 1 到 168 之间的整数小时。";
+            return;
+        }
+
         var current = _runtime.Settings;
         var logLevel = (LogLevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? current.LogLevel;
         var theme = (ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Theme;
@@ -40,7 +46,8 @@ public sealed partial class SettingsPage : UserControl
             ControllerPort = (int)ControllerPortBox.Value,
             LogLevel = logLevel,
             Theme = theme,
-            BypassList = BypassListBox.Text.Trim()
+            BypassList = BypassListBox.Text.Trim(),
+            SubscriptionRefreshHours = subscriptionRefreshHours
         });
         StatusText.Text = "设置已保存；核心重启后端口配置生效。";
     }
@@ -146,6 +153,7 @@ public sealed partial class SettingsPage : UserControl
         AllowLanSwitch.IsOn = settings.AllowLan;
         Ipv6Switch.IsOn = settings.Ipv6;
         TcpConcurrentSwitch.IsOn = settings.TcpConcurrent;
+        SubscriptionRefreshHoursBox.Value = Math.Clamp(settings.SubscriptionRefreshHours, 1, 168);
         HttpPortBox.Value = settings.HttpPort;
         SocksPortBox.Value = settings.SocksPort;
         MixedPortBox.Value = settings.MixedPort;
@@ -155,6 +163,23 @@ public sealed partial class SettingsPage : UserControl
             ?? LogLevelBox.Items.FirstOrDefault();
         ThemeBox.SelectedItem = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.Theme)
             ?? ThemeBox.Items.FirstOrDefault();
+    }
+
+    private bool TryReadSubscriptionRefreshHours(out int hours)
+    {
+        var value = SubscriptionRefreshHoursBox.Value;
+        if (double.IsNaN(value)
+            || double.IsInfinity(value)
+            || value < 1
+            || value > 168
+            || value != Math.Truncate(value))
+        {
+            hours = 0;
+            return false;
+        }
+
+        hours = (int)value;
+        return true;
     }
 
     public void UpdateProviders(RuntimeSnapshot snapshot)
