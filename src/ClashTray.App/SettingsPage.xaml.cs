@@ -24,6 +24,14 @@ public sealed partial class SettingsPage : UserControl
 
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!TryReadPort(HttpPortBox, "HTTP", out var httpPort)
+            || !TryReadPort(SocksPortBox, "SOCKS", out var socksPort)
+            || !TryReadPort(MixedPortBox, "Mixed", out var mixedPort)
+            || !TryReadPort(ControllerPortBox, "控制器", out var controllerPort))
+        {
+            return;
+        }
+
         if (!TryReadSubscriptionRefreshHours(out var subscriptionRefreshHours))
         {
             StatusText.Text = "订阅刷新间隔必须是 1 到 168 之间的整数小时。";
@@ -33,23 +41,34 @@ public sealed partial class SettingsPage : UserControl
         var current = _runtime.Settings;
         var logLevel = (LogLevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? current.LogLevel;
         var theme = (ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Theme;
-        await _runtime.UpdateSettingsAsync(current with
+        try
         {
-            StartWithWindows = StartWithWindowsSwitch.IsOn,
-            StartCoreAutomatically = StartCoreSwitch.IsOn,
-            AllowLan = AllowLanSwitch.IsOn,
-            Ipv6 = Ipv6Switch.IsOn,
-            TcpConcurrent = TcpConcurrentSwitch.IsOn,
-            HttpPort = (int)HttpPortBox.Value,
-            SocksPort = (int)SocksPortBox.Value,
-            MixedPort = (int)MixedPortBox.Value,
-            ControllerPort = (int)ControllerPortBox.Value,
-            LogLevel = logLevel,
-            Theme = theme,
-            BypassList = BypassListBox.Text.Trim(),
-            SubscriptionRefreshHours = subscriptionRefreshHours
-        });
-        StatusText.Text = "设置已保存；核心重启后端口配置生效。";
+            await _runtime.UpdateSettingsAsync(current with
+            {
+                StartWithWindows = StartWithWindowsSwitch.IsOn,
+                StartCoreAutomatically = StartCoreSwitch.IsOn,
+                AllowLan = AllowLanSwitch.IsOn,
+                Ipv6 = Ipv6Switch.IsOn,
+                TcpConcurrent = TcpConcurrentSwitch.IsOn,
+                HttpPort = httpPort,
+                SocksPort = socksPort,
+                MixedPort = mixedPort,
+                ControllerPort = controllerPort,
+                LogLevel = logLevel,
+                Theme = theme,
+                BypassList = BypassListBox.Text.Trim(),
+                SubscriptionRefreshHours = subscriptionRefreshHours
+            });
+            StatusText.Text = "设置已保存；核心重启后端口配置生效。";
+        }
+        catch (ArgumentException exception)
+        {
+            StatusText.Text = exception.Message;
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"设置保存失败：{exception.Message}";
+        }
     }
 
     private async void ClearFakeIpButton_Click(object sender, RoutedEventArgs e)
@@ -179,6 +198,24 @@ public sealed partial class SettingsPage : UserControl
         }
 
         hours = (int)value;
+        return true;
+    }
+
+    private bool TryReadPort(NumberBox box, string name, out int port)
+    {
+        var value = box.Value;
+        if (double.IsNaN(value)
+            || double.IsInfinity(value)
+            || value < 1
+            || value > 65535
+            || value != Math.Truncate(value))
+        {
+            StatusText.Text = $"{name} 端口必须是 1 到 65535 之间的整数。";
+            port = 0;
+            return false;
+        }
+
+        port = (int)value;
         return true;
     }
 
