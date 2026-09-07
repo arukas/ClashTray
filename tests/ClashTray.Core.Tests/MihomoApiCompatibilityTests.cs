@@ -8,6 +8,8 @@ namespace ClashTray.Core.Tests;
 [TestClass]
 public sealed class MihomoApiCompatibilityTests
 {
+    private static readonly string[] ExpectedProxyMembers = ["Node"];
+
     [TestMethod]
     public async Task FakeIpCacheFlushUsesPostAndBearerAuthentication()
     {
@@ -77,6 +79,21 @@ public sealed class MihomoApiCompatibilityTests
         Assert.AreEqual(1, connections.Count);
         Assert.AreEqual("DOMAIN", connections[0].Rule);
         Assert.AreEqual("example.com", connections[0].RulePayload);
+    }
+
+    [TestMethod]
+    public void ParserToleratesUnexpectedJsonShapes()
+    {
+        using var proxies = JsonDocument.Parse(
+            "{\"proxies\":{\"Group\":{\"type\":\"Selector\",\"all\":[\"Node\",17,null]}}}");
+        using var emptyLog = JsonDocument.Parse("{}");
+
+        var proxyData = MihomoDataParser.ParseProxies(proxies);
+        var logs = MihomoDataParser.ParseLogs(emptyLog, "mihomo");
+
+        Assert.AreEqual(1, proxyData.Groups.Count);
+        CollectionAssert.AreEqual(ExpectedProxyMembers, proxyData.Groups[0].Members.ToArray());
+        Assert.AreEqual(0, logs.Count);
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

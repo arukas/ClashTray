@@ -7,7 +7,7 @@ namespace ClashTray.Core;
 public static class MihomoDataParser
 {
     public static string? ParseVersion(JsonDocument document) =>
-        document.RootElement.TryGetProperty("version", out var version) ? version.GetString() : null;
+        GetString(document.RootElement, "version");
 
     public static ProxyMode? ParseMode(JsonDocument document)
     {
@@ -159,9 +159,9 @@ public static class MihomoDataParser
                 continue;
             }
 
-            var type = rule[0].GetString() ?? "-";
-            var payload = rule[1].GetString() ?? "-";
-            var proxy = rule[2].GetString() ?? "-";
+            var type = GetText(rule[0]) ?? "-";
+            var payload = GetText(rule[1]) ?? "-";
+            var proxy = GetText(rule[2]) ?? "-";
             result.Add(new RuleInfo(type, payload, proxy, GetInt(rule, 3)));
         }
 
@@ -209,7 +209,7 @@ public static class MihomoDataParser
                 result.Add(ParseLog(item, source));
             }
         }
-        else if (document.RootElement.ValueKind == JsonValueKind.Object)
+        else if (document.RootElement.ValueKind == JsonValueKind.Object && IsLogObject(document.RootElement))
         {
             result.Add(ParseLog(document.RootElement, source));
         }
@@ -224,6 +224,13 @@ public static class MihomoDataParser
         var message = GetString(item, "payload") ?? GetString(item, "message") ?? item.ToString();
         return new LogEntry(timestamp, source, level, message);
     }
+
+    private static bool IsLogObject(JsonElement item) =>
+        item.TryGetProperty("time", out _)
+        || item.TryGetProperty("type", out _)
+        || item.TryGetProperty("level", out _)
+        || item.TryGetProperty("payload", out _)
+        || item.TryGetProperty("message", out _);
 
     private static DateTimeOffset ParseTimestamp(string? value) =>
         DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var timestamp)
@@ -240,6 +247,14 @@ public static class MihomoDataParser
         return value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
     }
 
+    private static string? GetText(JsonElement element) =>
+        element.ValueKind switch
+        {
+            JsonValueKind.Null or JsonValueKind.Undefined => null,
+            JsonValueKind.String => element.GetString(),
+            _ => element.ToString()
+        };
+
     private static string[] GetStringArray(JsonElement element, string property)
     {
         if (element.ValueKind != JsonValueKind.Object
@@ -249,7 +264,12 @@ public static class MihomoDataParser
             return [];
         }
 
-        return value.EnumerateArray().Select(item => item.GetString()).Where(item => item is not null).Cast<string>().ToArray();
+        return value.EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.String)
+            .Select(item => item.GetString())
+            .Where(item => item is not null)
+            .Cast<string>()
+            .ToArray();
     }
 
     private static long GetLong(JsonElement element, string property) =>
