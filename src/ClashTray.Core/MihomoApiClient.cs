@@ -106,6 +106,9 @@ public sealed class MihomoApiClient
     public Task<JsonDocument> ClearDnsCacheAsync(CancellationToken cancellationToken = default) =>
         PostAsync("/cache/dns/flush", cancellationToken: cancellationToken);
 
+    public Task<JsonDocument> ClearFakeIpCacheAsync(CancellationToken cancellationToken = default) =>
+        PostAsync("/cache/fakeip/flush", cancellationToken: cancellationToken);
+
     public Task<JsonDocument> UpdateGeoAsync(CancellationToken cancellationToken = default) =>
         PostAsync("/configs/geo", cancellationToken: cancellationToken);
 

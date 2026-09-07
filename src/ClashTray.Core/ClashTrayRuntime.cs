@@ -510,7 +510,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         if (_api is not null)
         {
-            await _api.DeleteAsync("/cache/fakeip/flush", cancellationToken);
+            await _api.ClearFakeIpCacheAsync(cancellationToken);
         }
     }
 

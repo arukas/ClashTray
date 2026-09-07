@@ -143,6 +143,16 @@ public static class MihomoDataParser
         var result = new List<RuleInfo>();
         foreach (var rule in rules.EnumerateArray())
         {
+            if (rule.ValueKind == JsonValueKind.Object)
+            {
+                result.Add(new RuleInfo(
+                    GetString(rule, "type") ?? "-",
+                    GetString(rule, "payload") ?? "-",
+                    GetString(rule, "proxy") ?? "-",
+                    GetInt(rule, "size")));
+                continue;
+            }
+
             if (rule.ValueKind != JsonValueKind.Array || rule.GetArrayLength() < 3)
             {
                 continue;
