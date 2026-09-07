@@ -393,6 +393,22 @@ public sealed partial class MainWindow : Window
         var selected = GetSelectedConfiguration();
         if (selected is not null && _runtime is not null)
         {
+            var dialog = new ContentDialog
+            {
+                Title = "删除配置",
+                Content = selected.IsActive
+                    ? $"确定删除“{selected.Name}”吗？活动配置删除后，正在运行的核心也会停止。"
+                    : $"确定删除“{selected.Name}”吗？此操作会删除本地配置文件。",
+                PrimaryButtonText = "删除",
+                CloseButtonText = "取消",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = RootGrid.XamlRoot
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
             try
             {
                 await _runtime.DeleteConfigurationAsync(selected);
