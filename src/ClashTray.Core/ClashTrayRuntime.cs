@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Net.WebSockets;
 using System.Text.Json;
 using ClashTray.Contracts;
 
@@ -21,11 +22,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly CoreUpdater _coreUpdater;
     private readonly SubscriptionScheduler _subscriptionScheduler;
     private readonly MihomoProcessManager _processManager = new();
+    private readonly object _logStreamGate = new();
     private MihomoApiClient? _api;
     private Task? _pollingTask;
+    private CancellationTokenSource? _logStreamCts;
+    private Task? _logStreamTask;
     private AppSettings _settings = new();
     private RuntimeSnapshot _snapshot = CreateInitialSnapshot();
     private bool _usingServiceCore;
+
+    private const int MaxLogMessageBytes = 1024 * 1024;
 
     public ClashTrayRuntime(AppPaths? paths = null)
     {
@@ -218,6 +224,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         try
         {
             UpdateCoreState(CoreState.Stopping, null);
+            _api = null;
+            await StopLogStreamAsync();
             if (_usingServiceCore)
             {
                 try
@@ -248,7 +256,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await _processManager.StopAsync(cancellationToken);
             }
 
-            _api = null;
             UpdateCoreState(CoreState.Stopped, null);
         }
         finally
@@ -704,6 +711,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
         }
 
+        _api = null;
+        await StopLogStreamAsync();
         _runtimeCts.Cancel();
         await _subscriptionScheduler.DisposeAsync();
         if (_pollingTask is not null)
@@ -744,7 +753,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         var connectionData = MihomoDataParser.ParseConnections(connections);
         var rulesData = await TryGetRulesAsync(cancellationToken);
         var providerData = await TryGetProvidersAsync(cancellationToken);
-        var logData = await TryGetLogsAsync(cancellationToken);
         _snapshot = _snapshot with
         {
             Core = _snapshot.Core with
@@ -766,13 +774,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             Rules = rulesData,
             Providers = providerData.Providers,
             RuleProviders = providerData.RuleProviders,
-            Logs = logData,
+            Logs = _logBuffer.Snapshot(),
             Tun = tunEnabled is null
                 ? _snapshot.Tun
                 : tunEnabled.Value ? TunState.On : TunState.Off,
             ErrorMessage = null
         };
         Publish();
+        EnsureLogStreamStarted();
     }
 
     private async Task RefreshFromApiWithRetryAsync(CancellationToken cancellationToken)
@@ -826,6 +835,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     UpdateCoreState(CoreState.Failed, exception.Message);
                     if (!_usingServiceCore || _processManager.State != CoreState.Running)
                     {
+                        await StopLogStreamAsync();
                         break;
                     }
 
@@ -840,6 +850,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     catch (IOException)
                     {
                         _api = null;
+                        await StopLogStreamAsync();
                         _snapshot = _snapshot with { Tun = TunState.Unavailable };
                         UpdateCoreState(CoreState.Failed, "ClashTray 服务暂时不可用");
                         break;
@@ -847,6 +858,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     catch (UnauthorizedAccessException)
                     {
                         _api = null;
+                        await StopLogStreamAsync();
                         _snapshot = _snapshot with { Tun = TunState.Unavailable };
                         UpdateCoreState(CoreState.Failed, "ClashTray 服务暂时不可用");
                         break;
@@ -865,6 +877,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     else
                     {
                         _api = null;
+                        await StopLogStreamAsync();
                         _snapshot = _snapshot with { Tun = serviceStatus.Tun };
                         UpdateCoreState(serviceStatus.Core, serviceStatus.Core == CoreState.Failed ? "Mihomo 服务进程已停止" : null);
                         break;
@@ -880,6 +893,172 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         var controllerUri = new Uri($"http://127.0.0.1:{_settings.ControllerPort}/");
         return new MihomoApiClient(_httpClient, controllerUri, _secretStore.GetOrCreate());
+    }
+
+    private void EnsureLogStreamStarted()
+    {
+        if (!_usingServiceCore)
+        {
+            return;
+        }
+
+        lock (_logStreamGate)
+        {
+            var api = _api;
+            if (api is null || _logStreamTask is { IsCompleted: false })
+            {
+                return;
+            }
+
+            _logStreamCts?.Dispose();
+            var streamCts = CancellationTokenSource.CreateLinkedTokenSource(_runtimeCts.Token);
+            _logStreamCts = streamCts;
+            _logStreamTask = Task.Run(
+                () => RunLogStreamAsync(api, streamCts.Token),
+                CancellationToken.None);
+        }
+    }
+
+    private async Task StopLogStreamAsync()
+    {
+        Task? task;
+        CancellationTokenSource? streamCts;
+        lock (_logStreamGate)
+        {
+            task = _logStreamTask;
+            streamCts = _logStreamCts;
+            _logStreamTask = null;
+            _logStreamCts = null;
+        }
+
+        streamCts?.Cancel();
+        try
+        {
+            if (task is not null)
+            {
+                await task.ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (WebSocketException)
+        {
+        }
+        catch (HttpRequestException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+        finally
+        {
+            streamCts?.Dispose();
+        }
+    }
+
+    private async Task RunLogStreamAsync(MihomoApiClient api, CancellationToken cancellationToken)
+    {
+        var retryDelay = TimeSpan.FromSeconds(1);
+        var path = $"/logs?level={Uri.EscapeDataString(_settings.LogLevel)}&format=structured";
+        while (!cancellationToken.IsCancellationRequested && ReferenceEquals(_api, api))
+        {
+            try
+            {
+                using var socket = await api.ConnectWebSocketAsync(path, cancellationToken);
+                retryDelay = TimeSpan.FromSeconds(1);
+                await ReceiveLogMessagesAsync(socket, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+            catch (WebSocketException)
+            {
+            }
+            catch (HttpRequestException)
+            {
+            }
+            catch (IOException)
+            {
+            }
+
+            if (cancellationToken.IsCancellationRequested || !ReferenceEquals(_api, api))
+            {
+                break;
+            }
+
+            try
+            {
+                await Task.Delay(retryDelay, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            retryDelay = TimeSpan.FromSeconds(Math.Min(30, retryDelay.TotalSeconds * 2));
+        }
+    }
+
+    private async Task ReceiveLogMessagesAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    {
+        var receiveBuffer = new byte[16 * 1024];
+        while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+        {
+            using var message = new MemoryStream();
+            var isText = true;
+            var isOversized = false;
+            while (true)
+            {
+                var received = await socket.ReceiveAsync(
+                    new ArraySegment<byte>(receiveBuffer),
+                    cancellationToken);
+                if (received.MessageType == WebSocketMessageType.Close)
+                {
+                    return;
+                }
+
+                isText &= received.MessageType == WebSocketMessageType.Text;
+                if (isText && !isOversized)
+                {
+                    if (message.Length > MaxLogMessageBytes - received.Count)
+                    {
+                        isOversized = true;
+                    }
+                    else
+                    {
+                        message.Write(receiveBuffer, 0, received.Count);
+                    }
+                }
+
+                if (received.EndOfMessage)
+                {
+                    break;
+                }
+            }
+
+            if (!isText || isOversized || message.Length == 0)
+            {
+                continue;
+            }
+
+            message.Position = 0;
+            try
+            {
+                using var document = JsonDocument.Parse(message);
+                foreach (var entry in MihomoDataParser.ParseLogs(document, "mihomo"))
+                {
+                    AddMihomoLog(entry);
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
     }
 
     private async Task<IReadOnlyList<RuleInfo>> TryGetRulesAsync(CancellationToken cancellationToken)
@@ -981,7 +1160,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private void OnProcessLogLine(string line, bool isError)
     {
-        _logBuffer.Add(new LogEntry(DateTimeOffset.UtcNow, "mihomo", isError ? "error" : "info", line));
+        AddMihomoLog(new LogEntry(DateTimeOffset.UtcNow, "mihomo", isError ? "error" : "info", line));
+    }
+
+    private void AddMihomoLog(LogEntry entry)
+    {
+        _logBuffer.Add(entry);
         _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
         Publish();
     }
