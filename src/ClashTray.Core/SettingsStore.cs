@@ -21,12 +21,27 @@ public sealed class SettingsStore
             return new AppSettings();
         }
 
-        await using var stream = File.OpenRead(_paths.SettingsFile);
-        return await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken) ?? new AppSettings();
+        try
+        {
+            await using var stream = File.OpenRead(_paths.SettingsFile);
+            var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken)
+                ?? new AppSettings();
+            SettingsValidator.Validate(settings);
+            return settings;
+        }
+        catch (JsonException)
+        {
+            return new AppSettings();
+        }
+        catch (ArgumentException)
+        {
+            return new AppSettings();
+        }
     }
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
     {
+        SettingsValidator.Validate(settings);
         await AtomicFile.WriteJsonAsync(_paths.SettingsFile, settings, _options, cancellationToken);
     }
 }
