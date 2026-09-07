@@ -208,6 +208,10 @@ public static class MihomoDataParser
                 result.Add(ParseLog(item, source));
             }
         }
+        else if (document.RootElement.ValueKind == JsonValueKind.Object)
+        {
+            result.Add(ParseLog(document.RootElement, source));
+        }
 
         return result;
     }

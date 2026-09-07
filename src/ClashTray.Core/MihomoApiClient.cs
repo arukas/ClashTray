@@ -136,19 +136,34 @@ public sealed class MihomoApiClient
     public Task CloseAllConnectionsAsync(CancellationToken cancellationToken = default) =>
         DeleteAsync("/connections", cancellationToken);
 
-    public ClientWebSocket CreateWebSocket(string path)
+    public ClientWebSocket CreateWebSocket()
     {
         var socket = new ClientWebSocket();
         socket.Options.SetRequestHeader("Authorization", $"Bearer {_secret}");
         return socket;
     }
 
+    public async Task<ClientWebSocket> ConnectWebSocketAsync(string path, CancellationToken cancellationToken = default)
+    {
+        var socket = CreateWebSocket();
+        try
+        {
+            await socket.ConnectAsync(BuildWebSocketUri(path), cancellationToken);
+            return socket;
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
     public Uri BuildWebSocketUri(string path)
     {
-        var builder = new UriBuilder(_controllerUri)
+        var requestUri = new Uri(_controllerUri, path);
+        var builder = new UriBuilder(requestUri)
         {
             Scheme = _controllerUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws",
-            Path = path.TrimStart('/')
         };
         return builder.Uri;
     }

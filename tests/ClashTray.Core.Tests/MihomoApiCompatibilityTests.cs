@@ -36,6 +36,36 @@ public sealed class MihomoApiCompatibilityTests
         Assert.AreEqual(-1, rules[0].Size);
     }
 
+    [TestMethod]
+    public void WebSocketUriPreservesQueryParameters()
+    {
+        var api = new MihomoApiClient(
+            new HttpClient(new RecordingHandler()),
+            new Uri("http://127.0.0.1:9090/"),
+            "test-secret");
+
+        var uri = api.BuildWebSocketUri("/logs?level=debug&format=structured");
+
+        Assert.AreEqual("ws", uri.Scheme);
+        Assert.AreEqual("127.0.0.1", uri.Host);
+        Assert.AreEqual(9090, uri.Port);
+        Assert.AreEqual("/logs?level=debug&format=structured", uri.PathAndQuery);
+    }
+
+    [TestMethod]
+    public void LogsParserReadsOfficialStructuredSingleMessage()
+    {
+        using var document = JsonDocument.Parse(
+            "{\"time\":\"12:34:56\",\"level\":\"warning\",\"message\":\"controller warning\",\"fields\":[{\"key\":\"value\"}]}");
+
+        var logs = MihomoDataParser.ParseLogs(document, "mihomo");
+
+        Assert.AreEqual(1, logs.Count);
+        Assert.AreEqual("warning", logs[0].Level);
+        Assert.AreEqual("controller warning", logs[0].Message);
+        Assert.AreEqual("mihomo", logs[0].Source);
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public HttpMethod? Method { get; private set; }
