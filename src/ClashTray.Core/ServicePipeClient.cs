@@ -24,7 +24,13 @@ public sealed class ServicePipeClient
             throw new IOException("ClashTray service returned no response.");
         }
 
-        return JsonSerializer.Deserialize<ServiceResponse>(line, _options)
+        var response = JsonSerializer.Deserialize<ServiceResponse>(line, _options)
             ?? throw new InvalidDataException("ClashTray service returned an invalid response.");
+        if (response.RequestId != request.RequestId)
+        {
+            throw new InvalidDataException("ClashTray service returned a mismatched response.");
+        }
+
+        return response;
     }
 }

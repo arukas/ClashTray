@@ -9,6 +9,7 @@ namespace ClashTray.Service;
 
 internal sealed class ServiceCommandHost : IAsyncDisposable
 {
+    private const int MaxRequestCharacters = 64 * 1024;
     private readonly string _userSid;
     private readonly CancellationTokenSource _cts = new();
     private readonly ServiceRuntimeController _controller = new();
@@ -45,28 +46,79 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
         while (!_cts.IsCancellationRequested)
         {
             await using var pipe = CreatePipe();
-            await pipe.WaitForConnectionAsync(_cts.Token);
-            using var reader = new StreamReader(pipe, leaveOpen: true);
-            await using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
-            var line = await reader.ReadLineAsync(_cts.Token);
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            ServiceResponse response;
             try
             {
-                var request = JsonSerializer.Deserialize<ServiceRequest>(line, _jsonOptions)
-                    ?? throw new InvalidDataException("Invalid service request.");
-                response = await _controller.HandleAsync(request, _cts.Token);
+                await pipe.WaitForConnectionAsync(_cts.Token);
+                using var reader = new StreamReader(pipe, leaveOpen: true);
+                await using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
+                string? line;
+                try
+                {
+                    line = await ReadLineLimitedAsync(reader, _cts.Token);
+                }
+                catch (InvalidDataException)
+                {
+                    await writer.WriteLineAsync(JsonSerializer.Serialize(
+                        new ServiceResponse(Guid.Empty, false, TunState.Failed, Error: "服务请求超过大小限制。", Core: _controller.CoreState)));
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                ServiceResponse response;
+                try
+                {
+                    var request = JsonSerializer.Deserialize<ServiceRequest>(line, _jsonOptions)
+                        ?? throw new InvalidDataException("Invalid service request.");
+                    response = await _controller.HandleAsync(request, _cts.Token);
+                }
+                catch (Exception exception)
+                {
+                    response = new ServiceResponse(Guid.Empty, false, TunState.Failed, Error: exception.Message, Core: _controller.CoreState);
+                }
+
+                await writer.WriteLineAsync(JsonSerializer.Serialize(response, _jsonOptions));
             }
-            catch (Exception exception)
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested)
             {
-                response = new ServiceResponse(Guid.Empty, false, TunState.Failed, Error: exception.Message, Core: _controller.CoreState);
+                break;
+            }
+            catch (IOException) when (!_cts.IsCancellationRequested)
+            {
+            }
+        }
+    }
+
+    private static async Task<string?> ReadLineLimitedAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        var builder = new System.Text.StringBuilder();
+        var buffer = new char[1024];
+        while (true)
+        {
+            var count = await reader.ReadAsync(buffer.AsMemory(), cancellationToken);
+            if (count == 0)
+            {
+                return builder.Length == 0 ? null : builder.ToString().TrimEnd('\r');
             }
 
-            await writer.WriteLineAsync(JsonSerializer.Serialize(response, _jsonOptions));
+            for (var index = 0; index < count; index++)
+            {
+                var character = buffer[index];
+                if (character == '\n')
+                {
+                    return builder.ToString().TrimEnd('\r');
+                }
+
+                if (builder.Length >= MaxRequestCharacters)
+                {
+                    throw new InvalidDataException("Service request exceeded the maximum message size.");
+                }
+
+                builder.Append(character);
+            }
         }
     }
 
