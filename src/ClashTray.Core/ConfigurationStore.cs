@@ -24,16 +24,18 @@ public sealed class ConfigurationStore
         var profiles = new List<ConfigurationProfile>();
         foreach (var path in Directory.EnumerateFiles(_paths.ConfigurationsRoot, "*.json"))
         {
-            if (new FileInfo(path).Length > MaxMetadataBytes)
-            {
-                continue;
-            }
-
             try
             {
+                if (new FileInfo(path).Length > MaxMetadataBytes)
+                {
+                    continue;
+                }
+
                 await using var stream = File.OpenRead(path);
                 var profile = await JsonSerializer.DeserializeAsync<ConfigurationProfile>(stream, _jsonOptions, cancellationToken);
-                if (profile is not null && IsConfigurationPathAllowed(profile.Path))
+                if (profile is not null
+                    && IsValidProfileId(profile.Id)
+                    && IsConfigurationPathAllowed(profile.Path))
                 {
                     profiles.Add(profile with { Path = Path.GetFullPath(profile.Path) });
                 }
@@ -154,7 +156,15 @@ public sealed class ConfigurationStore
         await AtomicFile.WriteJsonAsync(MetadataPath(profile.Id), profile, _jsonOptions, cancellationToken);
     }
 
-    private string MetadataPath(string id) => Path.Combine(_paths.ConfigurationsRoot, $"{id}.json");
+    private string MetadataPath(string id)
+    {
+        if (!IsValidProfileId(id))
+        {
+            throw new InvalidDataException("配置标识无效。");
+        }
+
+        return Path.Combine(_paths.ConfigurationsRoot, $"{id}.json");
+    }
 
     private string ValidateConfigurationPath(string path)
     {
@@ -177,6 +187,9 @@ public sealed class ConfigurationStore
             && fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)
             && SupportedExtensions.Contains(Path.GetExtension(fullPath), StringComparer.OrdinalIgnoreCase);
     }
+
+    private static bool IsValidProfileId(string id) =>
+        id.Length == 16 && id.All(Uri.IsHexDigit);
 
     private static async Task<byte[]> ReadBytesWithLimitAsync(Stream source, CancellationToken cancellationToken)
     {
