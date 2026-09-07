@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Diagnostics;
+using Microsoft.Win32;
 using ClashTray.Contracts;
 using ClashTray.Core;
 
@@ -11,6 +12,7 @@ namespace ClashTray.Service;
 /// </summary>
 internal sealed class ServiceRuntimeController : IAsyncDisposable
 {
+    private const string ProfileListPath = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList";
     private readonly MihomoProcessManager _processManager = new();
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(5) };
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
@@ -208,31 +210,87 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private static bool IsAllowedCoreExecutable(string path)
     {
         var fullPath = Path.GetFullPath(path);
-        var directory = Directory.GetParent(fullPath);
+        var directory = Path.GetDirectoryName(fullPath);
         return File.Exists(fullPath)
             && string.Equals(Path.GetFileName(fullPath), "mihomo.exe", StringComparison.OrdinalIgnoreCase)
             && directory is not null
-            && string.Equals(directory.Name, "core", StringComparison.OrdinalIgnoreCase)
-            && directory.Parent is not null
-            && string.Equals(directory.Parent.Name, "ClashTray", StringComparison.OrdinalIgnoreCase);
+            && IsAllowedCoreDirectory(directory);
     }
 
     private static bool IsAllowedRuntimePath(string path, bool allowYaml)
     {
         var fullPath = Path.GetFullPath(path);
-        var directory = Directory.Exists(fullPath) ? new DirectoryInfo(fullPath) : Directory.GetParent(fullPath);
-        if (directory is null
-            || !string.Equals(directory.Name, "mihomo", StringComparison.OrdinalIgnoreCase)
-            || directory.Parent is null
-            || !string.Equals(directory.Parent.Name, "runtime", StringComparison.OrdinalIgnoreCase)
-            || directory.Parent.Parent is null
-            || !string.Equals(directory.Parent.Parent.Name, "ClashTray", StringComparison.OrdinalIgnoreCase))
+        var directory = Directory.Exists(fullPath) ? fullPath : Path.GetDirectoryName(fullPath);
+        if (directory is null || !IsAllowedRuntimeDirectory(directory))
         {
             return false;
         }
 
         return !allowYaml || Path.GetExtension(fullPath) is ".yaml" or ".yml";
     }
+
+    private static bool IsAllowedCoreDirectory(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var programDataCore = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "ClashTray",
+            "core");
+        if (PathEquals(fullPath, programDataCore))
+        {
+            return true;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        using var profiles = Registry.LocalMachine.OpenSubKey(ProfileListPath, writable: false);
+        if (profiles is null)
+        {
+            return false;
+        }
+
+        foreach (var sid in profiles.GetSubKeyNames())
+        {
+            using var profile = profiles.OpenSubKey(sid, writable: false);
+            var profilePath = profile?.GetValue("ProfileImagePath") as string;
+            if (string.IsNullOrWhiteSpace(profilePath))
+            {
+                continue;
+            }
+
+            var localCore = Path.Combine(
+                Environment.ExpandEnvironmentVariables(profilePath),
+                "AppData",
+                "Local",
+                "ClashTray",
+                "core");
+            if (PathEquals(fullPath, localCore))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsAllowedRuntimeDirectory(string path)
+    {
+        var expected = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "ClashTray",
+            "runtime",
+            "mihomo");
+        return PathEquals(path, expected);
+    }
+
+    private static bool PathEquals(string left, string right) =>
+        string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
+            StringComparison.OrdinalIgnoreCase);
 
     private ServiceResponse Success(ServiceRequest request) =>
         new(request.RequestId, true, _tunState, Core: CoreState);
