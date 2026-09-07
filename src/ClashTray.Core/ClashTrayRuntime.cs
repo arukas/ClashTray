@@ -62,10 +62,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         _settings = await _settingsStore.LoadAsync(cancellationToken);
         var storedConfigurations = await _configurationStore.ListAsync(cancellationToken);
+        var activeConfigurationId = _settings.ActiveConfigurationId
+            ?? storedConfigurations.FirstOrDefault(configuration => configuration.IsActive)?.Id;
         var configurations = storedConfigurations
             .Select(configuration => configuration with
             {
-                IsActive = configuration.Id == _settings.ActiveConfigurationId || configuration.IsActive
+                IsActive = string.Equals(configuration.Id, activeConfigurationId, StringComparison.OrdinalIgnoreCase)
             })
             .ToArray();
         _snapshot = _snapshot with

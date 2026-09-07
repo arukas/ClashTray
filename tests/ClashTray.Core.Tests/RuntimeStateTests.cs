@@ -157,4 +157,48 @@ public sealed class RuntimeStateTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [TestMethod]
+    public async Task RuntimeInitializationKeepsOnlyOneActiveConfiguration()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        var store = new ConfigurationStore(paths);
+        var first = await store.ImportLocalAsync(
+            await WriteConfigAsync(root, "first.yaml"),
+            "first");
+        var second = await store.ImportLocalAsync(
+            await WriteConfigAsync(root, "second.yaml"),
+            "second");
+        await WriteMetadataAsync(paths, first with { IsActive = true });
+        await WriteMetadataAsync(paths, second with { IsActive = true });
+
+        try
+        {
+            await using var runtime = new ClashTrayRuntime(paths);
+            await runtime.InitializeAsync();
+
+            Assert.AreEqual(1, runtime.Snapshot.Configurations.Count(configuration => configuration.IsActive));
+            Assert.AreEqual(first.Id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static async Task<string> WriteConfigAsync(string root, string name)
+    {
+        var path = Path.Combine(root, name);
+        Directory.CreateDirectory(root);
+        await File.WriteAllTextAsync(path, $"# {name}\nmixed-port: 7890\nproxies: []\n");
+        return path;
+    }
+
+    private static async Task WriteMetadataAsync(AppPaths paths, ConfigurationProfile profile)
+    {
+        await File.WriteAllTextAsync(
+            Path.Combine(paths.ConfigurationsRoot, $"{profile.Id}.json"),
+            System.Text.Json.JsonSerializer.Serialize(profile));
+    }
 }
