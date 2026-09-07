@@ -96,6 +96,17 @@ public sealed class MihomoApiCompatibilityTests
         Assert.AreEqual(0, logs.Count);
     }
 
+    [TestMethod]
+    public async Task ApiRejectsOversizedJsonResponse()
+    {
+        var api = new MihomoApiClient(
+            new HttpClient(new OversizedResponseHandler()),
+            new Uri("http://127.0.0.1:9090/"),
+            "test-secret");
+
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => api.GetVersionAsync());
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public HttpMethod? Method { get; private set; }
@@ -114,5 +125,14 @@ public sealed class MihomoApiCompatibilityTests
                 Content = new StringContent(string.Empty)
             });
         }
+    }
+
+    private sealed class OversizedResponseHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(new byte[16 * 1024 * 1024 + 1])
+            });
     }
 }

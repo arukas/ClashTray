@@ -10,6 +10,8 @@ namespace ClashTray.Core;
 
 public sealed class MihomoApiClient
 {
+    private const int MaxJsonResponseBytes = 16 * 1024 * 1024;
+    private const int MaxErrorResponseBytes = 64 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -31,8 +33,7 @@ public sealed class MihomoApiClient
         using var request = CreateRequest(HttpMethod.Get, path);
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return await ReadJsonAsync(response.Content, cancellationToken);
     }
 
     public async Task<JsonDocument> PutAsync(string path, object payload, CancellationToken cancellationToken = default)
@@ -176,17 +177,6 @@ public sealed class MihomoApiClient
         return request;
     }
 
-    private static async Task<JsonDocument> ReadJsonAsync(HttpContent content, CancellationToken cancellationToken)
-    {
-        if (content.Headers.ContentLength == 0)
-        {
-            return JsonDocument.Parse("{}");
-        }
-
-        var text = await content.ReadAsStringAsync(cancellationToken);
-        return string.IsNullOrWhiteSpace(text) ? JsonDocument.Parse("{}") : JsonDocument.Parse(text);
-    }
-
     private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         if (response.IsSuccessStatusCode)
@@ -194,7 +184,58 @@ public sealed class MihomoApiClient
             return;
         }
 
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        var body = await ReadTextAsync(response.Content, MaxErrorResponseBytes, cancellationToken);
         throw new HttpRequestException($"Mihomo controller returned {(int)response.StatusCode}: {body}");
+    }
+
+    private static async Task<JsonDocument> ReadJsonAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        var bytes = await ReadBytesAsync(content, MaxJsonResponseBytes, cancellationToken);
+        return bytes.Length == 0 ? JsonDocument.Parse("{}") : JsonDocument.Parse(bytes);
+    }
+
+    private static async Task<string> ReadTextAsync(
+        HttpContent content,
+        int maxBytes,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Encoding.UTF8.GetString(await ReadBytesAsync(content, maxBytes, cancellationToken));
+        }
+        catch (InvalidDataException)
+        {
+            return "[响应内容超过大小限制]";
+        }
+    }
+
+    private static async Task<byte[]> ReadBytesAsync(
+        HttpContent content,
+        int maxBytes,
+        CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is > MaxJsonResponseBytes)
+        {
+            throw new InvalidDataException("Mihomo controller response exceeded the maximum size.");
+        }
+
+        await using var input = await content.ReadAsStreamAsync(cancellationToken);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[64 * 1024];
+        while (true)
+        {
+            var count = await input.ReadAsync(chunk.AsMemory(), cancellationToken);
+            if (count == 0)
+            {
+                return buffer.ToArray();
+            }
+
+            if (buffer.Length > maxBytes - count)
+            {
+                throw new InvalidDataException("Mihomo controller response exceeded the maximum size.");
+            }
+
+            await buffer.WriteAsync(chunk.AsMemory(0, count), cancellationToken);
+        }
     }
 }
