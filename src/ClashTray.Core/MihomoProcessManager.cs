@@ -6,6 +6,7 @@ namespace ClashTray.Core;
 public sealed class MihomoProcessManager : IAsyncDisposable
 {
     private readonly SemaphoreSlim _operationLock = new(1, 1);
+    private readonly object _processGate = new();
     private Process? _process;
     private CancellationTokenSource? _lifetimeCts;
 
@@ -42,40 +43,28 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            if (_process is { HasExited: false })
+            Process? exitedProcess = null;
+            CancellationTokenSource? exitedLifetime = null;
+            lock (_processGate)
             {
-                return;
+                if (_process is not null)
+                {
+                    if (!HasExited(_process))
+                    {
+                        return;
+                    }
+
+                    exitedProcess = _process;
+                    exitedLifetime = _lifetimeCts;
+                    _process = null;
+                    _lifetimeCts = null;
+                }
             }
 
+            DisposeProcess(exitedProcess, exitedLifetime);
             State = CoreState.Starting;
             OnStateChanged();
-            Directory.CreateDirectory(workingDirectory);
-            _lifetimeCts?.Dispose();
-            _lifetimeCts = new CancellationTokenSource();
-
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = executablePath,
-                Arguments = $"-d \"{workingDirectory}\" -f \"{configurationPath}\"",
-                WorkingDirectory = workingDirectory,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            _process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-            _process.Exited += ProcessExited;
-            if (!_process.Start())
-            {
-                State = CoreState.Failed;
-                OnStateChanged();
-                throw new InvalidOperationException("Unable to start Mihomo.");
-            }
-
-            _ = DrainAsync(_process.StandardOutput, isError: false, cancellationToken: _lifetimeCts.Token);
-            _ = DrainAsync(_process.StandardError, isError: true, cancellationToken: _lifetimeCts.Token);
-            State = CoreState.Running;
-            OnStateChanged();
+            StartProcess(executablePath, configurationPath, workingDirectory);
         }
         finally
         {
@@ -109,32 +98,9 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             OnStateChanged();
             await StopCoreAsync();
             cancellationToken.ThrowIfCancellationRequested();
-
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = executablePath,
-                Arguments = $"-d \"{workingDirectory}\" -f \"{configurationPath}\"",
-                WorkingDirectory = workingDirectory,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            };
-            _process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-            _process.Exited += ProcessExited;
-            if (!_process.Start())
-            {
-                State = CoreState.Failed;
-                OnStateChanged();
-                throw new InvalidOperationException("Unable to restart Mihomo.");
-            }
-
-            _lifetimeCts?.Dispose();
-            _lifetimeCts = new CancellationTokenSource();
-            _ = DrainAsync(_process.StandardOutput, isError: false, cancellationToken: _lifetimeCts.Token);
-            _ = DrainAsync(_process.StandardError, isError: true, cancellationToken: _lifetimeCts.Token);
-            State = CoreState.Running;
+            State = CoreState.Starting;
             OnStateChanged();
+            StartProcess(executablePath, configurationPath, workingDirectory);
         }
         finally
         {
@@ -151,27 +117,117 @@ public sealed class MihomoProcessManager : IAsyncDisposable
 
     private async Task StopCoreAsync()
     {
-        if (_process is null)
+        Process? process;
+        CancellationTokenSource? lifetime;
+        lock (_processGate)
         {
+            process = _process;
+            lifetime = _lifetimeCts;
+            State = CoreState.Stopping;
+        }
+
+        OnStateChanged();
+        lifetime?.Cancel();
+        if (process is not null)
+        {
+            try
+            {
+                if (!HasExited(process))
+                {
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync();
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // The process may have exited between HasExited and Kill.
+            }
+        }
+
+        lock (_processGate)
+        {
+            if (ReferenceEquals(_process, process))
+            {
+                _process = null;
+            }
+
+            if (ReferenceEquals(_lifetimeCts, lifetime))
+            {
+                _lifetimeCts = null;
+            }
+
             State = CoreState.Stopped;
-            OnStateChanged();
-            return;
         }
 
-        State = CoreState.Stopping;
+        DisposeProcess(process, lifetime);
         OnStateChanged();
-        _lifetimeCts?.Cancel();
-        if (!_process.HasExited)
+    }
+
+    private void StartProcess(string executablePath, string configurationPath, string workingDirectory)
+    {
+        Directory.CreateDirectory(workingDirectory);
+        var startInfo = new ProcessStartInfo
         {
-            _process.Kill(entireProcessTree: true);
-            await _process.WaitForExitAsync();
+            FileName = executablePath,
+            Arguments = $"-d \"{workingDirectory}\" -f \"{configurationPath}\"",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        var lifetime = new CancellationTokenSource();
+        process.Exited += ProcessExited;
+        lock (_processGate)
+        {
+            _process = process;
+            _lifetimeCts = lifetime;
         }
 
-        _process.Exited -= ProcessExited;
-        _process.Dispose();
-        _process = null;
-        State = CoreState.Stopped;
-        OnStateChanged();
+        try
+        {
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("Unable to start Mihomo.");
+            }
+
+            _ = DrainAsync(process.StandardOutput, isError: false, lifetime.Token);
+            _ = DrainAsync(process.StandardError, isError: true, lifetime.Token);
+
+            var running = !HasExited(process);
+            lock (_processGate)
+            {
+                if (ReferenceEquals(_process, process))
+                {
+                    State = running ? CoreState.Running : CoreState.Failed;
+                }
+            }
+
+            if (!running)
+            {
+                lifetime.Cancel();
+            }
+
+            OnStateChanged();
+        }
+        catch
+        {
+            lifetime.Cancel();
+            lock (_processGate)
+            {
+                if (ReferenceEquals(_process, process))
+                {
+                    _process = null;
+                    _lifetimeCts = null;
+                    State = CoreState.Failed;
+                }
+            }
+
+            DisposeProcess(process, lifetime);
+            OnStateChanged();
+            throw;
+        }
     }
 
     private static async Task<int> RunOneShotAsync(string executablePath, string arguments, CancellationToken cancellationToken)
@@ -218,11 +274,54 @@ public sealed class MihomoProcessManager : IAsyncDisposable
 
     private void ProcessExited(object? sender, EventArgs e)
     {
-        if (State is not (CoreState.Stopping or CoreState.Restarting))
+        if (sender is not Process process)
         {
-            State = CoreState.Failed;
+            return;
+        }
+
+        var shouldNotify = false;
+        lock (_processGate)
+        {
+            if (!ReferenceEquals(_process, process))
+            {
+                return;
+            }
+
+            _lifetimeCts?.Cancel();
+            if (State is not (CoreState.Stopping or CoreState.Restarting))
+            {
+                State = CoreState.Failed;
+                shouldNotify = true;
+            }
+        }
+
+        if (shouldNotify)
+        {
             OnStateChanged();
         }
+    }
+
+    private static bool HasExited(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
+    private void DisposeProcess(Process? process, CancellationTokenSource? lifetime)
+    {
+        if (process is not null)
+        {
+            process.Exited -= ProcessExited;
+            process.Dispose();
+        }
+
+        lifetime?.Dispose();
     }
 
     private void OnStateChanged() => StateChanged?.Invoke(this, State);
