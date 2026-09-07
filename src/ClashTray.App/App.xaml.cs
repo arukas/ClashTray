@@ -60,6 +60,14 @@ public partial class App : Application, IAsyncDisposable
 
     internal async Task ToggleCoreAsync()
     {
+        if (_runtime.Snapshot.Core.State is CoreState.Validating
+            or CoreState.Starting
+            or CoreState.Stopping
+            or CoreState.Restarting)
+        {
+            return;
+        }
+
         try
         {
             if (_runtime.Snapshot.Core.State == CoreState.Running)
@@ -92,6 +100,11 @@ public partial class App : Application, IAsyncDisposable
     internal async Task ToggleSystemProxyAsync()
     {
         var currentState = _runtime.Snapshot.SystemProxy;
+        if (currentState is SystemProxyState.Enabling or SystemProxyState.Disabling)
+        {
+            return;
+        }
+
         var enabled = currentState is not (SystemProxyState.On or SystemProxyState.RestoreRequired);
         try
         {
@@ -105,6 +118,11 @@ public partial class App : Application, IAsyncDisposable
 
     internal async Task ToggleTunAsync()
     {
+        if (_runtime.Snapshot.Tun is TunState.Enabling or TunState.Disabling)
+        {
+            return;
+        }
+
         try
         {
             await _runtime.SetTunAsync(_runtime.Snapshot.Tun is not TunState.On);

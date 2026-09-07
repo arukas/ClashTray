@@ -132,6 +132,17 @@ public sealed partial class MainWindow : Window
     {
         ApplyTheme(_runtime?.Settings.Theme ?? "system");
         var core = snapshot.Core;
+        var coreBusy = core.State is CoreState.Validating
+            or CoreState.Starting
+            or CoreState.Stopping
+            or CoreState.Restarting;
+        CoreActionButton.IsEnabled = !coreBusy;
+        SystemProxyButton.IsEnabled = snapshot.SystemProxy is not (SystemProxyState.Enabling or SystemProxyState.Disabling);
+        TunButton.IsEnabled = snapshot.Tun is not (TunState.Enabling or TunState.Disabling);
+        var coreRunning = core.State == CoreState.Running;
+        RuleModeButton.IsEnabled = coreRunning;
+        GlobalModeButton.IsEnabled = coreRunning;
+        DirectModeButton.IsEnabled = coreRunning;
         CoreStateText.Text = core.State switch
         {
             CoreState.Running => "运行中",
