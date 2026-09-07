@@ -1,10 +1,12 @@
 using System.Diagnostics;
+using System.Text;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core;
 
 public sealed class MihomoProcessManager : IAsyncDisposable
 {
+    private const int MaxLogLineCharacters = 64 * 1024;
     private readonly SemaphoreSlim _operationLock = new(1, 1);
     private readonly object _processGate = new();
     private Process? _process;
@@ -255,7 +257,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                var line = await reader.ReadLineAsync(cancellationToken);
+                var line = await ReadLineLimitedAsync(reader, cancellationToken);
                 if (line is null)
                 {
                     break;
@@ -271,6 +273,56 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         {
         }
     }
+
+    private static async Task<string?> ReadLineLimitedAsync(
+        StreamReader reader,
+        CancellationToken cancellationToken)
+    {
+        var builder = new StringBuilder(Math.Min(MaxLogLineCharacters, 1024));
+        var buffer = new char[1024];
+        var truncated = false;
+        while (true)
+        {
+            var count = await reader.ReadAsync(buffer.AsMemory(), cancellationToken);
+            if (count == 0)
+            {
+                if (builder.Length == 0 && !truncated)
+                {
+                    return null;
+                }
+
+                break;
+            }
+
+            for (var index = 0; index < count; index++)
+            {
+                var character = buffer[index];
+                if (character == '\n')
+                {
+                    return FormatLogLine(builder, truncated);
+                }
+
+                if (!truncated)
+                {
+                    if (builder.Length < MaxLogLineCharacters)
+                    {
+                        builder.Append(character);
+                    }
+                    else
+                    {
+                        truncated = true;
+                    }
+                }
+            }
+        }
+
+        return FormatLogLine(builder, truncated);
+    }
+
+    private static string FormatLogLine(StringBuilder builder, bool truncated) =>
+        truncated
+            ? $"{builder.ToString().TrimEnd('\r')} … [日志行已截断]"
+            : builder.ToString().TrimEnd('\r');
 
     private void ProcessExited(object? sender, EventArgs e)
     {
