@@ -1,18 +1,19 @@
 using ClashTray.Contracts;
 using ClashTray.Core;
+using System.Globalization;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Windows.Storage.Pickers;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using WinRT.Interop;
+using Windows.ApplicationModel.DataTransfer;
 
 namespace ClashTray.App;
 
 public sealed partial class MainWindow : Window
 {
-    private const int PanelWidth = 420;
-    private const int PanelHeight = 640;
     private readonly App _app;
     private TrayIconService? _trayIcon;
     private ClashTrayRuntime? _runtime;
@@ -27,11 +28,15 @@ public sealed partial class MainWindow : Window
     private bool _allowClose;
     private string? _selectedConfigurationId;
     private AppWindow? _appWindow;
+    private bool _updatingSnapshot;
+    private readonly Queue<(double Up, double Down)> _trafficHistory = new();
+    private DateTime _lastTrafficSample;
 
     public MainWindow(App app)
     {
         _app = app;
         InitializeComponent();
+        _windowHandle = WindowNative.GetWindowHandle(this);
     }
 
     internal void Initialize(TrayIconService trayIcon, ClashTrayRuntime runtime)
@@ -47,8 +52,10 @@ public sealed partial class MainWindow : Window
         _connectionsPage = new ConnectionsPage(runtime);
         _logsPage = new LogsPage(runtime);
         _settingsPage = new SettingsPage(runtime);
-        PageContent.Content = _proxyPage;
+        ProxyPageContent.Content = _proxyPage;
         ApplyTheme(runtime.Settings.Theme);
+        NavigateTo(_proxyPage, "代理");
+        UpdateSnapshot(runtime.Snapshot);
     }
 
     public void HandleDeactivation()
@@ -78,42 +85,27 @@ public sealed partial class MainWindow : Window
             _windowHandle = WindowNative.GetWindowHandle(this);
         }
 
-        var dpi = NativeMethods.GetDpiForWindow(_windowHandle);
-        var scale = dpi == 0 ? 1.0 : dpi / 96.0;
-        var width = (int)Math.Round(PanelWidth * scale);
-        var height = (int)Math.Round(PanelHeight * scale);
         var trayRect = GetTrayRect();
-        var workArea = GetWorkArea(trayRect);
-        var x = trayRect.CenterX - width / 2;
-        var y = trayRect.Top - height - 8;
-
-        if (trayRect.Bottom <= workArea.Top + 100)
-        {
-            y = trayRect.Bottom + 8;
-        }
-        else if (trayRect.Left <= workArea.Left + 100)
-        {
-            x = trayRect.Right + 8;
-            y = trayRect.CenterY - height / 2;
-        }
-        else if (trayRect.Right >= workArea.Right - 100)
-        {
-            x = trayRect.Left - width - 8;
-            y = trayRect.CenterY - height / 2;
-        }
-
-        x = Math.Clamp(x, workArea.Left + 8, workArea.Right - width - 8);
-        y = Math.Clamp(y, workArea.Top + 8, workArea.Bottom - height - 8);
+        var monitor = NativeMethods.MonitorFromRect(ref trayRect, NativeMethods.MONITOR_DEFAULTTONEAREST);
+        var info = new NativeMethods.MonitorInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfo>() };
+        if (!NativeMethods.GetMonitorInfo(monitor, ref info))
+            throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+        var dpi = NativeMethods.GetDpiForMonitor(monitor, 0, out var monitorDpi, out _) == 0
+            ? monitorDpi : NativeMethods.GetDpiForWindow(_windowHandle);
+        var bounds = FlyoutPlacement.Calculate(
+            new(info.Monitor.Left, info.Monitor.Top, info.Monitor.Width, info.Monitor.Height),
+            new(info.Work.Left, info.Work.Top, info.Work.Width, info.Work.Height), dpi == 0 ? 1 : dpi / 96d);
         NativeMethods.SetWindowPos(
             _windowHandle,
             _isPinned ? IntPtr.Zero : new IntPtr(-1),
-            x,
-            y,
-            width,
-            height,
+            bounds.X,
+            bounds.Y,
+            bounds.Width,
+            bounds.Height,
             NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
-        NativeMethods.ShowWindow(_windowHandle, _isPinned ? NativeMethods.SW_SHOW : NativeMethods.SW_SHOWNOACTIVATE);
+        NativeMethods.ShowWindow(_windowHandle, NativeMethods.SW_SHOW);
         _isVisible = true;
+        NativeMethods.SetForegroundWindow(_windowHandle);
     }
 
     public void HidePanel()
@@ -132,17 +124,21 @@ public sealed partial class MainWindow : Window
     {
         ApplyTheme(_runtime?.Settings.Theme ?? "system");
         var core = snapshot.Core;
+        _updatingSnapshot = true;
         var coreBusy = core.State is CoreState.Validating
             or CoreState.Starting
             or CoreState.Stopping
             or CoreState.Restarting;
         CoreActionButton.IsEnabled = !coreBusy;
-        SystemProxyButton.IsEnabled = snapshot.SystemProxy is not (SystemProxyState.Enabling or SystemProxyState.Disabling);
-        TunButton.IsEnabled = snapshot.Tun is not (TunState.Enabling or TunState.Disabling);
+        SystemProxySwitch.IsEnabled = snapshot.SystemProxy is not (SystemProxyState.Enabling or SystemProxyState.Disabling);
+        TunSwitch.IsEnabled = snapshot.Tun is not (TunState.Enabling or TunState.Disabling);
         var coreRunning = core.State == CoreState.Running;
         RuleModeButton.IsEnabled = coreRunning;
         GlobalModeButton.IsEnabled = coreRunning;
         DirectModeButton.IsEnabled = coreRunning;
+        RuleModeButton.IsChecked = coreRunning && core.Mode == ProxyMode.Rule;
+        GlobalModeButton.IsChecked = coreRunning && core.Mode == ProxyMode.Global;
+        DirectModeButton.IsChecked = coreRunning && core.Mode == ProxyMode.Direct;
         CoreStateText.Text = core.State switch
         {
             CoreState.Running => "运行中",
@@ -153,9 +149,26 @@ public sealed partial class MainWindow : Window
             CoreState.Missing => "未安装",
             _ => "已停止"
         };
-        CoreActionButton.Content = core.State == CoreState.Running ? "重启" : "启动";
+        CoreActionButton.Content = new FontIcon
+        {
+            Glyph = core.State == CoreState.Running ? "\uE72C" : "\uE768",
+            FontSize = 16
+        };
+        ToolTipService.SetToolTip(CoreActionButton, core.State == CoreState.Running ? "重启核心" : "启动核心");
+        StatusDot.Fill = new SolidColorBrush(core.State switch
+        {
+            CoreState.Running => Colors.Green,
+            CoreState.Failed => Colors.Red,
+            CoreState.Starting or CoreState.Stopping or CoreState.Restarting or CoreState.Validating => Colors.Orange,
+            _ => Colors.Gray
+        });
         CoreVersionText.Text = string.IsNullOrWhiteSpace(core.Version) ? "版本未知" : $"Mihomo {core.Version}";
-        TrafficText.Text = $"↑ {FormatRate(core.UploadBytesPerSecond)} · ↓ {FormatRate(core.DownloadBytesPerSecond)} · {core.ConnectionCount} 个连接 · 内存 {FormatBytes(core.MemoryBytes)}";
+        CoreEndpointText.Text = core.State == CoreState.Running
+            ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}"
+            : "核心未运行";
+        ConnectionCountText.Text = core.ConnectionCount.ToString(CultureInfo.InvariantCulture);
+        TrafficText.Text = $"↑ {FormatRate(core.UploadBytesPerSecond)}  ↓ {FormatRate(core.DownloadBytesPerSecond)}";
+        MemoryText.Text = FormatBytes(core.MemoryBytes);
         SystemProxyStateText.Text = snapshot.SystemProxy switch
         {
             SystemProxyState.On => "已开启",
@@ -165,6 +178,7 @@ public sealed partial class MainWindow : Window
             SystemProxyState.Failed => "操作失败",
             _ => "已关闭"
         };
+        SystemProxySwitch.IsOn = snapshot.SystemProxy == SystemProxyState.On;
         TunStateText.Text = snapshot.Tun switch
         {
             TunState.On => "已开启",
@@ -174,9 +188,30 @@ public sealed partial class MainWindow : Window
             TunState.Failed => "操作失败",
             _ => "已关闭"
         };
-        ConfigurationText.Text = core.ConfigurationName is null
-            ? snapshot.ErrorMessage ?? "尚未导入配置"
-            : $"{core.ConfigurationName} · {core.Mode switch { ProxyMode.Global => "全局", ProxyMode.Direct => "直连", _ => "规则" }}模式";
+        TunSwitch.IsOn = snapshot.Tun == TunState.On;
+        _updatingSnapshot = false;
+        ConfigurationText.Text = core.ConfigurationName ?? snapshot.Configurations.FirstOrDefault(c => c.IsActive)?.Name ?? "导入配置";
+        ErrorBanner.Message = snapshot.ErrorMessage ?? core.ErrorMessage ?? string.Empty;
+        ErrorBanner.IsOpen = !string.IsNullOrEmpty(ErrorBanner.Message);
+        DownloadText.Text = FormatRate(core.DownloadBytesPerSecond);
+        UploadText.Text = FormatRate(core.UploadBytesPerSecond);
+        TotalTrafficText.Text = $"累计 ↑ {FormatBytes(core.UploadBytes)}  ↓ {FormatBytes(core.DownloadBytes)}";
+        if (DateTime.UtcNow - _lastTrafficSample >= TimeSpan.FromSeconds(1))
+        {
+            _lastTrafficSample = DateTime.UtcNow;
+            _trafficHistory.Enqueue((core.UploadBytesPerSecond, core.DownloadBytesPerSecond));
+            while (_trafficHistory.Count > 60) _trafficHistory.Dequeue();
+            DrawTraffic();
+        }
+
+        var settings = _runtime?.Settings;
+        if (settings is not null)
+        {
+            HttpEndpointButton.Content = $"HTTP {settings.HttpPort}";
+            HttpEndpointButton.Tag = $"127.0.0.1:{settings.HttpPort}";
+            MixedEndpointButton.Content = $"Mixed {settings.MixedPort}";
+            MixedEndpointButton.Tag = $"127.0.0.1:{settings.MixedPort}";
+        }
 
         ConfigurationsComboBox.SelectionChanged -= ConfigurationsComboBox_SelectionChanged;
         ConfigurationsComboBox.Items.Clear();
@@ -203,7 +238,8 @@ public sealed partial class MainWindow : Window
 
     public void ShowError(string message)
     {
-        ConfigurationText.Text = message;
+        ErrorBanner.Message = message;
+        ErrorBanner.IsOpen = true;
     }
 
     private void ApplyTheme(string theme)
@@ -311,6 +347,12 @@ public sealed partial class MainWindow : Window
 
         NativeMethods.SetWindowLongPtr(_windowHandle, NativeMethods.GWL_STYLE, new IntPtr(style));
         NativeMethods.SetWindowLongPtr(_windowHandle, NativeMethods.GWL_EXSTYLE, new IntPtr(extendedStyle));
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
+        {
+            var corners = 2;
+            var cornerResult = NativeMethods.DwmSetWindowAttribute(_windowHandle, 33, ref corners, sizeof(int));
+            if (cornerResult < 0) System.Diagnostics.Debug.WriteLine($"Rounded window corners unavailable: {cornerResult:X8}");
+        }
         NativeMethods.SetWindowPos(
             _windowHandle,
             IntPtr.Zero,
@@ -338,29 +380,46 @@ public sealed partial class MainWindow : Window
         };
     }
 
-    private static NativeMethods.Rect GetWorkArea(NativeMethods.Rect anchor)
-    {
-        var monitor = NativeMethods.MonitorFromRect(ref anchor, NativeMethods.MONITOR_DEFAULTTONEAREST);
-        var info = new NativeMethods.MonitorInfo
-        {
-            Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfo>(),
-            Device = new int[32]
-        };
-        return NativeMethods.GetMonitorInfo(monitor, ref info) ? info.Work : new NativeMethods.Rect { Left = 0, Top = 0, Right = 1920, Bottom = 1080 };
-    }
-
     private void PinButton_Click(object sender, RoutedEventArgs e)
     {
         _isPinned = !_isPinned;
-        PinButton.Content = _isPinned ? "取消固定" : "固定";
+        PinButton.Content = new FontIcon
+        {
+            Glyph = "\uE718",
+            FontSize = 16
+        };
+        ToolTipService.SetToolTip(PinButton, _isPinned ? "取消固定" : "固定窗口");
         ApplyWindowMode();
+        if (!_isPinned) ShowPanel();
     }
 
     private async void CoreActionButton_Click(object sender, RoutedEventArgs e) => await _app.ToggleCoreAsync();
 
-    private async void SystemProxyButton_Click(object sender, RoutedEventArgs e) => await _app.ToggleSystemProxyAsync();
+    private async void SystemProxySwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_updatingSnapshot || _runtime is null || SystemProxySwitch.IsOn == (_runtime.Snapshot.SystemProxy == SystemProxyState.On))
+        {
+            return;
+        }
 
-    private async void TunButton_Click(object sender, RoutedEventArgs e) => await _app.ToggleTunAsync();
+        _updatingSnapshot = true;
+        SystemProxySwitch.IsOn = _runtime.Snapshot.SystemProxy == SystemProxyState.On;
+        _updatingSnapshot = false;
+        await _app.ToggleSystemProxyAsync();
+    }
+
+    private async void TunSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_updatingSnapshot || _runtime is null || TunSwitch.IsOn == (_runtime.Snapshot.Tun == TunState.On))
+        {
+            return;
+        }
+
+        _updatingSnapshot = true;
+        TunSwitch.IsOn = _runtime.Snapshot.Tun == TunState.On;
+        _updatingSnapshot = false;
+        await _app.ToggleTunAsync();
+    }
 
     private async void RuleModeButton_Click(object sender, RoutedEventArgs e) => await _app.SetModeAsync(ProxyMode.Rule);
 
@@ -460,6 +519,18 @@ public sealed partial class MainWindow : Window
 
     private void QuitButton_Click(object sender, RoutedEventArgs e) => _app.RequestQuit();
 
+    private void CopyEndpointButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string endpoint })
+        {
+            return;
+        }
+
+        var package = new DataPackage();
+        package.SetText(endpoint);
+        Clipboard.SetContent(package);
+    }
+
     private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
     {
         if (_allowClose)
@@ -473,10 +544,51 @@ public sealed partial class MainWindow : Window
 
     private void NavigateTo(UIElement? page, string title)
     {
-        if (page is not null)
+        var isDashboard = page == _proxyPage;
+        DashboardScrollViewer.Visibility = isDashboard ? Visibility.Visible : Visibility.Collapsed;
+        OtherPageScrollViewer.Visibility = isDashboard ? Visibility.Collapsed : Visibility.Visible;
+        if (page is not null && !isDashboard)
         {
             PageContent.Content = page;
-            ConfigurationText.Text = title;
+        }
+
+        ProxyPageButton.IsChecked = isDashboard;
+        RulesPageButton.IsChecked = title == "规则";
+        ConnectionsPageButton.IsChecked = title == "连接";
+        LogsPageButton.IsChecked = title == "日志";
+        SettingsPageButton.IsChecked = title == "设置";
+    }
+
+
+    private void TrafficGraph_SizeChanged(object sender, SizeChangedEventArgs e) => DrawTraffic();
+
+    private void DrawTraffic()
+    {
+        if (TrafficGraph is null || UploadLine is null || DownloadLine is null) return;
+        var samples = _trafficHistory.ToArray();
+        var width = Math.Max(1, TrafficGraph.ActualWidth);
+        var peak = samples.Length == 0 ? 1 : Math.Max(1, samples.Max(s => Math.Max(s.Up, s.Down)));
+        var upload = new PointCollection();
+        var download = new PointCollection();
+        for (var i = 0; i < 60; i++)
+        {
+            var index = i - (60 - samples.Length);
+            var sample = index < 0 ? (Up: 0d, Down: 0d) : samples[index];
+            var x = i * width / 59;
+            var height = Math.Max(3, TrafficGraph.ActualHeight) - 2;
+            upload.Add(new Windows.Foundation.Point(x, height - (height - 2) * Math.Max(0, sample.Up) / peak));
+            download.Add(new Windows.Foundation.Point(x, height - (height - 2) * Math.Max(0, sample.Down) / peak));
+        }
+        UploadLine.Points = upload;
+        DownloadLine.Points = download;
+    }
+
+    private void RootGrid_KeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Escape && !_isPinned)
+        {
+            HidePanel();
+            e.Handled = true;
         }
     }
 

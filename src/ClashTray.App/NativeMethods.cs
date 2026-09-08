@@ -46,6 +46,8 @@ internal static class NativeMethods
     public const uint NIF_MESSAGE = 0x00000001;
     public const uint NIF_ICON = 0x00000002;
     public const uint NIF_TIP = 0x00000004;
+    public const uint NIF_GUID = 0x00000020;
+    public const uint NIF_SHOWTIP = 0x00000080;
     public const uint NOTIFYICON_VERSION_4 = 4;
     public const int IDI_APPLICATION = 32512;
     public const uint IMAGE_ICON = 1;
@@ -81,9 +83,7 @@ internal static class NativeMethods
         public int Size;
         public Rect Monitor;
         public Rect Work;
-
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-        public int[] Device;
+        public uint Flags;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -133,8 +133,20 @@ internal static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr MonitorFromRect(ref Rect rect, uint flags);
 
-    [DllImport("user32.dll", SetLastError = true)]
+    [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo monitorInfo);
+
+    [DllImport("shcore.dll")]
+    public static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmSetWindowAttribute(IntPtr windowHandle, uint attribute, ref int value, uint size);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool GetWindowRect(IntPtr windowHandle, out Rect rect);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr windowHandle);
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool SetWindowPos(IntPtr windowHandle, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
@@ -190,7 +202,7 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     public static extern uint GetDpiForWindow(IntPtr windowHandle);
 
-    [DllImport("shell32.dll", SetLastError = true)]
+    [DllImport("shell32.dll", EntryPoint = "Shell_NotifyIconW", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern bool Shell_NotifyIcon(uint message, ref NotifyIconData data);
 
     [DllImport("shell32.dll", SetLastError = true)]

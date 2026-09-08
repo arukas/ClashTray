@@ -1,117 +1,129 @@
-<Window
-    x:Class="ClashTray.App.MainWindow"
+<Window x:Class="ClashTray.App.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    mc:Ignorable="d"
-    Title="ClashTray">
-    <Grid x:Name="RootGrid" Padding="20" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="ClashTray">
+    <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" Padding="18,16,18,10" KeyDown="RootGrid_KeyDown">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-
-        <Grid Grid.Row="0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel Spacing="2">
-                <TextBlock Text="ClashTray" FontSize="24" FontWeight="SemiBold" />
-                <TextBlock Text="轻量、可靠的 Mihomo 控制中心" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-            </StackPanel>
-            <Button x:Name="PinButton" Grid.Column="1" Content="固定" Click="PinButton_Click" AutomationProperties.Name="固定控制面板" />
-        </Grid>
-
-        <Border Grid.Row="1" Margin="0,20,0,16" Padding="16" CornerRadius="12" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Spacing="4">
-                    <TextBlock Text="核心状态" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock x:Name="CoreStateText" Text="已停止" FontSize="20" FontWeight="SemiBold" />
-                    <TextBlock x:Name="CoreVersionText" Text="版本未知" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <TextBlock x:Name="TrafficText" Text="上传 0 B/s · 下载 0 B/s" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        <Grid Margin="0,0,0,8" ColumnSpacing="10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="40"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <Border CornerRadius="10" Background="{ThemeResource ControlFillColorSecondaryBrush}" Width="40" Height="40">
+                <Image Source="ms-appx:///Assets/running.ico" Width="28" Height="28"/>
+            </Border>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                <TextBlock Text="ClashTray" FontSize="22" FontWeight="SemiBold"/>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="Gray" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="CoreStateText" Text="已停止" FontSize="12"/>
+                    <TextBlock x:Name="CoreEndpointText" Text="核心未运行" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                 </StackPanel>
-                <Button x:Name="CoreActionButton" Grid.Column="1" Content="启动" Click="CoreActionButton_Click" VerticalAlignment="Center" />
+            </StackPanel>
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                <Button x:Name="PinButton" Style="{StaticResource ClashTrayIconButtonStyle}" Click="PinButton_Click" ToolTipService.ToolTip="固定窗口" AutomationProperties.Name="固定窗口"><FontIcon Glyph="&#xE718;" FontSize="16"/></Button>
+                <Button Style="{StaticResource ClashTrayIconButtonStyle}" Click="RefreshConfigurationButton_Click" ToolTipService.ToolTip="重新加载配置" AutomationProperties.Name="重新加载配置"><FontIcon Glyph="&#xE72C;" FontSize="16"/></Button>
+                <Button x:Name="CoreActionButton" Style="{StaticResource ClashTrayAccentIconButtonStyle}" Click="CoreActionButton_Click" ToolTipService.ToolTip="启动核心" AutomationProperties.Name="启动或重启核心"><FontIcon Glyph="&#xE768;" FontSize="16"/></Button>
+            </StackPanel>
+        </Grid>
+        <Border Grid.Row="1" Background="{ThemeResource ControlFillColorSecondaryBrush}" CornerRadius="10" Padding="3" Margin="0,0,0,6">
+            <Grid ColumnSpacing="3">
+                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                <ToggleButton x:Name="RuleModeButton" Style="{StaticResource ClashTraySegmentButtonStyle}" Click="RuleModeButton_Click"><StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xEA18;" FontSize="16"/><TextBlock Text="规则"/></StackPanel></ToggleButton>
+                <ToggleButton x:Name="GlobalModeButton" Grid.Column="1" Style="{StaticResource ClashTraySegmentButtonStyle}" Click="GlobalModeButton_Click"><StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE774;" FontSize="16"/><TextBlock Text="全局"/></StackPanel></ToggleButton>
+                <ToggleButton x:Name="DirectModeButton" Grid.Column="2" Style="{StaticResource ClashTraySegmentButtonStyle}" Click="DirectModeButton_Click"><StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE945;" FontSize="16"/><TextBlock Text="直连"/></StackPanel></ToggleButton>
             </Grid>
         </Border>
-
-        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
-            <StackPanel Spacing="12">
-                <TextBlock Text="快速控制" FontSize="16" FontWeight="SemiBold" />
-                <Grid ColumnSpacing="12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Button x:Name="SystemProxyButton" Grid.Column="0" Click="SystemProxyButton_Click" HorizontalContentAlignment="Stretch" Padding="14" AutomationProperties.Name="系统代理">
-                        <StackPanel Spacing="3">
-                            <TextBlock Text="系统代理" FontWeight="SemiBold" />
-                            <TextBlock x:Name="SystemProxyStateText" Text="已关闭" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
+        <Grid Grid.Row="2" Margin="0,0,0,4">
+            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+            <ToggleButton x:Name="ProxyPageButton" Content="节点" Style="{StaticResource ClashTrayNavButtonStyle}" Click="ProxyPageButton_Click"/>
+            <ToggleButton x:Name="RulesPageButton" Grid.Column="1" Content="规则" Style="{StaticResource ClashTrayNavButtonStyle}" Click="RulesPageButton_Click"/>
+            <ToggleButton x:Name="ConnectionsPageButton" Grid.Column="2" Content="连接" Style="{StaticResource ClashTrayNavButtonStyle}" Click="ConnectionsPageButton_Click"/>
+            <ToggleButton x:Name="LogsPageButton" Grid.Column="3" Content="日志" Style="{StaticResource ClashTrayNavButtonStyle}" Click="LogsPageButton_Click"/>
+            <ToggleButton x:Name="SettingsPageButton" Grid.Column="4" Content="设置" Style="{StaticResource ClashTrayNavButtonStyle}" Click="SettingsPageButton_Click"/>
+        </Grid>
+        <StackPanel Grid.Row="3" Spacing="3" Margin="0,0,0,6">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE71B;" FontSize="13" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><TextBlock x:Name="ConnectionCountText" Text="0"/><TextBlock Text="连接" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE74A;" FontSize="12" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><TextBlock x:Name="UploadText" Text="0 B/s" FontFamily="Consolas"/><FontIcon Glyph="&#xE74B;" FontSize="12" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><TextBlock x:Name="DownloadText" Text="0 B/s" FontFamily="Consolas"/></StackPanel>
+            </Grid>
+            <Grid x:Name="TrafficGraph" Height="26" SizeChanged="TrafficGraph_SizeChanged" AutomationProperties.Name="最近一分钟上传和下载速度">
+                <Border BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" VerticalAlignment="Bottom"/>
+                <Polyline x:Name="UploadLine" Stroke="{ThemeResource AccentTextFillColorSecondaryBrush}" StrokeThickness="1.5"/>
+                <Polyline x:Name="DownloadLine" Stroke="{ThemeResource AccentTextFillColorPrimaryBrush}" StrokeThickness="1.8"/>
+            </Grid>
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE950;" FontSize="13"/><TextBlock x:Name="MemoryText" Text="0 KB" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel>
+                <TextBlock Grid.Column="1" x:Name="TotalTrafficText" Text="累计 ↑ 0 KB  ↓ 0 KB" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </Grid>
+            <TextBlock x:Name="TrafficText" Visibility="Collapsed"/>
+        </StackPanel>
+        <Grid Grid.Row="4">
+            <ScrollViewer x:Name="DashboardScrollViewer" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="2" Padding="0,0,4,10">
+                    <InfoBar x:Name="ErrorBanner" IsOpen="False" Severity="Error" IsClosable="True"/>
+                    <Button Style="{StaticResource ClashTrayRowButtonStyle}" HorizontalContentAlignment="Stretch" AutomationProperties.Name="切换和管理配置">
+                        <Button.Flyout>
+                            <Flyout>
+                                <StackPanel Width="310" Spacing="10">
+                                    <TextBlock Text="配置管理" FontSize="18" FontWeight="SemiBold"/>
+                                    <ComboBox x:Name="ConfigurationsComboBox" PlaceholderText="选择配置" HorizontalAlignment="Stretch" SelectionChanged="ConfigurationsComboBox_SelectionChanged"/>
+                                    <Grid ColumnSpacing="6">
+                                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                        <Button Content="导入 YAML" Click="ImportLocalButton_Click" HorizontalAlignment="Stretch"/>
+                                        <Button Grid.Column="1" Content="添加订阅" Click="ImportSubscriptionButton_Click" HorizontalAlignment="Stretch"/>
+                                    </Grid>
+                                    <Grid ColumnSpacing="6">
+                                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                        <Button Content="重新加载" Click="RefreshConfigurationButton_Click" HorizontalAlignment="Stretch"/>
+                                        <Button Grid.Column="1" Content="删除配置" Click="DeleteConfigurationButton_Click" HorizontalAlignment="Stretch"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="20"/><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="12"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE8A5;" FontSize="18" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                            <TextBlock Grid.Column="1" Text="切换配置" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="2" x:Name="ConfigurationText" Text="导入配置" TextTrimming="CharacterEllipsis" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <FontIcon Grid.Column="3" Glyph="&#xE76C;" FontSize="12"/>
+                        </Grid>
                     </Button>
-                    <Button x:Name="TunButton" Grid.Column="1" Click="TunButton_Click" HorizontalContentAlignment="Stretch" Padding="14" AutomationProperties.Name="TUN">
-                        <StackPanel Spacing="3">
-                            <TextBlock Text="TUN" FontWeight="SemiBold" />
-                            <TextBlock x:Name="TunStateText" Text="已关闭" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                    </Button>
-                </Grid>
-
-                <TextBlock Text="代理模式" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button x:Name="RuleModeButton" Content="规则" Click="RuleModeButton_Click" />
-                    <Button x:Name="GlobalModeButton" Content="全局" Click="GlobalModeButton_Click" />
-                    <Button x:Name="DirectModeButton" Content="直连" Click="DirectModeButton_Click" />
+                    <Grid MinHeight="36" ColumnSpacing="10" Padding="6,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="20"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
+                        <FontIcon Glyph="&#xE774;" FontSize="18"/>
+                        <TextBlock Grid.Column="1" Text="系统代理" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="2" x:Name="SystemProxyStateText" Text="已关闭" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center"/>
+                        <ToggleSwitch Grid.Column="3" x:Name="SystemProxySwitch" Width="46" MinWidth="0" MinHeight="0" Height="36" OnContent="" OffContent="" Toggled="SystemProxySwitch_Toggled" AutomationProperties.Name="系统代理" HorizontalAlignment="Right"/>
+                    </Grid>
+                    <Grid MinHeight="36" ColumnSpacing="10" Padding="6,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="20"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
+                        <FontIcon Glyph="&#xEA18;" FontSize="18" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                        <TextBlock Grid.Column="1" Text="TUN 模式" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="2" x:Name="TunStateText" Text="已关闭" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center"/>
+                        <ToggleSwitch Grid.Column="3" x:Name="TunSwitch" Width="46" MinWidth="0" MinHeight="0" Height="36" OnContent="" OffContent="" Toggled="TunSwitch_Toggled" AutomationProperties.Name="TUN 模式" HorizontalAlignment="Right"/>
+                    </Grid>
+                    <Grid MinHeight="40" ColumnSpacing="6" Padding="6,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="20"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <FontIcon Glyph="&#xE756;" FontSize="17"/>
+                        <TextBlock Grid.Column="1" Text="代理端口" Margin="4,0,0,0" VerticalAlignment="Center" FontSize="14"/>
+                        <Button Grid.Column="2" x:Name="HttpEndpointButton" Content="HTTP 7890" Style="{StaticResource ClashTrayEndpointButtonStyle}" Click="CopyEndpointButton_Click" ToolTipService.ToolTip="复制 HTTP 代理地址"/>
+                        <Button Grid.Column="3" x:Name="MixedEndpointButton" Content="Mixed 7892" Style="{StaticResource ClashTrayEndpointButtonStyle}" Click="CopyEndpointButton_Click" ToolTipService.ToolTip="复制 Mixed 代理地址"/>
+                    </Grid>
+                    <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="4,8"/>
+                    <ContentControl x:Name="ProxyPageContent" HorizontalContentAlignment="Stretch"/>
                 </StackPanel>
-                <Border Padding="14" CornerRadius="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
-                    <StackPanel Spacing="6">
-                        <TextBlock Text="当前配置" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <TextBlock x:Name="ConfigurationText" Text="尚未导入配置" FontSize="15" />
-                        <ComboBox x:Name="ConfigurationsComboBox" PlaceholderText="选择配置" SelectionChanged="ConfigurationsComboBox_SelectionChanged" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="导入 YAML" Click="ImportLocalButton_Click" />
-                            <Button Content="添加订阅" Click="ImportSubscriptionButton_Click" />
-                            <Button Content="刷新" Click="RefreshConfigurationButton_Click" />
-                            <Button Content="删除" Click="DeleteConfigurationButton_Click" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-                <TextBlock Text="更多功能" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0" />
-                <Grid ColumnSpacing="8" RowSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Button Grid.Column="0" Content="规则" Click="RulesButton_Click" />
-                    <Button Grid.Column="1" Content="连接" Click="ConnectionsButton_Click" />
-                    <Button Grid.Column="2" Content="日志" Click="LogsButton_Click" />
-                </Grid>
-                <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,12,0,0">
-                    <Button x:Name="ProxyPageButton" Content="代理" Click="ProxyPageButton_Click" />
-                    <Button x:Name="RulesPageButton" Content="规则" Click="RulesPageButton_Click" />
-                    <Button x:Name="ConnectionsPageButton" Content="连接" Click="ConnectionsPageButton_Click" />
-                    <Button x:Name="LogsPageButton" Content="日志" Click="LogsPageButton_Click" />
-                    <Button x:Name="SettingsPageButton" Content="设置" Click="SettingsPageButton_Click" />
-                </StackPanel>
-                <ContentControl x:Name="PageContent" />
-            </StackPanel>
-        </ScrollViewer>
-
-        <Grid Grid.Row="3" Margin="0,16,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="ClashTray v0.1 · Mihomo" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
-            <Button Grid.Column="1" Content="退出" Click="QuitButton_Click" AutomationProperties.Name="退出 ClashTray" />
+            </ScrollViewer>
+            <ScrollViewer x:Name="OtherPageScrollViewer" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ContentControl x:Name="PageContent" HorizontalContentAlignment="Stretch"/>
+            </ScrollViewer>
+        </Grid>
+        <Grid Grid.Row="5" Margin="0,6,0,0" Height="28">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <FontIcon Glyph="&#xE950;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <TextBlock x:Name="CoreVersionText" Grid.Column="1" Text="Mihomo · 未启动" Margin="6,0,0,0" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <Button x:Name="QuitButton" Grid.Column="2" Content="退出" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="QuitButton_Click"/>
         </Grid>
     </Grid>
 </Window>

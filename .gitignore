@@ -11,3 +11,6 @@ packaging/out/
 *.zip
 *.log
 user-data/
+artifacts/
+.vs/
+packaging/out-*/

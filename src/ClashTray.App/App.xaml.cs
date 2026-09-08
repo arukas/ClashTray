@@ -11,12 +11,21 @@ public partial class App : Application, IAsyncDisposable
     private DispatcherQueue? _dispatcherQueue;
     private MainWindow? _mainWindow;
     private TrayIconService? _trayIcon;
-    private readonly ClashTrayRuntime _runtime = new();
+    private readonly ClashTrayRuntime _runtime;
+    private readonly string? _smokeDirectory;
     private bool _disposed;
 
-    internal App(SingleInstanceCoordinator instanceCoordinator)
+    internal App(SingleInstanceCoordinator instanceCoordinator, string? smokeDirectory = null)
     {
         _instanceCoordinator = instanceCoordinator;
+        _smokeDirectory = smokeDirectory;
+        _runtime = new ClashTrayRuntime(smokeDirectory is null ? null : new AppPaths(Path.Combine(smokeDirectory, "user"), Path.Combine(smokeDirectory, "service")));
+        UnhandledException += (_, e) =>
+        {
+            var directory = _smokeDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClashTray", "logs");
+            Directory.CreateDirectory(directory);
+            File.AppendAllText(Path.Combine(directory, "startup-error.log"), $"{DateTimeOffset.Now:O} {e.Exception}\n");
+        };
         InitializeComponent();
     }
 
@@ -31,9 +40,24 @@ public partial class App : Application, IAsyncDisposable
         _mainWindow.HidePanel();
         _trayIcon = new TrayIconService(_mainWindow, OnTrayInteraction, _mainWindow.HandleDeactivation);
         _trayIcon.MenuItemSelected += OnMenuItemSelected;
-        _trayIcon.Install();
+        if (_smokeDirectory is null) _trayIcon.Install();
         _mainWindow.Initialize(_trayIcon, _runtime);
-        _ = InitializeRuntimeAsync();
+        if (_smokeDirectory is null) _ = InitializeRuntimeAsync();
+        else _ = RunSmokeTestAsync();
+    }
+
+    private async Task RunSmokeTestAsync()
+    {
+        try
+        {
+            await _mainWindow!.CaptureSmokeTestAsync(_smokeDirectory!);
+            RequestQuit();
+        }
+        catch (Exception exception)
+        {
+            await File.WriteAllTextAsync(Path.Combine(_smokeDirectory!, "failure.log"), exception.ToString());
+            Environment.Exit(1);
+        }
     }
 
     public async void RequestQuit()

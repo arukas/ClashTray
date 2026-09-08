@@ -2,63 +2,102 @@
     x:Class="ClashTray.App.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <StackPanel Spacing="8" Padding="0,12,0,0">
-        <TextBlock Text="设置" FontSize="16" FontWeight="SemiBold" />
-        <ToggleSwitch x:Name="StartWithWindowsSwitch" Header="随 Windows 启动" />
-        <ToggleSwitch x:Name="StartCoreSwitch" Header="启动后自动启动核心" />
-        <ToggleSwitch x:Name="AllowLanSwitch" Header="允许局域网连接" />
-        <ToggleSwitch x:Name="Ipv6Switch" Header="启用 IPv6" />
-        <ToggleSwitch x:Name="TcpConcurrentSwitch" Header="启用 TCP 并发" />
-        <NumberBox x:Name="SubscriptionRefreshHoursBox"
-                   Header="订阅刷新间隔（小时）"
-                   Minimum="1"
-                   Maximum="168"
-                   SmallChange="1"
-                   Value="24"
-                   Width="240"
-                   HorizontalAlignment="Left" />
-        <TextBox x:Name="BypassListBox" Header="系统代理绕过列表" PlaceholderText="使用分号分隔，例如 localhost;127.*" />
-        <TextBlock Text="端口" FontWeight="SemiBold" Margin="0,6,0,0" />
-        <Grid ColumnSpacing="8">
+    <StackPanel Spacing="10" Padding="0,2,0,12">
+        <Grid>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <NumberBox x:Name="HttpPortBox" Header="HTTP" Minimum="1" Maximum="65535" />
-            <NumberBox x:Name="SocksPortBox" Grid.Column="1" Header="SOCKS" Minimum="1" Maximum="65535" />
-            <NumberBox x:Name="MixedPortBox" Grid.Column="2" Header="Mixed" Minimum="1" Maximum="65535" />
-            <NumberBox x:Name="ControllerPortBox" Grid.Column="3" Header="控制器" Minimum="1" Maximum="65535" />
-        </Grid>
-        <ComboBox x:Name="LogLevelBox" Header="日志级别" SelectedIndex="0">
-            <ComboBoxItem Content="info" />
-            <ComboBoxItem Content="warning" />
-            <ComboBoxItem Content="error" />
-            <ComboBoxItem Content="debug" />
-        </ComboBox>
-        <ComboBox x:Name="ThemeBox" Header="主题">
-            <ComboBoxItem Content="system" Tag="system" />
-            <ComboBoxItem Content="light" Tag="light" />
-            <ComboBoxItem Content="dark" Tag="dark" />
-        </ComboBox>
-        <StackPanel Orientation="Horizontal" Spacing="8">
-            <Button Content="保存设置" Click="SaveButton_Click" />
-            <Button Content="清理 DNS 缓存" Click="ClearDnsButton_Click" />
-            <Button Content="清理 FakeIP 缓存" Click="ClearFakeIpButton_Click" />
-            <Button Content="更新 Geo 数据库" Click="UpdateGeoButton_Click" />
-        </StackPanel>
-        <TextBlock Text="Provider 状态" FontWeight="SemiBold" Margin="0,8,0,0" />
-        <ListView x:Name="ProvidersListView" MaxHeight="140" SelectionChanged="ProvidersListView_SelectionChanged" AutomationProperties.Name="Provider 状态列表" />
-        <Button Content="刷新选中的 Provider" Click="RefreshProviderButton_Click" HorizontalAlignment="Left" />
-        <Expander Header="核心更新" Margin="0,8,0,0">
-            <StackPanel Spacing="6" Padding="0,6,0,0">
-                <TextBox x:Name="CoreVersionBox" Header="版本" PlaceholderText="例如 v1.19.12" />
-                <TextBox x:Name="CoreDownloadUriBox" Header="官方 GitHub 下载地址" PlaceholderText="https://github.com/MetaCubeX/mihomo/releases/download/.../mihomo-windows-amd64-v...zip" />
-                <TextBox x:Name="CoreSha256Box" Header="ZIP SHA-256" PlaceholderText="64 位十六进制校验值" />
-                <Button Content="校验并安装核心" Click="InstallCoreButton_Click" HorizontalAlignment="Left" />
+            <FontIcon Glyph="&#xE713;" FontSize="20" Foreground="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Margin="10,0,0,0" Spacing="1">
+                <TextBlock Text="设置" FontSize="20" FontWeight="SemiBold" />
+                <TextBlock Text="调整启动、代理端口和 Mihomo 运行参数" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
             </StackPanel>
-        </Expander>
-        <TextBlock x:Name="StatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+        </Grid>
+
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <StackPanel Spacing="2">
+                <TextBlock Text="运行方式" FontWeight="SemiBold" Margin="0,0,0,4" />
+                <ToggleSwitch x:Name="StartWithWindowsSwitch" Header="随 Windows 启动" />
+                <ToggleSwitch x:Name="StartCoreSwitch" Header="启动后自动启动核心" />
+                <ToggleSwitch x:Name="AllowLanSwitch" Header="允许局域网连接" />
+                <ToggleSwitch x:Name="Ipv6Switch" Header="启用 IPv6" />
+                <ToggleSwitch x:Name="TcpConcurrentSwitch" Header="启用 TCP 并发" />
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <StackPanel Spacing="8">
+                <TextBlock Text="端口与代理" FontWeight="SemiBold" />
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <NumberBox x:Name="HttpPortBox" Header="HTTP" Minimum="1" Maximum="65535" />
+                    <NumberBox x:Name="SocksPortBox" Grid.Column="1" Header="SOCKS" Minimum="1" Maximum="65535" />
+                </Grid>
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <NumberBox x:Name="MixedPortBox" Header="Mixed" Minimum="1" Maximum="65535" />
+                    <NumberBox x:Name="ControllerPortBox" Grid.Column="1" Header="控制器" Minimum="1" Maximum="65535" />
+                </Grid>
+                <TextBox x:Name="BypassListBox" Header="系统代理绕过列表" PlaceholderText="使用分号分隔，例如 localhost;127.*" />
+                <TextBlock Text="订阅刷新间隔" FontWeight="SemiBold" Margin="0,2,0,0" />
+                <NumberBox x:Name="SubscriptionRefreshHoursBox" Header="小时" Minimum="1" Maximum="168" SmallChange="1" Value="24" />
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <StackPanel Spacing="8">
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <ComboBox x:Name="LogLevelBox" Header="日志级别" SelectedIndex="0">
+                        <ComboBoxItem Content="info" />
+                        <ComboBoxItem Content="warning" />
+                        <ComboBoxItem Content="error" />
+                        <ComboBoxItem Content="debug" />
+                    </ComboBox>
+                    <ComboBox x:Name="ThemeBox" Grid.Column="1" Header="主题">
+                        <ComboBoxItem Content="跟随系统" Tag="system" />
+                        <ComboBoxItem Content="浅色" Tag="light" />
+                        <ComboBoxItem Content="深色" Tag="dark" />
+                    </ComboBox>
+                </Grid>
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Left">
+                    <Button Content="保存设置" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" />
+                    <Button Content="清理 DNS" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearDnsButton_Click" />
+                    <Button Content="清理 FakeIP" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearFakeIpButton_Click" />
+                    <Button Content="更新 Geo" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="UpdateGeoButton_Click" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <StackPanel Spacing="8">
+                <TextBlock Text="Provider" FontWeight="SemiBold" />
+                <ListView x:Name="ProvidersListView" MaxHeight="180" SelectionChanged="ProvidersListView_SelectionChanged" AutomationProperties.Name="Provider 状态列表" />
+                <Button Content="刷新选中的 Provider" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="RefreshProviderButton_Click" HorizontalAlignment="Left" />
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <Expander Header="核心更新">
+                <StackPanel Spacing="8" Padding="0,8,0,0">
+                    <TextBox x:Name="CoreVersionBox" Header="版本" PlaceholderText="例如 v1.19.30" />
+                    <TextBox x:Name="CoreDownloadUriBox" Header="官方 GitHub 下载地址" PlaceholderText="https://github.com/MetaCubeX/mihomo/releases/download/..." />
+                    <TextBox x:Name="CoreSha256Box" Header="ZIP SHA-256" PlaceholderText="64 位十六进制校验值" />
+                    <Button Content="校验并安装核心" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="InstallCoreButton_Click" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Expander>
+        </Border>
+
+        <TextBlock x:Name="StatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" Padding="4,0" />
     </StackPanel>
 </UserControl>

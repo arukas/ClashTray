@@ -4,12 +4,6 @@ using WinRT.Interop;
 
 namespace ClashTray.App;
 
-internal enum TrayInteraction
-{
-    LeftClick,
-    RightClick
-}
-
 internal sealed class TrayIconService : IDisposable
 {
     private const uint CallbackMessage = NativeMethods.WM_USER + 0x2A1;
@@ -23,6 +17,8 @@ internal sealed class TrayIconService : IDisposable
     private bool _installed;
     private bool _disposed;
     private bool _ownsIcon;
+    private bool _version4;
+    private static readonly Guid IconIdentity = new("06eaac46-982f-4741-b490-6f8f2fe8bb21");
 
     public TrayIconService(
         Microsoft.UI.Xaml.Window window,
@@ -62,7 +58,8 @@ internal sealed class TrayIconService : IDisposable
             Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.NotifyIconData>(),
             WindowHandle = _windowHandle,
             Id = 1,
-            Flags = NativeMethods.NIF_MESSAGE | NativeMethods.NIF_ICON | NativeMethods.NIF_TIP,
+            Flags = NativeMethods.NIF_MESSAGE | NativeMethods.NIF_ICON | NativeMethods.NIF_TIP | NativeMethods.NIF_GUID | NativeMethods.NIF_SHOWTIP,
+            GuidItem = IconIdentity,
             CallbackMessage = CallbackMessage,
             IconHandle = LoadStateIcon(State),
             Tip = string.Empty,
@@ -73,7 +70,7 @@ internal sealed class TrayIconService : IDisposable
         if (_installed)
         {
             _data.TimeoutOrVersion = NativeMethods.NOTIFYICON_VERSION_4;
-            NativeMethods.Shell_NotifyIcon(NativeMethods.NIM_SETVERSION, ref _data);
+            _version4 = NativeMethods.Shell_NotifyIcon(NativeMethods.NIM_SETVERSION, ref _data);
             SetState(TrayState.Stopped);
         }
     }
@@ -111,7 +108,7 @@ internal sealed class TrayIconService : IDisposable
             Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.NotifyIconIdentifier>(),
             WindowHandle = _windowHandle,
             Id = 1,
-            Guid = Guid.Empty
+            Guid = IconIdentity
         };
         return NativeMethods.Shell_NotifyIconGetRect(ref identifier, out rect) == NativeMethods.S_OK;
     }
@@ -188,15 +185,8 @@ internal sealed class TrayIconService : IDisposable
     {
         if (message == CallbackMessage)
         {
-            var trayMessage = unchecked((uint)lParam.ToInt64());
-            if (trayMessage == NativeMethods.WM_LBUTTONUP)
-            {
-                _interactionHandler(TrayInteraction.LeftClick);
-            }
-            else if (trayMessage is NativeMethods.WM_RBUTTONUP or NativeMethods.WM_CONTEXTMENU)
-            {
-                _interactionHandler(TrayInteraction.RightClick);
-            }
+            var interaction = TrayCallback.Decode(lParam.ToInt64(), _version4);
+            if (interaction is not null) _interactionHandler(interaction.Value);
         }
         else if (message == _taskbarCreatedMessage)
         {

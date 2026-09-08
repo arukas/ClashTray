@@ -127,13 +127,10 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
         var security = new PipeSecurity();
         var user = new SecurityIdentifier(_userSid);
         security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance, AccessControlType.Allow));
-        if (user.IsWellKnown(WellKnownSidType.LocalSystemSid))
-        {
-            security.AddAccessRule(new PipeAccessRule(
-                new SecurityIdentifier(WellKnownSidType.InteractiveSid, null),
-                PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance,
-                AccessControlType.Allow));
-        }
+        security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+            PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance,
+            AccessControlType.Allow));
         security.AddAccessRule(new PipeAccessRule(
             new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
             PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance,

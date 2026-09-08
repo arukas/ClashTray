@@ -2,31 +2,61 @@
     x:Class="ClashTray.App.ConnectionsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <StackPanel Spacing="8" Padding="0,12,0,0">
+    <UserControl.Resources>
+        <Style TargetType="ListViewItem">
+            <Setter Property="Padding" Value="8,7" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+    </UserControl.Resources>
+
+    <StackPanel Spacing="10" Padding="0,2,0,12">
         <Grid>
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <TextBlock Text="活动连接" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
-            <Button Grid.Column="1" Content="关闭全部" Click="CloseAllButton_Click" />
+            <FontIcon Glyph="&#xE71B;" FontSize="20" Foreground="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Margin="10,0,8,0" Spacing="1">
+                <TextBlock Text="连接" FontSize="20" FontWeight="SemiBold" />
+                <TextBlock Text="查看并管理当前活动连接" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+            </StackPanel>
+            <Button Grid.Column="2" Content="关闭全部" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="CloseAllButton_Click" />
         </Grid>
-        <Grid ColumnSpacing="8">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <TextBox x:Name="SearchBox" PlaceholderText="搜索连接" TextChanged="SearchBox_TextChanged" />
-            <ComboBox x:Name="SortBox" Grid.Column="1" SelectedIndex="0" SelectionChanged="SortBox_SelectionChanged">
-                <ComboBoxItem Content="最新" />
-                <ComboBoxItem Content="上传" />
-                <ComboBoxItem Content="下载" />
-            </ComboBox>
-        </Grid>
-        <ListView x:Name="ConnectionsListView" MaxHeight="220" SelectionChanged="ConnectionsListView_SelectionChanged" />
-        <StackPanel Orientation="Horizontal" Spacing="8">
-            <Button Content="关闭选中" Click="CloseSelectedButton_Click" />
-            <TextBlock x:Name="DetailsText" Text="选择连接查看详情" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-        </StackPanel>
+
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="SearchBox" PlaceholderText="搜索地址、规则或策略" TextChanged="SearchBox_TextChanged" />
+                <ComboBox x:Name="SortBox" Grid.Column="1" SelectedIndex="0" SelectionChanged="SortBox_SelectionChanged" MinWidth="84">
+                    <ComboBoxItem Content="最新" />
+                    <ComboBoxItem Content="上传" />
+                    <ComboBoxItem Content="下载" />
+                </ComboBox>
+            </Grid>
+        </Border>
+
+        <Border Style="{StaticResource ClashTrayCardStyle}" Padding="8">
+            <ListView x:Name="ConnectionsListView" MaxHeight="260" SelectionChanged="ConnectionsListView_SelectionChanged" />
+        </Border>
+
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <StackPanel Spacing="8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <FontIcon Glyph="&#xE946;" FontSize="17" Foreground="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="连接详情" Margin="9,0,0,0" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <Button Grid.Column="2" Content="关闭选中" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="CloseSelectedButton_Click" />
+                </Grid>
+                <TextBlock x:Name="DetailsText" Text="选择连接查看详情" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
     </StackPanel>
 </UserControl>

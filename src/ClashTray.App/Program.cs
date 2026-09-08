@@ -8,7 +8,8 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        if (!SingleInstanceCoordinator.TryAcquire(out var coordinator))
+        var smokeDirectory = args.FirstOrDefault(arg => arg.StartsWith("--ui-smoke-test=", StringComparison.Ordinal))?["--ui-smoke-test=".Length..];
+        if (!SingleInstanceCoordinator.TryAcquire(out var coordinator, smokeDirectory is not null))
         {
             return;
         }
@@ -17,7 +18,7 @@ internal static class Program
         {
             var synchronizationContext = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
             SynchronizationContext.SetSynchronizationContext(synchronizationContext);
-            var app = new App(coordinator!);
+            var app = new App(coordinator!, smokeDirectory);
         });
 
         coordinator!.Dispose();

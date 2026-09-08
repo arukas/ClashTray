@@ -19,16 +19,17 @@ internal sealed class SingleInstanceCoordinator : IDisposable
 
     public event Action? ActivationRequested;
 
-    public static bool TryAcquire(out SingleInstanceCoordinator? coordinator)
+    public static bool TryAcquire(out SingleInstanceCoordinator? coordinator, bool diagnostic = false)
     {
         coordinator = null;
-        var mutex = new Mutex(initiallyOwned: true, MutexName, out var createdNew);
+        var suffix = diagnostic ? ".Diagnostic" : string.Empty;
+        var mutex = new Mutex(initiallyOwned: true, MutexName + suffix, out var createdNew);
         if (!createdNew)
         {
             mutex.Dispose();
             try
             {
-                using var activationEvent = EventWaitHandle.OpenExisting(ActivationEventName);
+                using var activationEvent = EventWaitHandle.OpenExisting(ActivationEventName + suffix);
                 activationEvent.Set();
             }
             catch (WaitHandleCannotBeOpenedException)
@@ -38,7 +39,7 @@ internal sealed class SingleInstanceCoordinator : IDisposable
             return false;
         }
 
-        var activation = new EventWaitHandle(false, EventResetMode.AutoReset, ActivationEventName);
+        var activation = new EventWaitHandle(false, EventResetMode.AutoReset, ActivationEventName + suffix);
         coordinator = new SingleInstanceCoordinator(mutex, activation);
         return true;
     }
