@@ -1,0 +1,21 @@
+# ClashTray architecture
+
+The title bar provides an immediate theme menu with automatic (system), light, and dark modes. The selected mode is persisted through the same settings store as the Settings page and is applied to the flyout without restarting the app.
+
+When a profile contains a group named 美国常用, the generated runtime configuration keeps its existing manual entries and adds Mihomo's include-all filter for US, USA, 美国, and United States proxy names. Subscription and proxy-provider refreshes can therefore surface newly added matching nodes without editing the user's imported source file.
+
+ClashTray is a Windows-only tray application. The desktop process owns the WinUI 3 panel, per-user settings, subscriptions, System Proxy ownership, and the loopback REST client. Mihomo remains a separate `mihomo.exe` process.
+
+The per-machine Windows Service is the privileged boundary. The EXE installer registers `ClashTrayService` as a LocalSystem service and passes the installing user's SID as a constrained startup argument. Its named pipe is `ClashTray.Service`; requests are JSON lines and the pipe ACL allows only that user, LocalSystem, and Administrators. The service accepts only the typed commands in `ClashTray.Contracts` and rejects paths that are not shaped as a ClashTray core/runtime path. It does not execute shell commands or accept arbitrary write targets.
+
+The runtime configuration is generated under `%PROGRAMDATA%\ClashTray\runtime\mihomo\active-config.yaml`. It forces the loopback controller, the protected per-user controller secret, ports, LAN/IPv6/TCP settings, log level, and the program-owned `tun.enable` value. The imported profile remains the source for other Mihomo options, but its `allow-lan`, `ipv6`, and `tun.enable` values cannot override the choices made in ClashTray. While Mihomo is running, the app also checks and reapplies the program-owned LAN/IPv6 settings through the authenticated `/configs` controller API after reloads and reconnects.
+
+System Proxy changes are reversible. The original registry values are saved before the first change and a second ownership marker records the exact proxy server and bypass list ClashTray wrote. Restoration is performed only while those values still match; if another application changed them, the UI reports `需要恢复` instead of overwriting the competing state.
+
+Subscription refresh validates the downloaded YAML, compares its SHA-256 with the stored subscription content, and replaces the file only when the hash changes. An active Mihomo core is restarted only for changed content; an unchanged refresh updates metadata and skips the restart.
+
+The desktop process restores this state during normal quit and startup recovery. The System Proxy and TUN choices are persisted in the per-user ClashTray settings and reapplied after a core restart, configuration switch, or app restart; the cleanup path disables the active mechanism without erasing the saved preference. When the packaged service is stopping without a live desktop process, it also stops Mihomo, disables TUN, and restores matching ownership records for loaded user profiles before the service exits. This keeps uninstall and crash recovery from overwriting a competing proxy configuration.
+
+The runtime buffers at most 500 UI log entries and folds adjacent identical lines. Controller responses, process log lines, and parsed collection counts are bounded before reaching the UI. Configuration and subscription data stay under `%LOCALAPPDATA%\ClashTray`; service-owned runtime data stays under `%PROGRAMDATA%\ClashTray`. Controller secrets are protected with Windows DPAPI.
+
+The current release script builds three compressed x64 variants: Full is self-contained and embeds the pinned official Mihomo v1.19.30 Windows x64 archive after SHA-256 verification; NoCore is self-contained without Mihomo; Framework uses a framework-dependent single-file host without Mihomo. Full includes the core license notice, and every variant emits a SHA-256 sidecar. The setup executable requests elevation only for installation, service registration, and uninstall; the installed desktop app remains unpackaged and runs as the signed-in user. No certificate, subscription URL, core archive, or generated runtime data belongs in source control.

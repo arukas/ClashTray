@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <ProjectGuid>{95A8C7D3-2B6E-4B7B-8F7F-127D5AF13B46}</ProjectGuid>
+    <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <TargetPlatformVersion>10.0.26100.0</TargetPlatformVersion>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <DefaultLanguage>zh-CN</DefaultLanguage>
+    <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+    <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
+    <AppxBundle>Never</AppxBundle>
+    <AppxPackageDir>$(MSBuildThisFileDirectory)bin\$(Configuration)\</AppxPackageDir>
+    <AppxManifest>$(MSBuildThisFileDirectory)Package.appxmanifest</AppxManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ClashTray.App\ClashTray.App.csproj" />
+    <ProjectReference Include="..\..\src\ClashTray.Service\ClashTray.Service.csproj" />
+    <Content Include="Assets\**" />
+    <None Include="Package.appxmanifest" />
+  </ItemGroup>
+  <Import Project="$(MSBuildExtensionsPath)\Microsoft\VisualStudio\v$(VisualStudioVersion)\AppxPackage\Microsoft.AppXPackage.Targets" Condition="Exists('$(MSBuildExtensionsPath)\Microsoft\VisualStudio\v$(VisualStudioVersion)\AppxPackage\Microsoft.AppXPackage.Targets')" />
+</Project>
