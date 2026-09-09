@@ -2,6 +2,10 @@ using System.Runtime.InteropServices.WindowsRuntime;
 using System.Text.Json;
 using ClashTray.Contracts;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
@@ -34,7 +38,8 @@ public sealed partial class MainWindow
                 State = CoreState.Running, Version = "v1.19.30", ConfigurationName = "示例配置.yaml",
                 ConnectionCount = 103, MemoryBytes = 95 * 1024 * 1024,
                 UploadBytesPerSecond = 7168, DownloadBytesPerSecond = 156672,
-                UploadBytes = 7864320, DownloadBytes = 222402969
+                UploadBytes = 7864320, DownloadBytes = 222402969,
+                TrafficAvailable = true, MemoryAvailable = true
             },
             Tun = TunState.Off,
             Configurations = [new("sample", "示例配置.yaml", "sample.yaml", null, null, true)],
@@ -79,6 +84,7 @@ public sealed partial class MainWindow
                 await encoder.FlushAsync();
             }
         }
+        await VerifyNodeScrollingAsync(directory, sample);
         NativeMethods.GetWindowRect(_windowHandle, out var actual);
         var anchor = GetTrayRect();
         var monitor = NativeMethods.MonitorFromRect(ref anchor, NativeMethods.MONITOR_DEFAULTTONEAREST);
@@ -101,9 +107,126 @@ public sealed partial class MainWindow
             NavigateTo(page.Item1, page.Item2);
             await Task.Delay(100);
             RootGrid.UpdateLayout();
-            if (PageContent.Content != page.Item1 || OtherPageScrollViewer.Visibility != Visibility.Visible)
+            if (!ReferenceEquals(PageContent.Content, page.Item1) || OtherPageScrollViewer.Visibility != Visibility.Visible)
                 throw new InvalidOperationException($"Navigation failed: {page.Item2}");
+            await SaveDiagnosticFrameAsync(directory, $"page-{page.Item2}");
         }
         NavigateTo(_proxyPage, "代理");
     }
-}
+
+    private async Task VerifyNodeScrollingAsync(string directory, RuntimeSnapshot sample)
+    {
+        var members = Enumerable.Range(1, 200).Select(i => $"香港 · {i:000}").ToArray();
+        members[1] = "日本 · 超长节点名称用于检查截断与完整名称提示 · Tokyo Premium 02";
+        var crowded = sample with
+        {
+            ProxyNodes = members.Select((name, i) => new ProxyNode(name, "Shadowsocks", (30 + i).ToString(System.Globalization.CultureInfo.InvariantCulture), i == 0, [])).ToArray(),
+            ProxyGroups = [
+                new("节点选择", "Selector", members[0], members),
+                new("流媒体", "Selector", members[2], members.Take(5).ToArray()),
+                new("自动选择", "URLTest", members[1], members.Take(3).ToArray())
+            ]
+        };
+        UpdateSnapshot(crowded);
+        RootGrid.UpdateLayout();
+        var groups = (StackPanel)_proxyPage!.FindName("GroupsPanel");
+        var search = (TextBox)_proxyPage.FindName("NodeSearchBox");
+        var listBeforeExpansion = VisualDescendants<ListView>(_proxyPage).ToArray();
+        if (listBeforeExpansion.Any(list => list.Items.Count > 0))
+            throw new InvalidOperationException("Collapsed groups eagerly created node items.");
+
+        void InvokeGroup(int index)
+        {
+            var card = (Border)groups.Children[index];
+            var button = (Button)((Grid)((StackPanel)card.Child).Children[0]).Children[0];
+            ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
+        }
+        InvokeGroup(0);
+        InvokeGroup(1);
+        await Task.Delay(200);
+        RootGrid.UpdateLayout();
+        var lists = VisualDescendants<ListView>(_proxyPage).Where(list => list.Items.Count > 0).ToArray();
+        if (lists.Length != 2 || lists[0].Items.Count != 200 || lists[1].Items.Count != 5)
+            throw new InvalidOperationException("Multiple expanded groups did not retain their nodes.");
+        if (lists.Any(list => ScrollViewer.GetVerticalScrollMode(list) != ScrollMode.Disabled))
+            throw new InvalidOperationException("Node list owns a nested scroll viewport.");
+        if (VisualDescendants<ScrollViewer>(_proxyPage).Any(scroll => scroll.ScrollableHeight > 1))
+            throw new InvalidOperationException("A nested node scrollbar has scrollable content.");
+        if (DashboardScrollViewer.ScrollableHeight <= 0)
+            throw new InvalidOperationException("Dashboard cannot scroll the expanded node content.");
+
+        foreach (var theme in new[] { "light", "dark" })
+        {
+            ApplyTheme(theme);
+            DashboardScrollViewer.ChangeView(null, 210, null, true);
+            await SaveDiagnosticFrameAsync(directory, $"expanded-{theme}");
+        }
+        DashboardScrollViewer.ChangeView(null, DashboardScrollViewer.ScrollableHeight, null, true);
+        await Task.Delay(150);
+        RootGrid.UpdateLayout();
+        var lastCard = (FrameworkElement)groups.Children.Last();
+        var bottom = lastCard.TransformToVisual(DashboardScrollViewer).TransformPoint(new Windows.Foundation.Point(0, lastCard.ActualHeight)).Y;
+        if (bottom > DashboardScrollViewer.ActualHeight + 1)
+            throw new InvalidOperationException("Last group cannot be reached by the dashboard scrollbar.");
+        await SaveDiagnosticFrameAsync(directory, "last-group");
+
+        search.Text = "香港 · 200";
+        await Task.Delay(300);
+        RootGrid.UpdateLayout();
+        var filtered = VisualDescendants<ListView>(_proxyPage).Where(list => list.Items.Count > 0).ToArray();
+        if (groups.Children.Count != 1 || filtered.Length != 1 || filtered[0].Items.Count != 1)
+            throw new InvalidOperationException("Node search did not isolate the last node.");
+        DashboardScrollViewer.ChangeView(null, 100, null, true);
+        await SaveDiagnosticFrameAsync(directory, "search-result");
+        search.Text = "no-such-node";
+        await Task.Delay(300);
+        if (((TextBlock)_proxyPage.FindName("NoResultsText")).Visibility != Visibility.Visible || groups.Children.Count != 0)
+            throw new InvalidOperationException("Missing search results did not show an empty state.");
+        search.Text = "";
+        await Task.Delay(300);
+        RootGrid.UpdateLayout();
+        if (VisualDescendants<ListView>(_proxyPage).Count(list => list.Items.Count > 0) != 2)
+            throw new InvalidOperationException("Clearing search lost expansion state.");
+
+        // A metrics-only snapshot must preserve the current node controls.
+        var firstCard = groups.Children[0];
+        _proxyPage.UpdateSnapshot(crowded with { Core = crowded.Core with { ConnectionCount = 999 } });
+        if (!ReferenceEquals(firstCard, groups.Children[0]))
+            throw new InvalidOperationException("Metrics update rebuilt node controls.");
+
+        await File.WriteAllTextAsync(Path.Combine(directory, "node-scroll-checks.json"), JsonSerializer.Serialize(new
+        {
+            Nodes = 200, ExpandedGroups = 2, NestedScrollableViewports = 0,
+            LastGroupReachable = true, SearchLastNode = true, NoResults = true,
+            ExpansionRestored = true, MetricsPreserveControls = true,
+            HighContrast = "Uses system resources; OS high-contrast mode not toggled by this test.",
+            InputLimits = "Wheel, touch and physical keyboard require manual verification."
+        }, DiagnosticJsonOptions));
+        DashboardScrollViewer.ChangeView(null, 0, null, true);
+    }
+
+    private async Task SaveDiagnosticFrameAsync(string directory, string name)
+    {
+        await Task.Delay(200);
+        RootGrid.UpdateLayout();
+        var renderer = new RenderTargetBitmap();
+        await renderer.RenderAsync(RootGrid);
+        var pixels = await renderer.GetPixelsAsync();
+        var folder = await StorageFolder.GetFolderFromPathAsync(Path.GetFullPath(directory));
+        var file = await folder.CreateFileAsync($"{name}.png", CreationCollisionOption.ReplaceExisting);
+        using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+        var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+        encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
+            (uint)renderer.PixelWidth, (uint)renderer.PixelHeight, 96, 96, pixels.ToArray());
+        await encoder.FlushAsync();
+    }
+
+    private static IEnumerable<T> VisualDescendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) yield return match;
+            foreach (var descendant in VisualDescendants<T>(child)) yield return descendant;
+        }
+    }}

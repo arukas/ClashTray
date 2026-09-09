@@ -1,16 +1,38 @@
+# .NET and Visual Studio
 **/bin/
 **/obj/
-packaging/.stage/
-packaging/out/
+.vs/
 *.user
 *.suo
-*.pfx
-*.cer
+*.pdb
+TestResults/
+
+# Local runtime and user data
+user-data/
+artifacts/
+*.log
+
+# Generated packaging and release output
+packaging/.stage/
+packaging/out/
+packaging/out-*/
+release-output/
+packaging/reports/
 *.msix
 *.appinstaller
 *.zip
-*.log
-user-data/
-artifacts/
-.vs/
-packaging/out-*/
+*.sha256
+*.exe
+
+# Signing material and local secrets
+*.pfx
+*.cer
+*.key
+*.pem
+.env
+.env.*
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/

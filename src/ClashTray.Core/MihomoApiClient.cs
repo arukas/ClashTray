@@ -1,17 +1,44 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Net.WebSockets;
-using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core;
 
+public enum MihomoStreamFailureKind
+{
+    EmptyResponse,
+    DisconnectedBeforeRecord,
+    InvalidJson,
+    RecordTooLarge
+}
+
+public sealed class MihomoStreamException : IOException
+{
+    public MihomoStreamException(
+        string path,
+        MihomoStreamFailureKind kind,
+        string message,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        Path = path;
+        Kind = kind;
+    }
+
+    public string Path { get; }
+
+    public MihomoStreamFailureKind Kind { get; }
+}
+
 public sealed class MihomoApiClient
 {
     private const int MaxJsonResponseBytes = 16 * 1024 * 1024;
-    private const int MaxErrorResponseBytes = 64 * 1024;
+    private const int StreamingReadBufferBytes = 16 * 1024;
+    public const int DefaultMaxStreamingRecordBytes = 256 * 1024;
+    public static readonly TimeSpan DefaultStreamingFirstRecordTimeout = TimeSpan.FromSeconds(3);
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true
@@ -20,12 +47,31 @@ public sealed class MihomoApiClient
     private readonly HttpClient _httpClient;
     private readonly Uri _controllerUri;
     private readonly string _secret;
+    private readonly TimeSpan _streamingFirstRecordTimeout;
+    private readonly int _maxStreamingRecordBytes;
 
-    public MihomoApiClient(HttpClient httpClient, Uri controllerUri, string secret)
+    public MihomoApiClient(
+        HttpClient httpClient,
+        Uri controllerUri,
+        string secret,
+        TimeSpan? streamingFirstRecordTimeout = null,
+        int maxStreamingRecordBytes = DefaultMaxStreamingRecordBytes)
     {
+        ArgumentNullException.ThrowIfNull(httpClient);
+        ArgumentNullException.ThrowIfNull(controllerUri);
+        ArgumentException.ThrowIfNullOrWhiteSpace(secret);
+        if (streamingFirstRecordTimeout is not null && streamingFirstRecordTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(streamingFirstRecordTimeout));
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxStreamingRecordBytes);
+
         _httpClient = httpClient;
         _controllerUri = controllerUri;
         _secret = secret;
+        _streamingFirstRecordTimeout = streamingFirstRecordTimeout ?? DefaultStreamingFirstRecordTimeout;
+        _maxStreamingRecordBytes = maxStreamingRecordBytes;
     }
 
     public async Task<JsonDocument> GetAsync(string path, CancellationToken cancellationToken = default)
@@ -90,10 +136,10 @@ public sealed class MihomoApiClient
         GetAsync("/rules", cancellationToken);
 
     public Task<JsonDocument> GetTrafficAsync(CancellationToken cancellationToken = default) =>
-        GetAsync("/traffic", cancellationToken);
+        GetStreamingSnapshotAsync("/traffic", cancellationToken);
 
     public Task<JsonDocument> GetMemoryAsync(CancellationToken cancellationToken = default) =>
-        GetAsync("/memory", cancellationToken);
+        GetStreamingSnapshotAsync("/memory", cancellationToken);
 
     public Task<JsonDocument> GetLogsAsync(string level = "info", CancellationToken cancellationToken = default) =>
         GetAsync($"/logs?level={Uri.EscapeDataString(level)}&format=structured", cancellationToken);
@@ -115,6 +161,30 @@ public sealed class MihomoApiClient
 
     public Task<JsonDocument> SetTunAsync(bool enabled, CancellationToken cancellationToken = default) =>
         PatchAsync("/configs", new { tun = new { enable = enabled } }, cancellationToken);
+
+    public Task<JsonDocument> SetNetworkSettingsAsync(
+        bool? allowLan,
+        bool? ipv6,
+        CancellationToken cancellationToken = default)
+    {
+        var payload = new Dictionary<string, bool>();
+        if (allowLan is bool allowLanValue)
+        {
+            payload["allow-lan"] = allowLanValue;
+        }
+
+        if (ipv6 is bool ipv6Value)
+        {
+            payload["ipv6"] = ipv6Value;
+        }
+
+        if (payload.Count == 0)
+        {
+            throw new ArgumentException("至少需要提供一个 Mihomo 网络设置。", nameof(allowLan));
+        }
+
+        return PatchAsync("/configs", payload, cancellationToken);
+    }
 
     public Task<JsonDocument> SelectProxyAsync(string group, string proxy, CancellationToken cancellationToken = default) =>
         PutAsync($"/proxies/{Uri.EscapeDataString(group)}", new { name = proxy }, cancellationToken);
@@ -177,15 +247,17 @@ public sealed class MihomoApiClient
         return request;
     }
 
-    private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    private static Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         if (response.IsSuccessStatusCode)
         {
-            return;
+            return Task.CompletedTask;
         }
 
-        var body = await ReadTextAsync(response.Content, MaxErrorResponseBytes, cancellationToken);
-        throw new HttpRequestException($"Mihomo controller returned {(int)response.StatusCode}: {body}");
+        throw new HttpRequestException(
+            $"Mihomo controller returned HTTP {(int)response.StatusCode} ({response.ReasonPhrase ?? "Unknown status"}).",
+            inner: null,
+            statusCode: response.StatusCode);
     }
 
     private static async Task<JsonDocument> ReadJsonAsync(HttpContent content, CancellationToken cancellationToken)
@@ -194,27 +266,12 @@ public sealed class MihomoApiClient
         return bytes.Length == 0 ? JsonDocument.Parse("{}") : JsonDocument.Parse(bytes);
     }
 
-    private static async Task<string> ReadTextAsync(
-        HttpContent content,
-        int maxBytes,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return Encoding.UTF8.GetString(await ReadBytesAsync(content, maxBytes, cancellationToken));
-        }
-        catch (InvalidDataException)
-        {
-            return "[响应内容超过大小限制]";
-        }
-    }
-
     private static async Task<byte[]> ReadBytesAsync(
         HttpContent content,
         int maxBytes,
         CancellationToken cancellationToken)
     {
-        if (content.Headers.ContentLength is > MaxJsonResponseBytes)
+        if (content.Headers.ContentLength is > 0 && content.Headers.ContentLength > maxBytes)
         {
             throw new InvalidDataException("Mihomo controller response exceeded the maximum size.");
         }
@@ -237,5 +294,123 @@ public sealed class MihomoApiClient
 
             await buffer.WriteAsync(chunk.AsMemory(0, count), cancellationToken);
         }
+    }
+
+    private async Task<JsonDocument> GetStreamingSnapshotAsync(string path, CancellationToken cancellationToken)
+    {
+        using var request = CreateRequest(HttpMethod.Get, path);
+        using var firstRecordTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        firstRecordTimeout.CancelAfter(_streamingFirstRecordTimeout);
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                firstRecordTimeout.Token);
+            await EnsureSuccessAsync(response, firstRecordTimeout.Token);
+            return await ReadFirstJsonLineAsync(response.Content, path, firstRecordTimeout.Token);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Mihomo {path} 首条指标记录读取超时。",
+                exception);
+        }
+    }
+
+    private async Task<JsonDocument> ReadFirstJsonLineAsync(
+        HttpContent content,
+        string path,
+        CancellationToken cancellationToken)
+    {
+        await using var input = await content.ReadAsStreamAsync(cancellationToken);
+        var readBuffer = new byte[StreamingReadBufferBytes];
+        using var line = new MemoryStream(Math.Min(_maxStreamingRecordBytes, StreamingReadBufferBytes));
+        var receivedAnyBytes = false;
+
+        while (true)
+        {
+            var count = await input.ReadAsync(readBuffer.AsMemory(), cancellationToken);
+            if (count == 0)
+            {
+                throw new MihomoStreamException(
+                    path,
+                    line.Length == 0 && !receivedAnyBytes
+                        ? MihomoStreamFailureKind.EmptyResponse
+                        : MihomoStreamFailureKind.DisconnectedBeforeRecord,
+                    line.Length == 0 && !receivedAnyBytes
+                        ? $"Mihomo {path} 返回空响应。"
+                        : $"Mihomo {path} 在首条完整 JSON 行之前断开连接。");
+            }
+
+            receivedAnyBytes = true;
+            for (var index = 0; index < count; index++)
+            {
+                var value = readBuffer[index];
+                if (value == (byte)'\n')
+                {
+                    var document = TryParseJsonLine(line, path);
+                    line.SetLength(0);
+                    if (document is not null)
+                    {
+                        return document;
+                    }
+
+                    continue;
+                }
+
+                if (line.Length >= _maxStreamingRecordBytes)
+                {
+                    throw new MihomoStreamException(
+                        path,
+                        MihomoStreamFailureKind.RecordTooLarge,
+                        $"Mihomo {path} 单条指标记录超过 {_maxStreamingRecordBytes} 字节限制。");
+                }
+
+                line.WriteByte(value);
+            }
+        }
+    }
+
+    private static JsonDocument? TryParseJsonLine(MemoryStream line, string path)
+    {
+        var bytes = line.ToArray();
+        var length = bytes.Length;
+        if (length > 0 && bytes[length - 1] == (byte)'\r')
+        {
+            length--;
+        }
+
+        if (length == 0 || IsWhitespace(bytes.AsSpan(0, length)))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonDocument.Parse(bytes.AsMemory(0, length));
+        }
+        catch (JsonException exception)
+        {
+            throw new MihomoStreamException(
+                path,
+                MihomoStreamFailureKind.InvalidJson,
+                $"Mihomo {path} 首条指标记录不是有效 JSON。",
+                exception);
+        }
+    }
+
+    private static bool IsWhitespace(ReadOnlySpan<byte> bytes)
+    {
+        foreach (var value in bytes)
+        {
+            if (value is not ((byte)' ' or (byte)'\t' or (byte)'\r'))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

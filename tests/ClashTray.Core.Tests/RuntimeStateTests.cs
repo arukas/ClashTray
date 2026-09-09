@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http;
 using System.Text.Json;
 using ClashTray.Contracts;
 using ClashTray.Core;
@@ -7,6 +9,43 @@ namespace ClashTray.Core.Tests;
 [TestClass]
 public sealed class RuntimeStateTests
 {
+    [TestMethod]
+    public async Task MetricFailureKeepsLastValuesAndDoesNotStopConfirmedCore()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using var handler = new RuntimeControllerHandler();
+        using var httpClient = new HttpClient(handler);
+        var api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), "test-secret");
+        await using var runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            await runtime.RefreshControllerDataForTestingAsync();
+
+            Assert.AreEqual(CoreState.Running, runtime.Snapshot.Core.State);
+            Assert.IsTrue(runtime.Snapshot.Core.TrafficAvailable);
+            Assert.IsTrue(runtime.Snapshot.Core.MemoryAvailable);
+            Assert.AreEqual(11, runtime.Snapshot.Core.UploadBytes);
+            Assert.AreEqual(22, runtime.Snapshot.Core.MemoryBytes);
+
+            handler.FailMetrics = true;
+            await runtime.RefreshControllerDataForTestingAsync();
+
+            Assert.AreEqual(CoreState.Running, runtime.Snapshot.Core.State);
+            Assert.IsFalse(runtime.Snapshot.Core.TrafficAvailable);
+            Assert.IsFalse(runtime.Snapshot.Core.MemoryAvailable);
+            Assert.AreEqual(11, runtime.Snapshot.Core.UploadBytes);
+            Assert.AreEqual(22, runtime.Snapshot.Core.MemoryBytes);
+            Assert.IsTrue(runtime.Snapshot.Logs.Any(log => log.Message.Contains("/traffic", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     [TestMethod]
     public void BoundedLogBufferFoldsAdjacentIdenticalLines()
     {
@@ -24,10 +63,38 @@ public sealed class RuntimeStateTests
     [TestMethod]
     public void MihomoDataParserReadsMemoryAndTunState()
     {
-        using var document = JsonDocument.Parse("{\"inuse\": 4096, \"tun\": {\"enable\": true}}");
+        using var document = JsonDocument.Parse(
+            "{\"inuse\": 4096, \"allow-lan\": true, \"ipv6\": false, \"tun\": {\"enable\": true}}");
 
         Assert.AreEqual(4096, MihomoDataParser.ParseMemoryBytes(document));
+        Assert.AreEqual(true, MihomoDataParser.ParseAllowLan(document));
+        Assert.AreEqual(false, MihomoDataParser.ParseIpv6(document));
         Assert.AreEqual(true, MihomoDataParser.ParseTunEnabled(document));
+    }
+
+    [TestMethod]
+    public async Task RunningCoreUsesProgramNetworkSettingsOverControllerConfig()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using var handler = new RuntimeControllerHandler();
+        using var httpClient = new HttpClient(handler);
+        var api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), "test-secret");
+        await using var runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            await runtime.UpdateSettingsAsync(runtime.Settings with { AllowLan = true, Ipv6 = false });
+
+            Assert.IsTrue(handler.AllowLan);
+            Assert.IsFalse(handler.Ipv6);
+            Assert.AreEqual(1, handler.NetworkPatchCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
     }
 
     [TestMethod]
@@ -52,7 +119,7 @@ public sealed class RuntimeStateTests
         paths.EnsureDirectories();
         var source = Path.Combine(paths.ConfigurationsRoot, "source.yaml");
         var destination = Path.Combine(paths.RuntimeRoot, "mihomo", "active.yaml");
-        await File.WriteAllTextAsync(source, "external-controller: 0.0.0.0:9999\nsecret: old\nmixed-port: 1111\nproxies: []\n");
+        await File.WriteAllTextAsync(source, "external-controller: 0.0.0.0:9999\nsecret: old\nmixed-port: 1111\nallow-lan: true\nipv6: false\nproxies: []\n");
 
         try
         {
@@ -62,11 +129,95 @@ public sealed class RuntimeStateTests
 
             StringAssert.Contains(generated, "external-controller: 127.0.0.1:9191");
             StringAssert.Contains(generated, "mixed-port: 8899");
+            StringAssert.Contains(generated, "allow-lan: false");
+            StringAssert.Contains(generated, "ipv6: true");
             Assert.IsFalse(generated.Contains("0.0.0.0:9999", StringComparison.Ordinal));
             Assert.IsFalse(generated.Contains("secret: old", StringComparison.Ordinal));
+            Assert.IsFalse(generated.Contains("allow-lan: true", StringComparison.Ordinal));
+            Assert.IsFalse(generated.Contains("ipv6: false", StringComparison.Ordinal));
             Assert.AreEqual(
                 0,
                 Directory.EnumerateFiles(Path.GetDirectoryName(destination)!, "*.tmp").Count());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task RuntimeConfigBuilderMakesUnitedStatesGroupIncludeAllMatchingProxies()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        var source = Path.Combine(paths.ConfigurationsRoot, "source.yaml");
+        var destination = Path.Combine(paths.RuntimeRoot, "mihomo", "active.yaml");
+        await File.WriteAllTextAsync(
+            source,
+            """
+            proxies:
+              - { name: US-1, type: direct }
+              - { name: US-2, type: direct }
+              - { name: JP-1, type: direct }
+            proxy-groups:
+              - { name: 美国常用, type: select, proxies: [自动选择, US-1] }
+            """);
+
+        try
+        {
+            var builder = new RuntimeConfigBuilder(new ControllerSecretStore(paths));
+            await builder.BuildAsync(source, destination, new AppSettings(ControllerPort: 9191));
+            var generated = await File.ReadAllTextAsync(destination);
+
+            StringAssert.Contains(generated, "name: 美国常用");
+            StringAssert.Contains(generated, "include-all: true");
+            StringAssert.Contains(
+                generated,
+                "filter: '(?i)(?:^|[^A-Za-z])(?:US|USA)(?:[^A-Za-z]|$)|美国|United[ _-]?States'");
+            StringAssert.Contains(generated, "proxies: [自动选择, US-1]");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task RuntimeConfigBuilderOverridesExistingUnitedStatesGroupFilter()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        var source = Path.Combine(paths.ConfigurationsRoot, "source.yaml");
+        var destination = Path.Combine(paths.RuntimeRoot, "mihomo", "active.yaml");
+        await File.WriteAllTextAsync(
+            source,
+            """
+            proxies:
+              - name: US-1
+                type: direct
+            proxy-groups:
+              - name: 美国常用
+                type: select
+                include-all: false
+                filter: old-filter
+                proxies:
+                  - 自动选择
+            """);
+
+        try
+        {
+            var builder = new RuntimeConfigBuilder(new ControllerSecretStore(paths));
+            await builder.BuildAsync(source, destination, new AppSettings(ControllerPort: 9191));
+            var generated = await File.ReadAllTextAsync(destination);
+
+            StringAssert.Contains(generated, "include-all: true");
+            Assert.IsFalse(generated.Contains("include-all: false", StringComparison.Ordinal));
+            Assert.IsFalse(generated.Contains("filter: old-filter", StringComparison.Ordinal));
+            StringAssert.Contains(
+                generated,
+                "filter: '(?i)(?:^|[^A-Za-z])(?:US|USA)(?:[^A-Za-z]|$)|美国|United[ _-]?States'");
         }
         finally
         {
@@ -95,6 +246,64 @@ public sealed class RuntimeStateTests
             StringAssert.Contains(generated, "    port: 443");
             StringAssert.Contains(generated, "port: 8899");
             Assert.IsFalse(generated.Contains("port: 1000", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task RuntimeConfigBuilderProgramTunSettingOverridesProfile()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        var source = Path.Combine(paths.ConfigurationsRoot, "source.yaml");
+        var destination = Path.Combine(paths.RuntimeRoot, "mihomo", "active.yaml");
+        await File.WriteAllTextAsync(
+            source,
+            "tun:\n  enable: true\n  stack: system\nproxies: []\n");
+
+        try
+        {
+            var builder = new RuntimeConfigBuilder(new ControllerSecretStore(paths));
+            await builder.BuildAsync(
+                source,
+                destination,
+                new AppSettings(ControllerPort: 9191, TunEnabled: false));
+            var generated = await File.ReadAllTextAsync(destination);
+
+            StringAssert.Contains(generated, $"tun:{Environment.NewLine}  enable: false{Environment.NewLine}  stack: system");
+            Assert.IsFalse(generated.Contains("enable: true", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task RuntimeConfigBuilderProgramTunSettingOverridesInlineProfile()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        var source = Path.Combine(paths.ConfigurationsRoot, "source.yaml");
+        var destination = Path.Combine(paths.RuntimeRoot, "mihomo", "active.yaml");
+        await File.WriteAllTextAsync(source, "tun: { enable: true, stack: system }\nproxies: []\n");
+
+        try
+        {
+            var builder = new RuntimeConfigBuilder(new ControllerSecretStore(paths));
+            await builder.BuildAsync(
+                source,
+                destination,
+                new AppSettings(ControllerPort: 9191, TunEnabled: false));
+            var generated = await File.ReadAllTextAsync(destination);
+
+            StringAssert.Contains(generated, "tun: { enable: false, stack: system }");
+            Assert.IsFalse(generated.Contains("enable: true", StringComparison.Ordinal));
         }
         finally
         {
@@ -235,5 +444,67 @@ public sealed class RuntimeStateTests
         await File.WriteAllTextAsync(
             Path.Combine(paths.ConfigurationsRoot, $"{profile.Id}.json"),
             System.Text.Json.JsonSerializer.Serialize(profile));
+    }
+
+    private sealed class RuntimeControllerHandler : HttpMessageHandler
+    {
+        public bool FailMetrics { get; set; }
+
+        public bool AllowLan { get; private set; }
+
+        public bool Ipv6 { get; private set; } = true;
+
+        public int NetworkPatchCount { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath;
+            if (FailMetrics && path is "/traffic" or "/memory")
+            {
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Content = new StringContent("redacted")
+                };
+            }
+
+            if (request.Method == HttpMethod.Patch && path == "/configs")
+            {
+                using var payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
+                if (payload.RootElement.TryGetProperty("allow-lan", out var allowLan))
+                {
+                    AllowLan = allowLan.GetBoolean();
+                }
+
+                if (payload.RootElement.TryGetProperty("ipv6", out var ipv6))
+                {
+                    Ipv6 = ipv6.GetBoolean();
+                }
+
+                NetworkPatchCount++;
+                return new HttpResponseMessage(HttpStatusCode.NoContent)
+                {
+                    Content = new StringContent(string.Empty)
+                };
+            }
+
+            var body = path switch
+            {
+                "/version" => "{\"version\":\"v1.19.30\"}",
+                "/configs" => $"{{\"mode\":\"rule\",\"allow-lan\":{(AllowLan ? "true" : "false")},\"ipv6\":{(Ipv6 ? "true" : "false")},\"tun\":{{\"enable\":true}}}}",
+                "/proxies" => "{\"proxies\":{}}",
+                "/traffic" => "{\"upTotal\":11,\"downTotal\":12,\"up\":1,\"down\":2}\n",
+                "/memory" => "{\"inuse\":22}\n",
+                "/connections" => "{\"connections\":[]}",
+                "/rules" => "{\"rules\":[]}",
+                "/providers/proxies" => "{\"providers\":{}}",
+                "/providers/rules" => "{\"providers\":{}}",
+                _ => "{}"
+            };
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body)
+            };
+        }
     }
 }

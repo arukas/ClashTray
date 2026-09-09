@@ -8,17 +8,48 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
 
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="ClashTrayCanvasBrush" Color="#F3F5F8"/>
+                    <SolidColorBrush x:Key="ClashTraySurfaceBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ClashTrayStrokeBrush" Color="#E4E8EF"/>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="ClashTrayCanvasBrush" Color="#191C22"/>
+                    <SolidColorBrush x:Key="ClashTraySurfaceBrush" Color="#242830"/>
+                    <SolidColorBrush x:Key="ClashTrayStrokeBrush" Color="#363C46"/>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="ClashTrayCanvasBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+                    <SolidColorBrush x:Key="ClashTraySurfaceBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+                    <SolidColorBrush x:Key="ClashTrayStrokeBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+            <Style x:Key="ClashTrayAccentTextStyle" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+            </Style>
+            <Style x:Key="ClashTraySelectionIconStyle" TargetType="FontIcon">
+                <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                <Setter Property="FontSize" Value="12"/>
+            </Style>
+            <Style x:Key="ClashTrayGroupCardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource ClashTraySurfaceBrush}"/>
+                <Setter Property="BorderBrush" Value="{ThemeResource ClashTrayStrokeBrush}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="CornerRadius" Value="10"/>
+            </Style>
             <Style x:Key="ClashTrayCardStyle" TargetType="Border">
-                <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                <Setter Property="Background" Value="{ThemeResource ClashTraySurfaceBrush}" />
                 <Setter Property="CornerRadius" Value="12" />
-                <Setter Property="Padding" Value="12" />
+                <Setter Property="Padding" Value="12" /><Setter Property="BorderBrush" Value="{ThemeResource ClashTrayStrokeBrush}"/><Setter Property="BorderThickness" Value="1"/>
             </Style>
 
             <Style x:Key="ClashTrayIconButtonStyle" TargetType="Button">
                 <Setter Property="Width" Value="34" />
                 <Setter Property="Height" Value="34" />
                 <Setter Property="Padding" Value="0" />
-                <Setter Property="CornerRadius" Value="17" />
+                <Setter Property="CornerRadius" Value="9" />
                 <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -32,7 +63,7 @@
             </Style>
 
             <Style x:Key="ClashTraySegmentButtonStyle" TargetType="ToggleButton">
-                <Setter Property="MinHeight" Value="44" />
+                <Setter Property="MinHeight" Value="36" />
                 <Setter Property="HorizontalAlignment" Value="Stretch" />
                 <Setter Property="Padding" Value="8,6" />
                 <Setter Property="CornerRadius" Value="10" />
@@ -44,31 +75,10 @@
             </Style>
 
             <Style x:Key="ClashTrayNavButtonStyle" TargetType="ToggleButton">
-                <Setter Property="MinHeight" Value="40" />
+                <Setter Property="MinHeight" Value="34" />
                 <Setter Property="HorizontalAlignment" Value="Stretch" />
-                <Setter Property="FontSize" Value="15" />
+                <Setter Property="FontSize" Value="13" />
                 <Setter Property="FontWeight" Value="SemiBold" />
-                <Setter Property="Template">
-                    <Setter.Value>
-                        <ControlTemplate TargetType="ToggleButton">
-                            <Grid Background="Transparent">
-                                <VisualStateManager.VisualStateGroups>
-                                    <VisualStateGroup x:Name="CommonStates">
-                                        <VisualState x:Name="Normal"/>
-                                        <VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="Hover.Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}"/></VisualState.Setters></VisualState>
-                                        <VisualState x:Name="Pressed"><VisualState.Setters><Setter Target="Hover.Background" Value="{ThemeResource SubtleFillColorTertiaryBrush}"/></VisualState.Setters></VisualState>
-                                        <VisualState x:Name="Checked"><VisualState.Setters><Setter Target="Indicator.Opacity" Value="1"/><Setter Target="Label.Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}"/></VisualState.Setters></VisualState>
-                                        <VisualState x:Name="CheckedPointerOver"><VisualState.Setters><Setter Target="Indicator.Opacity" Value="1"/><Setter Target="Hover.Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}"/></VisualState.Setters></VisualState>
-                                        <VisualState x:Name="CheckedPressed"><VisualState.Setters><Setter Target="Indicator.Opacity" Value="1"/></VisualState.Setters></VisualState>
-                                    </VisualStateGroup>
-                                </VisualStateManager.VisualStateGroups>
-                                <Border x:Name="Hover" CornerRadius="6"/>
-                                <ContentPresenter x:Name="Label" Content="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                <Border x:Name="Indicator" Width="20" Height="3" CornerRadius="2" Background="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Bottom" HorizontalAlignment="Center" Opacity="0"/>
-                            </Grid>
-                        </ControlTemplate>
-                    </Setter.Value>
-                </Setter>
                 <Setter Property="Padding" Value="4,2" />
                 <Setter Property="CornerRadius" Value="8" />
                 <Setter Property="BorderThickness" Value="0" />

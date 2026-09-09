@@ -42,5 +42,6 @@ public sealed partial class RulesPage : UserControl
         {
             RulesListView.Items.Add(new ListViewItem { Content = $"{rule.Type}  {rule.Payload}  → {rule.Proxy}" });
         }
+        EmptyListText.Visibility = RulesListView.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 }

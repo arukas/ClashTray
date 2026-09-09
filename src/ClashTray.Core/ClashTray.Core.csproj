@@ -4,6 +4,7 @@
     <RootNamespace>ClashTray.Core</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="../../packaging/mihomo-release.json" LogicalName="ClashTray.MihomoRelease.json" />
     <ProjectReference Include="..\ClashTray.Contracts\ClashTray.Contracts.csproj" />
   </ItemGroup>
 </Project>

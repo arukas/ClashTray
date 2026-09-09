@@ -59,7 +59,7 @@ public sealed partial class SettingsPage : UserControl
                 BypassList = BypassListBox.Text.Trim(),
                 SubscriptionRefreshHours = subscriptionRefreshHours
             });
-            StatusText.Text = "设置已保存；核心重启后端口配置生效。";
+            StatusText.Text = "设置已保存；允许局域网连接和 IPv6 由程序优先控制，端口等配置在核心重启后生效。";
         }
         catch (ArgumentException exception)
         {

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http;
 using System.Net.WebSockets;
 using System.Text.Json;
@@ -9,6 +10,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 {
     private readonly SemaphoreSlim _operationLock = new(1, 1);
     private readonly SemaphoreSlim _subscriptionOperationLock = new(1, 1);
+    private readonly SemaphoreSlim _dataRefreshLock = new(1, 1);
     private readonly CancellationTokenSource _runtimeCts = new();
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(8) };
     private readonly BoundedLogBuffer _logBuffer = new(500);
@@ -26,6 +28,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly object _logStreamGate = new();
     private MihomoApiClient? _api;
     private Task? _pollingTask;
+    private Task? _dataRefreshTask;
     private CancellationTokenSource? _logStreamCts;
     private Task? _logStreamTask;
     private AppSettings _settings = new();
@@ -33,6 +36,19 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private bool _usingServiceCore;
 
     private const int MaxLogMessageBytes = 1024 * 1024;
+
+    private sealed record ProxyDataResult(
+        bool Succeeded,
+        IReadOnlyList<ProxyGroup> Groups,
+        IReadOnlyList<ProxyNode> Nodes);
+
+    private readonly record struct TrafficDataResult(bool Succeeded, TrafficSnapshot? Value);
+
+    private readonly record struct MemoryDataResult(bool Succeeded, long Value);
+
+    private readonly record struct ConnectionDataResult(
+        bool Succeeded,
+        IReadOnlyList<ConnectionInfo> Value);
 
     public ClashTrayRuntime(AppPaths? paths = null)
     {
@@ -83,6 +99,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             },
             SystemProxy = _systemProxy.DetectState()
         };
+        await ApplyProgramOverridesAsync(coreRunning: false, cancellationToken: cancellationToken);
         try
         {
             var serviceStatus = await _servicePipeClient.SendAsync(ServiceCommand.GetStatus, cancellationToken: cancellationToken);
@@ -96,19 +113,27 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                         : serviceStatus.Core
                 }
             };
+            Publish();
             if (serviceStatus.Core == CoreState.Running)
             {
                 _usingServiceCore = true;
                 _api = CreateApiClient();
                 try
                 {
-                    await RefreshFromApiWithRetryAsync(cancellationToken);
+                    await RefreshCoreHealthWithRetryAsync(cancellationToken);
                 }
-                catch (HttpRequestException exception)
+                catch (OperationCanceledException)
                 {
-                    UpdateCoreState(CoreState.Failed, $"Mihomo 控制器暂未就绪：{exception.Message}");
+                    throw;
                 }
+                catch (Exception exception)
+                {
+                    MarkCoreHealthUnconfirmed("初始化", exception);
+                }
+
+                await ApplyProgramOverridesAsync(coreRunning: true, cancellationToken: cancellationToken);
                 StartPolling();
+                StartOptionalRefreshInBackground(_api);
             }
         }
         catch (TimeoutException)
@@ -135,6 +160,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public async Task StartCoreAsync(CancellationToken cancellationToken = default)
     {
         await _operationLock.WaitAsync(cancellationToken);
+        var coreStarted = false;
         try
         {
             var profile = GetActiveConfiguration();
@@ -208,16 +234,35 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await _processManager.StartAsync(executable, runtimeConfigPath, runtimeDirectory, cancellationToken);
             }
 
+            coreStarted = true;
             _api = CreateApiClient();
+            SetCoreRunningPendingHealth(serviceResponse?.Tun ?? TunState.Unknown);
             try
             {
-                await RefreshFromApiWithRetryAsync(cancellationToken);
+                await RefreshCoreHealthWithRetryAsync(cancellationToken);
             }
-            catch (HttpRequestException exception)
+            catch (OperationCanceledException exception)
             {
-                UpdateCoreState(CoreState.Failed, $"Mihomo 控制器暂未就绪：{exception.Message}");
+                if (coreStarted && !_runtimeCts.IsCancellationRequested)
+                {
+                    MarkCoreHealthUnconfirmed("启动取消后同步", exception);
+                    StartPolling();
+                    StartOptionalRefreshInBackground(_api);
+                }
+
+                throw;
             }
+            catch (Exception exception)
+            {
+                MarkCoreHealthUnconfirmed("启动", exception);
+            }
+
+            await ApplyProgramOverridesAsync(
+                coreRunning: true,
+                cancellationToken: cancellationToken,
+                operationLockHeld: true);
             StartPolling();
+            StartOptionalRefreshInBackground(_api);
         }
         catch (OperationCanceledException)
         {
@@ -365,17 +410,24 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         var shouldRemainActive = profile.IsActive
             || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
+        var activeSelectionChanged = !string.Equals(
+            _settings.ActiveConfigurationId,
+            profile.Id,
+            StringComparison.OrdinalIgnoreCase);
         UpdateSubscriptionState(SubscriptionState.Downloading, null);
         try
         {
             UpdateSubscriptionState(SubscriptionState.Validating, null);
-            await _configurationStore.ImportSubscriptionAsync(profile.SubscriptionUri, profile.Name, cancellationToken);
+            var update = await _configurationStore.ImportSubscriptionWithResultAsync(
+                profile.SubscriptionUri,
+                profile.Name,
+                cancellationToken);
             UpdateSubscriptionState(SubscriptionState.Applying, null);
             UpdateSubscriptionState(SubscriptionState.Succeeded, null);
             var configurations = await _configurationStore.ListAsync(cancellationToken);
             if (shouldRemainActive)
             {
-                await SetActiveConfigurationAsync(profile.Id, cancellationToken);
+                await SetActiveConfigurationAsync(profile.Id, restartCore: false, cancellationToken: cancellationToken);
             }
             else
             {
@@ -391,7 +443,20 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             if (shouldRemainActive && _snapshot.Core.State == CoreState.Running)
             {
-                await RestartCoreAsync(cancellationToken);
+                if (update.ContentChanged || activeSelectionChanged)
+                {
+                    await RestartCoreAsync(cancellationToken);
+                }
+                else
+                {
+                    _logBuffer.Add(new LogEntry(
+                        DateTimeOffset.UtcNow,
+                        "ClashTray",
+                        "info",
+                        "订阅内容 SHA-256 未变化，已跳过 Mihomo 重启。"));
+                    _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
+                    Publish();
+                }
             }
         }
         catch (Exception exception)
@@ -427,7 +492,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public async Task SetActiveConfigurationAsync(string id, CancellationToken cancellationToken = default)
+    public Task SetActiveConfigurationAsync(string id, CancellationToken cancellationToken = default) =>
+        SetActiveConfigurationAsync(id, restartCore: true, cancellationToken: cancellationToken);
+
+    private async Task SetActiveConfigurationAsync(
+        string id,
+        bool restartCore,
+        CancellationToken cancellationToken = default)
     {
         var configurations = await _configurationStore.ListAsync(cancellationToken);
         var selected = configurations.FirstOrDefault(configuration => configuration.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
@@ -446,7 +517,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         };
         Publish();
 
-        if (changed && _snapshot.Core.State == CoreState.Running)
+        if (changed && restartCore && _snapshot.Core.State == CoreState.Running)
         {
             await RestartCoreAsync(cancellationToken);
         }
@@ -585,21 +656,67 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public async Task UpdateSettingsAsync(AppSettings settings, CancellationToken cancellationToken = default)
     {
         ValidateSettings(settings);
-        if (settings.StartWithWindows != _settings.StartWithWindows)
-        {
-            StartupManager.SetEnabled(settings.StartWithWindows, Environment.ProcessPath ?? AppContext.BaseDirectory);
-        }
-
-        _settings = settings;
-        await _settingsStore.SaveAsync(settings, cancellationToken);
-        Publish();
-    }
-
-    public async Task SetSystemProxyAsync(bool enabled, CancellationToken cancellationToken = default)
-    {
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
+            var networkSettingsChanged = settings.AllowLan != _settings.AllowLan
+                || settings.Ipv6 != _settings.Ipv6;
+            if (settings.StartWithWindows != _settings.StartWithWindows)
+            {
+                StartupManager.SetEnabled(settings.StartWithWindows, Environment.ProcessPath ?? AppContext.BaseDirectory);
+            }
+
+            _settings = settings;
+            await _settingsStore.SaveAsync(settings, cancellationToken);
+            if (networkSettingsChanged && _api is not null)
+            {
+                try
+                {
+                    await ApplyProgramNetworkPreferencesAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    LogControllerFailure("程序局域网/IPv6 设置覆盖", "/configs", exception, 0);
+                    _snapshot = _snapshot with
+                    {
+                        ErrorMessage = $"程序局域网/IPv6 设置应用失败：{exception.Message}",
+                        Logs = _logBuffer.Snapshot()
+                    };
+                }
+            }
+
+            Publish();
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    public Task SetSystemProxyAsync(bool enabled, CancellationToken cancellationToken = default) =>
+        SetSystemProxyCoreAsync(enabled, persistPreference: true, cancellationToken: cancellationToken);
+
+    private async Task SetSystemProxyCoreAsync(
+        bool enabled,
+        bool persistPreference,
+        CancellationToken cancellationToken)
+    {
+        await _operationLock.WaitAsync(cancellationToken);
+        var previousSettings = _settings;
+        var preferenceChanged = persistPreference && previousSettings.SystemProxyEnabled != enabled;
+        try
+        {
+            if (preferenceChanged)
+            {
+                await SaveSettingsForOperationAsync(
+                    previousSettings with { SystemProxyEnabled = enabled },
+                    cancellationToken);
+            }
+
             _snapshot = _snapshot with { SystemProxy = enabled ? SystemProxyState.Enabling : SystemProxyState.Disabling };
             Publish();
             if (enabled)
@@ -616,6 +733,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch
         {
+            if (preferenceChanged)
+            {
+                await RestoreSettingsAfterOperationFailureAsync(previousSettings);
+            }
+
             _snapshot = _snapshot with { SystemProxy = _systemProxy.State };
             Publish();
             throw;
@@ -626,11 +748,26 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public async Task SetTunAsync(bool enabled, CancellationToken cancellationToken = default)
+    public Task SetTunAsync(bool enabled, CancellationToken cancellationToken = default) =>
+        SetTunCoreAsync(enabled, persistPreference: true, cancellationToken: cancellationToken);
+
+    private async Task SetTunCoreAsync(
+        bool enabled,
+        bool persistPreference,
+        CancellationToken cancellationToken)
     {
         await _operationLock.WaitAsync(cancellationToken);
+        var previousSettings = _settings;
+        var preferenceChanged = persistPreference && previousSettings.TunEnabled != enabled;
         try
         {
+            if (preferenceChanged)
+            {
+                await SaveSettingsForOperationAsync(
+                    previousSettings with { TunEnabled = enabled },
+                    cancellationToken);
+            }
+
             _snapshot = _snapshot with { Tun = enabled ? TunState.Enabling : TunState.Disabling };
             Publish();
             var payload = JsonSerializer.Serialize(new ServiceTunPayload(
@@ -651,30 +788,55 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (TimeoutException exception)
         {
+            if (preferenceChanged)
+            {
+                await RestoreSettingsAfterOperationFailureAsync(previousSettings);
+            }
+
             _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = exception.Message };
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
         catch (ServiceRequestUnknownException exception)
         {
+            if (preferenceChanged)
+            {
+                await RestoreSettingsAfterOperationFailureAsync(previousSettings);
+            }
+
             _snapshot = _snapshot with { Tun = TunState.Failed, ErrorMessage = exception.Message };
             Publish();
             throw new InvalidOperationException("TUN 操作结果无法确认，请检查服务状态后重试。", exception);
         }
         catch (IOException exception)
         {
+            if (preferenceChanged)
+            {
+                await RestoreSettingsAfterOperationFailureAsync(previousSettings);
+            }
+
             _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = exception.Message };
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
         catch (UnauthorizedAccessException exception)
         {
+            if (preferenceChanged)
+            {
+                await RestoreSettingsAfterOperationFailureAsync(previousSettings);
+            }
+
             _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = exception.Message };
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
         catch
         {
+            if (preferenceChanged)
+            {
+                await RestoreSettingsAfterOperationFailureAsync(previousSettings);
+            }
+
             _snapshot = _snapshot with { Tun = TunState.Failed };
             Publish();
             throw;
@@ -740,8 +902,19 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             return;
         }
 
-        await RefreshFromApiAsync(cancellationToken);
+        await RefreshFromApiWithRetryAsync(cancellationToken);
     }
+
+    internal void AttachControllerForTesting(MihomoApiClient api, bool usingServiceCore)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+        _api = api;
+        _usingServiceCore = usingServiceCore;
+        _snapshot = _snapshot with { Core = _snapshot.Core with { State = CoreState.Running } };
+    }
+
+    internal Task RefreshControllerDataForTestingAsync(CancellationToken cancellationToken = default) =>
+        RefreshFromApiAsync(cancellationToken);
 
     public async ValueTask DisposeAsync()
     {
@@ -749,7 +922,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             try
             {
-                await SetTunAsync(false, CancellationToken.None);
+                await SetTunCoreAsync(false, persistPreference: false, cancellationToken: CancellationToken.None);
             }
             catch
             {
@@ -760,7 +933,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             try
             {
-                await SetSystemProxyAsync(false, CancellationToken.None);
+                await SetSystemProxyCoreAsync(false, persistPreference: false, cancellationToken: CancellationToken.None);
             }
             catch
             {
@@ -778,9 +951,20 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
         }
 
+        _runtimeCts.Cancel();
         _api = null;
         await StopLogStreamAsync();
-        _runtimeCts.Cancel();
+        if (_dataRefreshTask is not null)
+        {
+            try
+            {
+                await _dataRefreshTask;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
         await _subscriptionScheduler.DisposeAsync();
         if (_pollingTask is not null)
         {
@@ -796,31 +980,36 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _processManager.DisposeAsync();
         _httpClient.Dispose();
         _subscriptionOperationLock.Dispose();
+        _dataRefreshLock.Dispose();
         _operationLock.Dispose();
         _runtimeCts.Dispose();
     }
 
     private async Task RefreshFromApiAsync(CancellationToken cancellationToken)
     {
-        if (_api is null)
+        var api = _api;
+        if (api is null)
         {
             return;
         }
 
-        using var version = await _api.GetVersionAsync(cancellationToken);
+        await RefreshCoreHealthAsync(api, cancellationToken);
+        await RefreshOptionalDataAsync(api, cancellationToken);
+    }
+
+    private async Task RefreshCoreHealthAsync(MihomoApiClient api, CancellationToken cancellationToken)
+    {
+        using var version = await api.GetVersionAsync(cancellationToken);
         var versionText = MihomoDataParser.ParseVersion(version);
-        using var configurationState = await _api.GetConfigurationAsync(force: false, cancellationToken);
+        using var configurationState = await api.GetConfigurationAsync(force: false, cancellationToken);
         var mode = MihomoDataParser.ParseMode(configurationState);
         var tunEnabled = MihomoDataParser.ParseTunEnabled(configurationState);
-        using var proxies = await _api.GetProxiesAsync(cancellationToken);
-        var proxyData = MihomoDataParser.ParseProxies(proxies);
-        using var traffic = await _api.GetTrafficAsync(cancellationToken);
-        var trafficData = MihomoDataParser.ParseTraffic(traffic);
-        var memoryBytes = await TryGetMemoryAsync(cancellationToken);
-        using var connections = await _api.GetConnectionsAsync(cancellationToken);
-        var connectionData = MihomoDataParser.ParseConnections(connections);
-        var rulesData = await TryGetRulesAsync(cancellationToken);
-        var providerData = await TryGetProvidersAsync(cancellationToken);
+
+        if (!ReferenceEquals(_api, api))
+        {
+            return;
+        }
+
         _snapshot = _snapshot with
         {
             Core = _snapshot.Core with
@@ -828,20 +1017,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 State = CoreState.Running,
                 Version = versionText ?? _snapshot.Core.Version,
                 Mode = mode ?? _snapshot.Core.Mode,
-                UploadBytes = trafficData.UploadBytes,
-                DownloadBytes = trafficData.DownloadBytes,
-                UploadBytesPerSecond = trafficData.UploadBytesPerSecond,
-                DownloadBytesPerSecond = trafficData.DownloadBytesPerSecond,
-                ConnectionCount = connectionData.Count,
-                MemoryBytes = memoryBytes,
                 ErrorMessage = null
             },
-            ProxyGroups = proxyData.Groups,
-            ProxyNodes = proxyData.Nodes,
-            Connections = connectionData,
-            Rules = rulesData,
-            Providers = providerData.Providers,
-            RuleProviders = providerData.RuleProviders,
             Logs = _logBuffer.Snapshot(),
             Tun = tunEnabled is null
                 ? _snapshot.Tun
@@ -852,24 +1029,109 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         EnsureLogStreamStarted();
     }
 
-    private async Task RefreshFromApiWithRetryAsync(CancellationToken cancellationToken)
+    private async Task RefreshOptionalDataAsync(MihomoApiClient api, CancellationToken cancellationToken)
     {
-        HttpRequestException? lastException = null;
-        for (var attempt = 0; attempt < 5; attempt++)
+        await _dataRefreshLock.WaitAsync(cancellationToken);
+        try
         {
-            try
+            if (!ReferenceEquals(_api, api))
             {
-                await RefreshFromApiAsync(cancellationToken);
                 return;
             }
-            catch (HttpRequestException exception) when (attempt < 4)
+
+            var proxyTask = TryGetProxyDataAsync(api, cancellationToken);
+            var trafficTask = TryGetTrafficSnapshotAsync(api, cancellationToken);
+            var memoryTask = TryGetMemoryAsync(api, cancellationToken);
+            var connectionsTask = TryGetConnectionDataAsync(api, cancellationToken);
+            var rulesTask = TryGetRulesAsync(api, cancellationToken);
+            var providersTask = TryGetProvidersAsync(api, cancellationToken);
+            await Task.WhenAll(proxyTask, trafficTask, memoryTask, connectionsTask, rulesTask, providersTask);
+
+            if (!ReferenceEquals(_api, api))
+            {
+                return;
+            }
+
+            var proxyData = await proxyTask;
+            var trafficData = await trafficTask;
+            var memoryData = await memoryTask;
+            var connectionData = await connectionsTask;
+            var rulesData = await rulesTask;
+            var providerData = await providersTask;
+            var currentCore = _snapshot.Core;
+            var traffic = trafficData.Value;
+
+            _snapshot = _snapshot with
+            {
+                Core = currentCore with
+                {
+                    UploadBytes = traffic?.UploadBytes ?? currentCore.UploadBytes,
+                    DownloadBytes = traffic?.DownloadBytes ?? currentCore.DownloadBytes,
+                    UploadBytesPerSecond = traffic?.UploadBytesPerSecond ?? currentCore.UploadBytesPerSecond,
+                    DownloadBytesPerSecond = traffic?.DownloadBytesPerSecond ?? currentCore.DownloadBytesPerSecond,
+                    TrafficAvailable = trafficData.Succeeded,
+                    ConnectionCount = connectionData.Succeeded ? connectionData.Value.Count : currentCore.ConnectionCount,
+                    MemoryBytes = memoryData.Value,
+                    MemoryAvailable = memoryData.Succeeded
+                },
+                ProxyGroups = proxyData.Succeeded ? proxyData.Groups : _snapshot.ProxyGroups,
+                ProxyNodes = proxyData.Succeeded ? proxyData.Nodes : _snapshot.ProxyNodes,
+                Connections = connectionData.Succeeded ? connectionData.Value : _snapshot.Connections,
+                Rules = rulesData,
+                Providers = providerData.Providers,
+                RuleProviders = providerData.RuleProviders,
+                Logs = _logBuffer.Snapshot()
+            };
+            Publish();
+        }
+        finally
+        {
+            _dataRefreshLock.Release();
+        }
+    }
+
+    private async Task RefreshFromApiWithRetryAsync(CancellationToken cancellationToken)
+    {
+        await RefreshCoreHealthWithRetryAsync(cancellationToken);
+        await ApplyProgramOverridesAsync(coreRunning: true, cancellationToken: cancellationToken);
+        var api = _api;
+        if (api is not null)
+        {
+            await RefreshOptionalDataAsync(api, cancellationToken);
+        }
+    }
+
+    private async Task RefreshCoreHealthWithRetryAsync(CancellationToken cancellationToken)
+    {
+        var api = _api;
+        if (api is null)
+        {
+            return;
+        }
+
+        Exception? lastException = null;
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            try
+            {
+                await RefreshCoreHealthAsync(api, cancellationToken);
+                return;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (attempt < 4)
             {
                 lastException = exception;
+                LogControllerFailure("核心健康检查", "/version 或 /configs", exception, attempt + 1, stopwatch.Elapsed);
                 await Task.Delay(TimeSpan.FromMilliseconds(250 * Math.Pow(2, attempt)), cancellationToken);
             }
-            catch (HttpRequestException exception)
+            catch (Exception exception)
             {
                 lastException = exception;
+                LogControllerFailure("核心健康检查", "/version 或 /configs", exception, attempt + 1, stopwatch.Elapsed);
             }
         }
 
@@ -883,84 +1145,437 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             return;
         }
 
-        _pollingTask = Task.Run(async () =>
+        _pollingTask = Task.Run(RunPollingAsync, CancellationToken.None);
+    }
+
+    private async Task RunPollingAsync()
+    {
+        var retryDelay = TimeSpan.FromSeconds(2);
+        var retryCount = 0;
+        while (ShouldContinuePolling())
         {
-            var retryDelay = TimeSpan.FromSeconds(2);
-            while (!_runtimeCts.IsCancellationRequested && (_usingServiceCore ? _api is not null : _processManager.State == CoreState.Running))
+            try
             {
-                try
-                {
-                    await Task.Delay(retryDelay, _runtimeCts.Token);
-                    await RefreshFromApiAsync(_runtimeCts.Token);
-                    retryDelay = TimeSpan.FromSeconds(2);
-                }
-                catch (OperationCanceledException)
+                await Task.Delay(retryDelay, _runtimeCts.Token);
+                if (!ShouldContinuePolling())
                 {
                     break;
                 }
-                catch (Exception exception)
+
+                await RefreshFromApiAsync(_runtimeCts.Token);
+                await ApplyProgramOverridesAsync(coreRunning: true, cancellationToken: _runtimeCts.Token);
+                retryDelay = TimeSpan.FromSeconds(2);
+                retryCount = 0;
+            }
+            catch (OperationCanceledException) when (_runtimeCts.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception exception)
+            {
+                retryCount++;
+                if (!_usingServiceCore)
                 {
-                    UpdateCoreState(CoreState.Failed, exception.Message);
-                    if (!_usingServiceCore || _processManager.State != CoreState.Running)
+                    if (_processManager.State == CoreState.Running)
                     {
-                        await StopLogStreamAsync();
-                        break;
-                    }
-
-                    ServiceResponse? serviceStatus = null;
-                    try
-                    {
-                        serviceStatus = await _servicePipeClient.SendAsync(ServiceCommand.GetStatus, cancellationToken: _runtimeCts.Token);
-                    }
-                    catch (TimeoutException)
-                    {
-                    }
-                    catch (IOException)
-                    {
-                        _api = null;
-                        await StopLogStreamAsync();
-                        _snapshot = _snapshot with { Tun = TunState.Unavailable };
-                        UpdateCoreState(CoreState.Failed, "ClashTray 服务暂时不可用");
-                        break;
-                    }
-                    catch (UnauthorizedAccessException)
-                    {
-                        _api = null;
-                        await StopLogStreamAsync();
-                        _snapshot = _snapshot with { Tun = TunState.Unavailable };
-                        UpdateCoreState(CoreState.Failed, "ClashTray 服务暂时不可用");
-                        break;
-                    }
-
-                    if (serviceStatus is null)
-                    {
-                        retryDelay = TimeSpan.FromSeconds(Math.Min(30, retryDelay.TotalSeconds * 2));
+                        MarkCoreHealthUnconfirmed("轮询", exception, retryCount);
+                        retryDelay = IncreaseRetryDelay(retryDelay);
                         continue;
                     }
 
-                    if (serviceStatus.Core == CoreState.Running)
-                    {
-                        _api = CreateApiClient();
-                    }
-                    else
-                    {
-                        _api = null;
-                        await StopLogStreamAsync();
-                        _snapshot = _snapshot with { Tun = serviceStatus.Tun };
-                        UpdateCoreState(serviceStatus.Core, serviceStatus.Core == CoreState.Failed ? "Mihomo 服务进程已停止" : null);
-                        break;
-                    }
-
-                    retryDelay = TimeSpan.FromSeconds(Math.Min(30, retryDelay.TotalSeconds * 2));
+                    await StopLogStreamAsync();
+                    break;
                 }
+
+                ServiceResponse? serviceStatus = null;
+                Exception? serviceException = null;
+                try
+                {
+                    serviceStatus = await _servicePipeClient.SendAsync(
+                        ServiceCommand.GetStatus,
+                        cancellationToken: _runtimeCts.Token);
+                }
+                catch (OperationCanceledException) when (_runtimeCts.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception statusException)
+                {
+                    serviceException = statusException;
+                }
+
+                if (serviceStatus is null)
+                {
+                    _api = null;
+                    await StopLogStreamAsync();
+                    _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    MarkCoreHealthUnconfirmed("服务重连", serviceException ?? exception, retryCount);
+                    retryDelay = IncreaseRetryDelay(retryDelay);
+                    continue;
+                }
+
+                if (serviceStatus.Core == CoreState.Running)
+                {
+                    _api = CreateApiClient();
+                    _snapshot = _snapshot with { Tun = serviceStatus.Tun };
+                    MarkCoreHealthUnconfirmed("控制器重连", exception, retryCount);
+                    retryDelay = IncreaseRetryDelay(retryDelay);
+                    continue;
+                }
+
+                _api = null;
+                await StopLogStreamAsync();
+                _snapshot = _snapshot with { Tun = serviceStatus.Tun };
+                if (serviceStatus.Core is CoreState.Stopped or CoreState.Failed)
+                {
+                    UpdateCoreState(
+                        serviceStatus.Core,
+                        serviceStatus.Core == CoreState.Failed ? "Mihomo 服务进程已停止" : null);
+                    break;
+                }
+
+                UpdateCoreState(serviceStatus.Core, "核心状态暂时无法确认，正在等待服务完成状态同步。");
+                retryDelay = IncreaseRetryDelay(retryDelay);
             }
-        }, _runtimeCts.Token);
+        }
+    }
+
+    private bool ShouldContinuePolling() =>
+        !_runtimeCts.IsCancellationRequested
+        && (_usingServiceCore || (_api is not null && _processManager.State == CoreState.Running));
+
+    private static TimeSpan IncreaseRetryDelay(TimeSpan current) =>
+        TimeSpan.FromSeconds(Math.Min(30, Math.Max(2, current.TotalSeconds * 2)));
+
+    private void StartOptionalRefreshInBackground(MihomoApiClient? api)
+    {
+        if (api is null || _dataRefreshTask is { IsCompleted: false })
+        {
+            return;
+        }
+
+        _dataRefreshTask = Task.Run(
+            () => RunOptionalRefreshAsync(api),
+            CancellationToken.None);
+    }
+
+    private async Task RunOptionalRefreshAsync(MihomoApiClient api)
+    {
+        try
+        {
+            await RefreshOptionalDataAsync(api, _runtimeCts.Token);
+        }
+        catch (OperationCanceledException) when (_runtimeCts.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            LogControllerFailure("后台数据刷新", "/metrics", exception, 0);
+        }
     }
 
     private MihomoApiClient CreateApiClient()
     {
         var controllerUri = new Uri($"http://127.0.0.1:{_settings.ControllerPort}/");
         return new MihomoApiClient(_httpClient, controllerUri, _secretStore.GetOrCreate());
+    }
+
+    private async Task ApplyProgramOverridesAsync(
+        bool coreRunning,
+        CancellationToken cancellationToken,
+        bool operationLockHeld = false)
+    {
+        if (!operationLockHeld)
+        {
+            await _operationLock.WaitAsync(cancellationToken);
+        }
+
+        try
+        {
+            await ApplyProgramOverridesCoreAsync(coreRunning, cancellationToken);
+        }
+        finally
+        {
+            if (!operationLockHeld)
+            {
+                _operationLock.Release();
+            }
+        }
+    }
+
+    private async Task ApplyProgramOverridesCoreAsync(bool coreRunning, CancellationToken cancellationToken)
+    {
+        if (coreRunning && _api is not null)
+        {
+            try
+            {
+                await ApplyProgramNetworkPreferencesAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                LogControllerFailure("程序局域网/IPv6 设置覆盖", "/configs", exception, 0);
+                _snapshot = _snapshot with
+                {
+                    ErrorMessage = $"程序局域网/IPv6 设置应用失败：{exception.Message}",
+                    Logs = _logBuffer.Snapshot()
+                };
+                Publish();
+            }
+
+            try
+            {
+                await ApplyProgramTunPreferenceAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                LogControllerFailure("程序 TUN 设置覆盖", "/configs", exception, 0);
+                _snapshot = _snapshot with
+                {
+                    ErrorMessage = $"程序 TUN 设置应用失败：{exception.Message}",
+                    Logs = _logBuffer.Snapshot()
+                };
+                Publish();
+            }
+        }
+
+        try
+        {
+            await ReconcileSystemProxyAsync(coreRunning, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logBuffer.Add(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", $"程序系统代理设置应用失败：{exception.Message}"));
+            _snapshot = _snapshot with
+            {
+                SystemProxy = _systemProxy.State,
+                ErrorMessage = $"程序系统代理设置应用失败：{exception.Message}",
+                Logs = _logBuffer.Snapshot()
+            };
+            Publish();
+        }
+    }
+
+    private async Task ApplyProgramNetworkPreferencesAsync(CancellationToken cancellationToken)
+    {
+        var api = _api;
+        if (api is null)
+        {
+            return;
+        }
+
+        using var configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
+        var currentAllowLan = MihomoDataParser.ParseAllowLan(configuration);
+        var currentIpv6 = MihomoDataParser.ParseIpv6(configuration);
+        if (currentAllowLan is bool currentAllowLanValue
+            && currentAllowLanValue == _settings.AllowLan
+            && currentIpv6 is bool currentIpv6Value
+            && currentIpv6Value == _settings.Ipv6)
+        {
+            return;
+        }
+
+        try
+        {
+            using var response = await api.SetNetworkSettingsAsync(
+                _settings.AllowLan,
+                _settings.Ipv6,
+                cancellationToken);
+            if (!await ConfirmNetworkSettingsAsync(
+                    api,
+                    _settings.AllowLan,
+                    _settings.Ipv6,
+                    cancellationToken))
+            {
+                throw new InvalidOperationException("Mihomo 未确认程序局域网/IPv6 设置。");
+            }
+        }
+        catch
+        {
+            if (!await TryRestoreNetworkSettingsAsync(api, currentAllowLan, currentIpv6))
+            {
+                _logBuffer.Add(new LogEntry(
+                    DateTimeOffset.UtcNow,
+                    "ClashTray",
+                    "error",
+                    "程序局域网/IPv6 设置应用失败，且无法恢复核心原始设置。"));
+            }
+
+            throw;
+        }
+    }
+
+    private async Task ApplyProgramTunPreferenceAsync(CancellationToken cancellationToken)
+    {
+        var api = _api;
+        if (api is null)
+        {
+            return;
+        }
+
+        using var configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
+        var current = MihomoDataParser.ParseTunEnabled(configuration);
+        if (current is not bool currentValue || currentValue == _settings.TunEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            await api.SetTunAsync(_settings.TunEnabled, cancellationToken);
+            if (!await ConfirmTunStateAsync(api, _settings.TunEnabled, cancellationToken))
+            {
+                throw new InvalidOperationException("Mihomo 未确认程序 TUN 设置。");
+            }
+        }
+        catch
+        {
+            if (!await TryRestoreTunStateAsync(api, currentValue))
+            {
+                _snapshot = _snapshot with { Tun = TunState.Unknown };
+                Publish();
+            }
+
+            throw;
+        }
+
+        if (ReferenceEquals(_api, api))
+        {
+            _snapshot = _snapshot with { Tun = _settings.TunEnabled ? TunState.On : TunState.Off, ErrorMessage = null };
+            Publish();
+        }
+    }
+
+    private async Task ReconcileSystemProxyAsync(bool coreRunning, CancellationToken cancellationToken)
+    {
+        if (_settings.SystemProxyEnabled)
+        {
+            if (coreRunning && _systemProxy.State is (SystemProxyState.Off or SystemProxyState.Failed))
+            {
+                await _systemProxy.EnableAsync(_settings.MixedPort, _settings.BypassList, cancellationToken);
+            }
+        }
+        else if (_systemProxy.State is SystemProxyState.On or SystemProxyState.RestoreRequired)
+        {
+            await _systemProxy.DisableAsync(cancellationToken);
+        }
+
+        var state = _systemProxy.State;
+        if (_snapshot.SystemProxy != state)
+        {
+            _snapshot = _snapshot with { SystemProxy = state };
+            Publish();
+        }
+    }
+
+    private async Task SaveSettingsForOperationAsync(AppSettings settings, CancellationToken cancellationToken)
+    {
+        _settings = settings;
+        await _settingsStore.SaveAsync(settings, cancellationToken);
+    }
+
+    private async Task RestoreSettingsAfterOperationFailureAsync(AppSettings settings)
+    {
+        _settings = settings;
+        try
+        {
+            await _settingsStore.SaveAsync(settings, CancellationToken.None);
+        }
+        catch
+        {
+        }
+    }
+
+    private static async Task<bool> ConfirmTunStateAsync(
+        MihomoApiClient api,
+        bool expected,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            using var configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
+            if (MihomoDataParser.ParseTunEnabled(configuration) == expected)
+            {
+                return true;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> TryRestoreTunStateAsync(MihomoApiClient api, bool expected)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        try
+        {
+            await api.SetTunAsync(expected, timeout.Token);
+            return await ConfirmTunStateAsync(api, expected, timeout.Token);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static async Task<bool> ConfirmNetworkSettingsAsync(
+        MihomoApiClient api,
+        bool? expectedAllowLan,
+        bool? expectedIpv6,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            using var configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
+            var allowLan = MihomoDataParser.ParseAllowLan(configuration);
+            var ipv6 = MihomoDataParser.ParseIpv6(configuration);
+            var allowLanMatches = !expectedAllowLan.HasValue
+                || allowLan is bool allowLanValue && allowLanValue == expectedAllowLan.Value;
+            var ipv6Matches = !expectedIpv6.HasValue
+                || ipv6 is bool ipv6Value && ipv6Value == expectedIpv6.Value;
+            if (allowLanMatches && ipv6Matches)
+            {
+                return true;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> TryRestoreNetworkSettingsAsync(
+        MihomoApiClient api,
+        bool? allowLan,
+        bool? ipv6)
+    {
+        if (!allowLan.HasValue && !ipv6.HasValue)
+        {
+            return true;
+        }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        try
+        {
+            using var response = await api.SetNetworkSettingsAsync(allowLan, ipv6, timeout.Token);
+            return await ConfirmNetworkSettingsAsync(api, allowLan, ipv6, timeout.Token);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void EnsureLogStreamStarted()
@@ -1129,29 +1744,126 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    private async Task<IReadOnlyList<RuleInfo>> TryGetRulesAsync(CancellationToken cancellationToken)
+    private async Task<ProxyDataResult> TryGetProxyDataAsync(
+        MihomoApiClient api,
+        CancellationToken cancellationToken)
     {
         try
         {
-            using var document = await _api!.GetRulesAsync(cancellationToken);
+            using var document = await api.GetProxiesAsync(cancellationToken);
+            var data = MihomoDataParser.ParseProxies(document);
+            return new ProxyDataResult(true, data.Groups, data.Nodes);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogControllerFailure("代理数据刷新", "/proxies", exception, 0);
+            return new ProxyDataResult(false, _snapshot.ProxyGroups, _snapshot.ProxyNodes);
+        }
+    }
+
+    private async Task<TrafficDataResult> TryGetTrafficSnapshotAsync(
+        MihomoApiClient api,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            using var document = await api.GetTrafficAsync(cancellationToken);
+            return new TrafficDataResult(true, MihomoDataParser.ParseTraffic(document));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogControllerFailure("指标刷新", "/traffic", exception, 0, stopwatch.Elapsed);
+            return new TrafficDataResult(false, null);
+        }
+    }
+
+    private async Task<MemoryDataResult> TryGetMemoryAsync(
+        MihomoApiClient api,
+        CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            using var memory = await api.GetMemoryAsync(cancellationToken);
+            return new MemoryDataResult(true, MihomoDataParser.ParseMemoryBytes(memory));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogControllerFailure("指标刷新", "/memory", exception, 0, stopwatch.Elapsed);
+            return new MemoryDataResult(false, _snapshot.Core.MemoryBytes);
+        }
+    }
+
+    private async Task<ConnectionDataResult> TryGetConnectionDataAsync(
+        MihomoApiClient api,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var document = await api.GetConnectionsAsync(cancellationToken);
+            return new ConnectionDataResult(true, MihomoDataParser.ParseConnections(document));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogControllerFailure("连接数据刷新", "/connections", exception, 0);
+            return new ConnectionDataResult(false, _snapshot.Connections);
+        }
+    }
+
+    private async Task<IReadOnlyList<RuleInfo>> TryGetRulesAsync(
+        MihomoApiClient api,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var document = await api.GetRulesAsync(cancellationToken);
             return MihomoDataParser.ParseRules(document);
         }
-        catch (HttpRequestException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogControllerFailure("规则数据刷新", "/rules", exception, 0);
             return _snapshot.Rules;
         }
     }
 
-    private async Task<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> TryGetProvidersAsync(CancellationToken cancellationToken)
+    private async Task<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> TryGetProvidersAsync(
+        MihomoApiClient api,
+        CancellationToken cancellationToken)
     {
         try
         {
-            using var providers = await _api!.GetProvidersAsync(cancellationToken);
-            using var ruleProviders = await _api.GetRuleProvidersAsync(cancellationToken);
+            using var providers = await api.GetProvidersAsync(cancellationToken);
+            using var ruleProviders = await api.GetRuleProvidersAsync(cancellationToken);
             return (MihomoDataParser.ParseProviders(providers, "proxy"), MihomoDataParser.ParseProviders(ruleProviders, "rule"));
         }
-        catch (HttpRequestException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogControllerFailure("Provider 数据刷新", "/providers", exception, 0);
             return (_snapshot.Providers, _snapshot.RuleProviders);
         }
     }
@@ -1174,19 +1886,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    private async Task<long> TryGetMemoryAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var memory = await _api!.GetMemoryAsync(cancellationToken);
-            return MihomoDataParser.ParseMemoryBytes(memory);
-        }
-        catch (HttpRequestException)
-        {
-            return _snapshot.Core.MemoryBytes;
-        }
-    }
-
     private ConfigurationProfile? GetActiveConfiguration() =>
         _snapshot.Configurations.FirstOrDefault(configuration => configuration.IsActive)
         ?? _snapshot.Configurations.FirstOrDefault(configuration => configuration.Id == _settings.ActiveConfigurationId);
@@ -1196,6 +1895,61 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         var path = _coreDiscovery.FindExecutable();
         return path is null ? null : CoreDiscovery.GetVersion(path);
     }
+
+    private void SetCoreRunningPendingHealth(TunState tunState)
+    {
+        _snapshot = _snapshot with
+        {
+            Core = _snapshot.Core with
+            {
+                State = CoreState.Running,
+                ErrorMessage = null,
+                TrafficAvailable = false,
+                MemoryAvailable = false
+            },
+            Tun = tunState,
+            ErrorMessage = null
+        };
+        Publish();
+    }
+
+    private void MarkCoreHealthUnconfirmed(string phase, Exception exception, int retryCount = 0)
+    {
+        var message = $"核心状态暂时无法确认（{phase}：{DescribeControllerError(exception)}）。";
+        LogControllerFailure(phase, "/version 或 /configs", exception, retryCount);
+        _snapshot = _snapshot with
+        {
+            Core = _snapshot.Core with { State = CoreState.Running, ErrorMessage = message },
+            ErrorMessage = message,
+            Logs = _logBuffer.Snapshot()
+        };
+        Publish();
+    }
+
+    private void LogControllerFailure(
+        string phase,
+        string path,
+        Exception exception,
+        int retryCount,
+        TimeSpan? elapsed = null)
+    {
+        var status = exception is HttpRequestException { StatusCode: { } statusCode }
+            ? $"HTTP {(int)statusCode}"
+            : "HTTP 未确认";
+        var duration = elapsed is null ? "未测量" : $"{elapsed.Value.TotalMilliseconds:0}ms";
+        var hosting = _usingServiceCore ? "service" : "local";
+        var message = $"{phase}失败：托管方式={hosting}，路径={path}，{status}，耗时={duration}，重试={retryCount}，错误类型={DescribeControllerError(exception)}。";
+        _logBuffer.Add(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "warning", message));
+    }
+
+    private static string DescribeControllerError(Exception exception) => exception switch
+    {
+        HttpRequestException { StatusCode: { } statusCode } => $"HTTP {(int)statusCode}",
+        MihomoStreamException streamException => $"{streamException.Path} {streamException.Kind}",
+        TimeoutException => "首条记录超时",
+        OperationCanceledException => "已取消",
+        _ => exception.GetType().Name
+    };
 
     private void UpdateCoreState(CoreState state, string? error)
     {

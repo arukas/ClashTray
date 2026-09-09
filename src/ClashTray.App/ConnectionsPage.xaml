@@ -19,7 +19,7 @@
             <FontIcon Glyph="&#xE71B;" FontSize="20" Foreground="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
             <StackPanel Grid.Column="1" Margin="10,0,8,0" Spacing="1">
                 <TextBlock Text="连接" FontSize="20" FontWeight="SemiBold" />
-                <TextBlock Text="查看并管理当前活动连接" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                <TextBlock Text="查看并管理当前活动连接" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
             </StackPanel>
             <Button Grid.Column="2" Content="关闭全部" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="CloseAllButton_Click" />
         </Grid>
@@ -39,9 +39,7 @@
             </Grid>
         </Border>
 
-        <Border Style="{StaticResource ClashTrayCardStyle}" Padding="8">
-            <ListView x:Name="ConnectionsListView" MaxHeight="260" SelectionChanged="ConnectionsListView_SelectionChanged" />
-        </Border>
+        <Border Style="{StaticResource ClashTrayCardStyle}" Padding="8"><Grid MinHeight="80"><ListView x:Name="ConnectionsListView" MaxHeight="260" SelectionChanged="ConnectionsListView_SelectionChanged" /><TextBlock x:Name="EmptyListText" Text="当前没有匹配的连接" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></Grid></Border>
 
         <Border Style="{StaticResource ClashTrayCardStyle}">
             <StackPanel Spacing="8">

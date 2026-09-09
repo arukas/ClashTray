@@ -49,6 +49,7 @@ public sealed partial class LogsPage : UserControl
             var folded = log.RepeatCount > 1 ? $" ×{log.RepeatCount}" : string.Empty;
             LogsListView.Items.Add(new ListViewItem { Content = $"{log.Timestamp:HH:mm:ss} [{log.Source}/{log.Level}] {log.Message}{folded}", Tag = log });
         }
+        EmptyListText.Visibility = LogsListView.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void CopyButton_Click(object sender, RoutedEventArgs e)

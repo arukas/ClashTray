@@ -66,4 +66,28 @@ public sealed class SettingsStoreTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [TestMethod]
+    public async Task ProgramPreferencesRoundTrip()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        var store = new SettingsStore(paths);
+        var expected = new AppSettings(
+            AllowLan: true,
+            Ipv6: false,
+            SystemProxyEnabled: true,
+            TunEnabled: true);
+
+        try
+        {
+            await store.SaveAsync(expected);
+
+            Assert.AreEqual(expected, await store.LoadAsync());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

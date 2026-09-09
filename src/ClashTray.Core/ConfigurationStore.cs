@@ -5,17 +5,25 @@ using ClashTray.Contracts;
 
 namespace ClashTray.Core;
 
+public sealed record ConfigurationImportResult(
+    ConfigurationProfile Profile,
+    bool ContentChanged,
+    string Sha256);
+
 public sealed class ConfigurationStore
 {
     private const int MaxConfigurationBytes = 16 * 1024 * 1024;
     private const int MaxMetadataBytes = 256 * 1024;
     private static readonly string[] SupportedExtensions = [".yaml", ".yml"];
     private readonly AppPaths _paths;
+    private readonly HttpMessageHandler? _subscriptionHandler;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
-    public ConfigurationStore(AppPaths paths)
+    public ConfigurationStore(AppPaths paths, HttpMessageHandler? subscriptionHandler = null)
     {
         _paths = paths;
+        // An injected handler is owned by the caller; each download still has its own timeout/client.
+        _subscriptionHandler = subscriptionHandler;
         _paths.EnsureDirectories();
     }
 
@@ -76,24 +84,48 @@ public sealed class ConfigurationStore
 
     public async Task<ConfigurationProfile> ImportSubscriptionAsync(Uri subscriptionUri, string? displayName = null, CancellationToken cancellationToken = default)
     {
+        var result = await ImportSubscriptionWithResultAsync(subscriptionUri, displayName, cancellationToken);
+        return result.Profile;
+    }
+
+    public async Task<ConfigurationImportResult> ImportSubscriptionWithResultAsync(
+        Uri subscriptionUri,
+        string? displayName = null,
+        CancellationToken cancellationToken = default)
+    {
         if (!subscriptionUri.IsAbsoluteUri || subscriptionUri.Scheme is not ("https" or "http"))
         {
             throw new InvalidDataException("Subscription URL must be an absolute HTTP or HTTPS URL.");
         }
 
-        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        using var httpClient = _subscriptionHandler is null
+            ? new HttpClient()
+            : new HttpClient(_subscriptionHandler, disposeHandler: false);
+        httpClient.Timeout = TimeSpan.FromSeconds(30);
+        httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(BundledMihomo.UserAgent);
         using var response = await httpClient.GetAsync(subscriptionUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
         var bytes = await ReadBytesWithLimitAsync(responseStream, cancellationToken);
         ValidateYaml(bytes);
+        var contentHash = SHA256.HashData(bytes);
         var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(subscriptionUri.ToString()))).ToLowerInvariant()[..16];
         var safeName = SanitizeName(displayName ?? subscriptionUri.Host);
         var destination = Path.Combine(_paths.ConfigurationsRoot, $"{id}.yaml");
-        await AtomicFile.WriteBytesAsync(destination, bytes, cancellationToken);
+        var previousHash = await ComputeFileHashAsync(destination, cancellationToken);
+        var contentChanged = previousHash is null
+            || !CryptographicOperations.FixedTimeEquals(previousHash, contentHash);
+        if (contentChanged)
+        {
+            await AtomicFile.WriteBytesAsync(destination, bytes, cancellationToken);
+        }
+
         var profile = new ConfigurationProfile(id, safeName, destination, subscriptionUri, DateTimeOffset.UtcNow, false);
         await SaveMetadataAsync(profile, cancellationToken);
-        return profile;
+        return new ConfigurationImportResult(
+            profile,
+            contentChanged,
+            Convert.ToHexString(contentHash).ToLowerInvariant());
     }
 
     public async Task<ConfigurationProfile> ReloadAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
@@ -209,6 +241,35 @@ public sealed class ConfigurationStore
             }
 
             await buffer.WriteAsync(chunk.AsMemory(0, count), cancellationToken);
+        }
+    }
+
+    private static async Task<byte[]?> ComputeFileHashAsync(string path, CancellationToken cancellationToken)
+    {
+        var fileInfo = new FileInfo(path);
+        if (!fileInfo.Exists || fileInfo.Length > MaxConfigurationBytes)
+        {
+            return null;
+        }
+
+        try
+        {
+            await using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            return await SHA256.HashDataAsync(stream, cancellationToken);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
         }
     }
 

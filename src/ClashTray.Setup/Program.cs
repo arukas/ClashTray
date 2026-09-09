@@ -297,14 +297,26 @@ internal static class Program
 
         RequirePayloadFile(stagingRoot, AppDirectoryName, "ClashTray.App.exe");
         RequirePayloadFile(stagingRoot, ServiceDirectoryName, "ClashTray.Service.exe");
-        RequirePayloadFile(stagingRoot, CoreDirectoryName, "mihomo.exe");
-        RequirePayloadFile(stagingRoot, CoreDirectoryName, "Mihomo-LICENSE.txt");
-        RequirePayloadFile(stagingRoot, CoreDirectoryName, "Mihomo-Release.txt");
+        var coreRoot = Path.Combine(stagingRoot, CoreDirectoryName);
+        if (Directory.Exists(coreRoot))
+        {
+            RequirePayloadFile(stagingRoot, CoreDirectoryName, "mihomo.exe");
+            RequirePayloadFile(stagingRoot, CoreDirectoryName, "Mihomo-LICENSE.txt");
+            RequirePayloadFile(stagingRoot, CoreDirectoryName, "Mihomo-Release.txt");
+        }
     }
 
     private static void InstallBundledCore(string stagingRoot)
     {
         var sourceRoot = Path.Combine(stagingRoot, CoreDirectoryName);
+        if (!File.Exists(Path.Combine(sourceRoot, "mihomo.exe")))
+        {
+            // NoCore and Framework packages intentionally leave the core to the
+            // verified in-app updater. Preserve an existing installed core on
+            // upgrades and keep a fresh install usable for configuration work.
+            return;
+        }
+
         var targetRoot = InstallPaths.ProgramDataCoreRoot;
         var targetCore = Path.Combine(targetRoot, "mihomo.exe");
         var targetLicense = Path.Combine(targetRoot, "Mihomo-LICENSE.txt");

@@ -52,6 +52,7 @@ public sealed partial class ConnectionsPage : UserControl
                 Tag = connection
             });
         }
+        EmptyListText.Visibility = ConnectionsListView.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void ConnectionsListView_SelectionChanged(object sender, SelectionChangedEventArgs e)

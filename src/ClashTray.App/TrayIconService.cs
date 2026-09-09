@@ -61,7 +61,7 @@ internal sealed class TrayIconService : IDisposable
             Flags = NativeMethods.NIF_MESSAGE | NativeMethods.NIF_ICON | NativeMethods.NIF_TIP | NativeMethods.NIF_GUID | NativeMethods.NIF_SHOWTIP,
             GuidItem = IconIdentity,
             CallbackMessage = CallbackMessage,
-            IconHandle = LoadStateIcon(State),
+            IconHandle = LoadTrayIcon(),
             Tip = string.Empty,
             Info = string.Empty,
             InfoTitle = string.Empty
@@ -87,7 +87,7 @@ internal sealed class TrayIconService : IDisposable
         if (changed)
         {
             ReleaseIcon();
-            _data.IconHandle = LoadStateIcon(state);
+            _data.IconHandle = LoadTrayIcon();
         }
 
         _data.Tip = state switch
@@ -204,17 +204,9 @@ internal sealed class TrayIconService : IDisposable
             : NativeMethods.CallWindowProc(_previousWindowProc, windowHandle, message, wParam, lParam);
     }
 
-    private IntPtr LoadStateIcon(TrayState state)
+    private IntPtr LoadTrayIcon()
     {
-        var filename = state switch
-        {
-            TrayState.Running => "running.ico",
-            TrayState.SystemProxy => "system-proxy.ico",
-            TrayState.Tun => "tun.ico",
-            TrayState.Error => "error.ico",
-            _ => "stopped.ico"
-        };
-        var path = Path.Combine(AppContext.BaseDirectory, "Assets", filename);
+        var path = Path.Combine(AppContext.BaseDirectory, "Assets", "logo.ico");
         var handle = NativeMethods.LoadImage(
             IntPtr.Zero,
             path,

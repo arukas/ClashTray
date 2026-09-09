@@ -29,6 +29,7 @@ public sealed partial class MainWindow : Window
     private string? _selectedConfigurationId;
     private AppWindow? _appWindow;
     private bool _updatingSnapshot;
+    private bool _updatingThemeControls;
     private readonly Queue<(double Up, double Down)> _trafficHistory = new();
     private DateTime _lastTrafficSample;
 
@@ -167,8 +168,10 @@ public sealed partial class MainWindow : Window
             ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}"
             : "核心未运行";
         ConnectionCountText.Text = core.ConnectionCount.ToString(CultureInfo.InvariantCulture);
-        TrafficText.Text = $"↑ {FormatRate(core.UploadBytesPerSecond)}  ↓ {FormatRate(core.DownloadBytesPerSecond)}";
-        MemoryText.Text = FormatBytes(core.MemoryBytes);
+        TrafficText.Text = core.TrafficAvailable
+            ? $"↑ {FormatRate(core.UploadBytesPerSecond)}  ↓ {FormatRate(core.DownloadBytesPerSecond)}"
+            : "↑ 暂不可用  ↓ 暂不可用";
+        MemoryText.Text = core.MemoryAvailable ? FormatBytes(core.MemoryBytes) : "暂不可用";
         SystemProxyStateText.Text = snapshot.SystemProxy switch
         {
             SystemProxyState.On => "已开启",
@@ -185,6 +188,7 @@ public sealed partial class MainWindow : Window
             TunState.Enabling => "开启中",
             TunState.Disabling => "关闭中",
             TunState.Unavailable => "服务未安装",
+            TunState.Unknown => "无法确认",
             TunState.Failed => "操作失败",
             _ => "已关闭"
         };
@@ -195,8 +199,10 @@ public sealed partial class MainWindow : Window
         ErrorBanner.IsOpen = !string.IsNullOrEmpty(ErrorBanner.Message);
         DownloadText.Text = FormatRate(core.DownloadBytesPerSecond);
         UploadText.Text = FormatRate(core.UploadBytesPerSecond);
-        TotalTrafficText.Text = $"累计 ↑ {FormatBytes(core.UploadBytes)}  ↓ {FormatBytes(core.DownloadBytes)}";
-        if (DateTime.UtcNow - _lastTrafficSample >= TimeSpan.FromSeconds(1))
+        TotalTrafficText.Text = core.TrafficAvailable
+            ? $"累计 ↑ {FormatBytes(core.UploadBytes)}  ↓ {FormatBytes(core.DownloadBytes)}"
+            : "累计流量暂不可用";
+        if (core.TrafficAvailable && DateTime.UtcNow - _lastTrafficSample >= TimeSpan.FromSeconds(1))
         {
             _lastTrafficSample = DateTime.UtcNow;
             _trafficHistory.Enqueue((core.UploadBytesPerSecond, core.DownloadBytesPerSecond));
@@ -244,12 +250,62 @@ public sealed partial class MainWindow : Window
 
     private void ApplyTheme(string theme)
     {
-        RootGrid.RequestedTheme = theme.ToLowerInvariant() switch
+        var normalizedTheme = theme.Trim().ToLowerInvariant();
+        RootGrid.RequestedTheme = normalizedTheme switch
         {
             "light" => ElementTheme.Light,
             "dark" => ElementTheme.Dark,
             _ => ElementTheme.Default
         };
+        if (ThemeButtonIcon is null)
+        {
+            return;
+        }
+
+        _updatingThemeControls = true;
+        try
+        {
+            SystemThemeOption.IsChecked = normalizedTheme is not ("light" or "dark");
+            LightThemeOption.IsChecked = normalizedTheme == "light";
+            DarkThemeOption.IsChecked = normalizedTheme == "dark";
+            ThemeButtonIcon.Glyph = normalizedTheme switch
+            {
+                "light" => "\uE706",
+                "dark" => "\uE708",
+                _ => "\uE790"
+            };
+            ToolTipService.SetToolTip(ThemeButton, normalizedTheme switch
+            {
+                "light" => "主题：浅色",
+                "dark" => "主题：深色",
+                _ => "主题：自动"
+            });
+        }
+        finally
+        {
+            _updatingThemeControls = false;
+        }
+    }
+
+    private async void ThemeOption_Click(object sender, RoutedEventArgs e)
+    {
+        if (_updatingThemeControls
+            || _runtime is null
+            || sender is not RadioButton { Tag: string theme })
+        {
+            return;
+        }
+
+        ThemeFlyout.Hide();
+        try
+        {
+            await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = theme });
+        }
+        catch (Exception exception)
+        {
+            ApplyTheme(_runtime.Settings.Theme);
+            ShowError($"主题切换失败：{exception.Message}");
+        }
     }
 
     internal async Task ImportLocalConfigurationAsync()

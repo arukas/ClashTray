@@ -13,6 +13,7 @@ namespace ClashTray.Service;
 internal sealed class ServiceRuntimeController : IAsyncDisposable
 {
     private const string ProfileListPath = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList";
+    private static readonly TimeSpan StatusQueryTimeout = TimeSpan.FromSeconds(2);
     private readonly MihomoProcessManager _processManager = new();
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(5) };
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
@@ -28,7 +29,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         {
             return request.Command switch
             {
-                ServiceCommand.GetStatus => Success(request),
+                ServiceCommand.GetStatus => await GetStatusAsync(request, cancellationToken),
                 ServiceCommand.StartCore => await StartCoreAsync(request, cancellationToken),
                 ServiceCommand.StopCore => await StopCoreAsync(request, cancellationToken),
                 ServiceCommand.RestartCore => await RestartCoreAsync(request, cancellationToken),
@@ -44,6 +45,43 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         catch (Exception exception)
         {
             return Failure(request, exception.Message);
+        }
+    }
+
+    private async Task<ServiceResponse> GetStatusAsync(ServiceRequest request, CancellationToken cancellationToken)
+    {
+        if (_processManager.State != CoreState.Running || _api is null || _activeCore is null)
+        {
+            _tunState = TunState.Off;
+            return Success(request);
+        }
+
+        using var timeout = CreateTimeout(StatusQueryTimeout, cancellationToken);
+        try
+        {
+            var value = await ReadTunStateAsync(_api, timeout.Token);
+            if (value is not bool enabled)
+            {
+                _tunState = TunState.Unknown;
+                return Failure(request, "无法从 Mihomo 控制器确认 TUN 状态。", CoreState.Running);
+            }
+
+            _tunState = enabled ? TunState.On : TunState.Off;
+            return Success(request);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _tunState = TunState.Unknown;
+            return Failure(request, "查询 Mihomo TUN 状态超时，状态暂时无法确认。", CoreState.Running);
+        }
+        catch (Exception exception)
+        {
+            _tunState = TunState.Unknown;
+            return Failure(request, $"查询 Mihomo TUN 状态失败，状态暂时无法确认：{DescribeControllerError(exception)}", CoreState.Running);
         }
     }
 
@@ -113,8 +151,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         await _processManager.StartAsync(payload.ExecutablePath, payload.ConfigurationPath, payload.WorkingDirectory, cancellationToken);
         _activeCore = payload;
         _api = CreateApi(payload.ControllerPort, payload.ControllerSecret);
-        _tunState = TunState.Off;
-        return Success(request);
+        _tunState = TunState.Unknown;
+        return await RefreshTunStateAfterStartAsync(request, cancellationToken);
     }
 
     private async Task<ServiceResponse> StopCoreAsync(ServiceRequest request, CancellationToken cancellationToken)
@@ -166,8 +204,29 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             return Failure(request, "TUN 请求与当前 Mihomo 核心不匹配。", _processManager.State);
         }
 
-        var previous = await ReadTunStateAsync(api, cancellationToken) ?? _tunState == TunState.On;
-        if (previous == enabled)
+        bool? previous;
+        try
+        {
+            previous = await ReadTunStateAsync(api, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _tunState = TunState.Unknown;
+            return Failure(request, $"无法确认当前 TUN 状态，未执行变更：{DescribeControllerError(exception)}", _processManager.State);
+        }
+
+        if (previous is null)
+        {
+            _tunState = TunState.Unknown;
+            return Failure(request, "无法确认当前 TUN 状态，未执行变更。", _processManager.State);
+        }
+
+        var previousValue = previous.Value;
+        if (previousValue == enabled)
         {
             _tunState = enabled ? TunState.On : TunState.Off;
             return Success(request);
@@ -186,24 +245,72 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            var restored = await TryRestoreTunStateAsync(api, previous);
+            var restored = await TryRestoreTunStateAsync(api, previousValue);
             _tunState = restored
-                ? previous ? TunState.On : TunState.Off
-                : TunState.Failed;
+                ? previousValue ? TunState.On : TunState.Off
+                : TunState.Unknown;
             throw;
         }
         catch (Exception exception)
         {
-            var restored = await TryRestoreTunStateAsync(api, previous);
+            var restored = await TryRestoreTunStateAsync(api, previousValue);
             _tunState = restored
-                ? previous ? TunState.On : TunState.Off
-                : TunState.Failed;
+                ? previousValue ? TunState.On : TunState.Off
+                : TunState.Unknown;
             var message = restored
                 ? $"TUN 操作失败，已恢复原状态：{exception.Message}"
-                : $"TUN 操作失败，且无法确认原状态：{exception.Message}";
+                : $"TUN 操作失败，且无法确认原状态：{DescribeControllerError(exception)}";
             return Failure(request, message, _processManager.State);
         }
     }
+
+    private async Task<ServiceResponse> RefreshTunStateAfterStartAsync(
+        ServiceRequest request,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CreateTimeout(StatusQueryTimeout, cancellationToken);
+        try
+        {
+            var value = await ReadTunStateAsync(_api!, timeout.Token);
+            if (value is bool enabled)
+            {
+                _tunState = enabled ? TunState.On : TunState.Off;
+                return Success(request);
+            }
+
+            _tunState = TunState.Unknown;
+            return Success(request, "Mihomo 已启动，但 TUN 状态暂时无法确认。");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _tunState = TunState.Unknown;
+            return Success(request, "Mihomo 已启动，但 TUN 状态查询超时，暂时无法确认。");
+        }
+        catch (Exception exception)
+        {
+            _tunState = TunState.Unknown;
+            return Success(request, $"Mihomo 已启动，但 TUN 状态暂时无法确认：{DescribeControllerError(exception)}");
+        }
+    }
+
+    private static CancellationTokenSource CreateTimeout(TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        source.CancelAfter(timeout);
+        return source;
+    }
+
+    private static string DescribeControllerError(Exception exception) => exception switch
+    {
+        HttpRequestException { StatusCode: { } statusCode } => $"HTTP {(int)statusCode}",
+        MihomoStreamException streamException => $"{streamException.Path} {streamException.Kind}",
+        TimeoutException => "超时",
+        _ => exception.GetType().Name
+    };
 
     private static async Task<bool?> ReadTunStateAsync(MihomoApiClient api, CancellationToken cancellationToken)
     {
@@ -342,8 +449,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
             StringComparison.OrdinalIgnoreCase);
 
-    private ServiceResponse Success(ServiceRequest request) =>
-        new(request.RequestId, true, _tunState, Core: CoreState);
+    private ServiceResponse Success(ServiceRequest request, string? error = null) =>
+        new(request.RequestId, true, _tunState, Error: error, Core: CoreState);
 
     private ServiceResponse Failure(ServiceRequest request, string error, CoreState? core = null) =>
         new(request.RequestId, false, _tunState, Error: error, Core: core ?? CoreState);

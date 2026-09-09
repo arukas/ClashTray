@@ -9,6 +9,102 @@ public sealed class ConfigurationStoreTests
     private static readonly int[] ExpectedNewestItems = [2, 3];
 
     [TestMethod]
+    [DataRow(1)]
+    [DataRow(2)]
+    public async Task SubscriptionImportAndRefreshSendBundledMihomoUserAgent(int downloads)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        using var handler = new SubscriptionHandler();
+        try
+        {
+            var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            var store = new ConfigurationStore(paths, handler);
+            var uri = new Uri("https://subscription.invalid/config");
+            for (var index = 0; index < downloads; index++)
+            {
+                // Manual and scheduled refresh use the same import path with the saved URI/name.
+                var update = await store.ImportSubscriptionWithResultAsync(uri, "Test subscription");
+                Assert.AreEqual(index == 0, update.ContentChanged);
+                Assert.AreEqual(uri, update.Profile.SubscriptionUri);
+                Assert.AreEqual(64, update.Sha256.Length);
+                Assert.AreEqual("mixed-port: 7890\n", await File.ReadAllTextAsync(update.Profile.Path));
+            }
+
+            Assert.AreEqual("v1.19.30", BundledMihomo.Version);
+            Assert.AreEqual(downloads, handler.UserAgents.Count);
+            Assert.IsTrue(handler.UserAgents.All(ua => ua == "clash.meta/v1.19.30"));
+            Assert.AreEqual(1, (await store.ListAsync()).Count);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SubscriptionImportDetectsChangedContentBySha256()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        using var handler = new SubscriptionHandler();
+        try
+        {
+            var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            var store = new ConfigurationStore(paths, handler);
+            var uri = new Uri("https://subscription.invalid/config");
+
+            var first = await store.ImportSubscriptionWithResultAsync(uri);
+            handler.ResponseBody = "mixed-port: 7891\n";
+            var second = await store.ImportSubscriptionWithResultAsync(uri);
+
+            Assert.IsTrue(first.ContentChanged);
+            Assert.IsTrue(second.ContentChanged);
+            Assert.AreNotEqual(first.Sha256, second.Sha256);
+            Assert.AreEqual("mixed-port: 7891\n", await File.ReadAllTextAsync(second.Profile.Path));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task SubscriptionUserAgentDoesNotBypassConfigurationValidation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        using var handler = new SubscriptionHandler { ResponseBody = "<html>Login required</html>" };
+        try
+        {
+            var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            var store = new ConfigurationStore(paths, handler);
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+                store.ImportSubscriptionAsync(new Uri("https://subscription.invalid/config")));
+            Assert.AreEqual("clash.meta/v1.19.30", handler.UserAgents.Single());
+            Assert.AreEqual(0, (await store.ListAsync()).Count);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class SubscriptionHandler : HttpMessageHandler
+    {
+        public List<string> UserAgents { get; } = [];
+        public string ResponseBody { get; set; } = "mixed-port: 7890\n";
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var userAgent = request.Headers.UserAgent.ToString();
+            UserAgents.Add(userAgent);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(userAgent == "clash.meta/v1.19.30" ? ResponseBody : "unsupported client"),
+            });
+        }
+    }
+
+    [TestMethod]
     public void ValidateYamlAcceptsMihomoConfiguration()
     {
         ConfigurationStore.ValidateYaml("mixed-port: 7890\nmode: rule\n"u8);

@@ -25,6 +25,7 @@ public enum SystemProxyState
 public enum TunState
 {
     Unavailable,
+    Unknown,
     Off,
     Enabling,
     On,
@@ -69,7 +70,9 @@ public sealed record CoreStatus(
     long DownloadBytes,
     int ConnectionCount,
     long MemoryBytes,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    bool TrafficAvailable = false,
+    bool MemoryAvailable = false);
 
 public sealed record ConfigurationProfile(
     string Id,
@@ -157,7 +160,9 @@ public sealed record AppSettings(
     string LogLevel = "info",
     string BypassList = "localhost;127.*;192.168.*;10.*;172.16.*;<local>",
     int SubscriptionRefreshHours = 24,
-    string Theme = "system");
+    string Theme = "system",
+    bool SystemProxyEnabled = false,
+    bool TunEnabled = false);
 
 public enum ServiceCommand
 {

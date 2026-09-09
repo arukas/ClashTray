@@ -119,6 +119,12 @@ public static class MihomoDataParser
         return enable.ValueKind is JsonValueKind.True or JsonValueKind.False ? enable.GetBoolean() : null;
     }
 
+    public static bool? ParseAllowLan(JsonDocument document) =>
+        GetBoolean(document.RootElement, "allow-lan", "allowLan");
+
+    public static bool? ParseIpv6(JsonDocument document) =>
+        GetBoolean(document.RootElement, "ipv6");
+
     public static IReadOnlyList<ConnectionInfo> ParseConnections(JsonDocument document)
     {
         if (!document.RootElement.TryGetProperty("connections", out var connections)
@@ -260,6 +266,25 @@ public static class MihomoDataParser
         }
 
         return value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
+    }
+
+    private static bool? GetBoolean(JsonElement element, params string[] properties)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        foreach (var property in properties)
+        {
+            if (element.TryGetProperty(property, out var value)
+                && value.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            {
+                return value.GetBoolean();
+            }
+        }
+
+        return null;
     }
 
     private static string? GetText(JsonElement element) =>
