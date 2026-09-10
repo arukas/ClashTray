@@ -53,8 +53,9 @@ jobs:
           if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw "Release version must look like 1.2.3 or 1.2.3-alpha.1; received '$version'." }
           $outputRoot = Join-Path $env:GITHUB_WORKSPACE 'release-output'
           New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
+          $packageVersion = ($version -split '-', 2)[0]
           foreach ($variant in @('Full', 'NoCore', 'Framework')) {
-            & .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion $version -Variant $variant -OutputDirectory (Join-Path $outputRoot $variant)
+            & .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion $packageVersion -Variant $variant -OutputDirectory (Join-Path $outputRoot $variant)
             if ($LASTEXITCODE -ne 0) { throw "Build-EXE.ps1 failed for $variant." }
           }
           $files = Get-ChildItem -LiteralPath $outputRoot -Recurse -File -Include '*.exe', '*.sha256'
