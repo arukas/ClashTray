@@ -192,6 +192,9 @@ public sealed class MihomoApiClient
     public Task<JsonDocument> TestDelayAsync(string proxy, Uri url, int timeoutMilliseconds, CancellationToken cancellationToken = default) =>
         GetAsync($"/proxies/{Uri.EscapeDataString(proxy)}/delay?url={Uri.EscapeDataString(url.ToString())}&timeout={timeoutMilliseconds}", cancellationToken);
 
+    public Task<JsonDocument> TestGroupDelayAsync(string group, Uri url, int timeoutMilliseconds, CancellationToken cancellationToken = default) =>
+        GetAsync($"/group/{Uri.EscapeDataString(group)}/delay?url={Uri.EscapeDataString(url.ToString())}&timeout={timeoutMilliseconds}", cancellationToken);
+
     public Task<JsonDocument> SetModeAsync(ProxyMode mode, CancellationToken cancellationToken = default) =>
         PatchAsync("/configs", new { mode = mode.ToString().ToLowerInvariant() }, cancellationToken);
 

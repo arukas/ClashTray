@@ -593,6 +593,39 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         return null;
     }
 
+    public async Task<IReadOnlyDictionary<string, int?>> TestProxyGroupDelayAsync(
+        string group, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(group);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _runtimeCts.Token);
+        var token = linked.Token;
+        await _operationLock.WaitAsync(token);
+        try
+        {
+            var api = _api ?? throw new InvalidOperationException("Mihomo 核心尚未运行。");
+            using var response = await api.TestGroupDelayAsync(group, new Uri("https://www.gstatic.com/generate_204"), 5000, token);
+            var delays = MihomoDataParser.ParseGroupDelays(response);
+            await _dataRefreshLock.WaitAsync(token);
+            try
+            {
+                // Refresh now/history from the core and apply the confirmed batch result atomically.
+                var proxies = await TryGetProxyDataAsync(api, token);
+                if (!ReferenceEquals(_api, api)) throw new InvalidOperationException("测速期间核心已切换，请重新测速。");
+                string? LatestDelay(string name, string? previous) => delays.TryGetValue(name, out var delay)
+                    ? delay?.ToString(System.Globalization.CultureInfo.InvariantCulture) : previous;
+                _snapshot = _snapshot with
+                {
+                    ProxyGroups = proxies.Groups.Select(item => item with { Delay = LatestDelay(item.Name, item.Delay) }).ToArray(),
+                    ProxyNodes = proxies.Nodes.Select(item => item with { Delay = LatestDelay(item.Name, item.Delay) }).ToArray()
+                };
+                Publish();
+            }
+            finally { _dataRefreshLock.Release(); }
+            return delays;
+        }
+        finally { _operationLock.Release(); }
+    }
+
     public async Task CloseConnectionAsync(string id, CancellationToken cancellationToken = default)
     {
         if (_api is null)

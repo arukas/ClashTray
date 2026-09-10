@@ -93,7 +93,8 @@ public sealed record ProxyGroup(
     string Name,
     string Type,
     string? Current,
-    IReadOnlyList<string> Members);
+    IReadOnlyList<string> Members,
+    string? Delay = null);
 
 public sealed record TrafficSnapshot(
     long UploadBytes,

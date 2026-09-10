@@ -86,6 +86,7 @@ public sealed partial class MainWindow
             }
         }
         await VerifyNodeScrollingAsync(directory, sample);
+        await VerifyProxyDelayDisplayAsync(directory, sample);
         NativeMethods.GetWindowRect(_windowHandle, out var actual);
         var anchor = GetTrayRect();
         var monitor = NativeMethods.MonitorFromRect(ref anchor, NativeMethods.MONITOR_DEFAULTTONEAREST);
@@ -206,6 +207,61 @@ public sealed partial class MainWindow
         DashboardScrollViewer.ChangeView(null, 0, null, true);
     }
 
+    private async Task VerifyProxyDelayDisplayAsync(string directory, RuntimeSnapshot sample)
+    {
+        var proxyPage = _proxyPage!;
+        var state = sample with
+        {
+            ProxyGroups = [new("自动选择", "URLTest", "A", ["A", "B", "C"]),
+                new("故障转移", "Fallback", "B", ["A", "B", "C"])],
+            ProxyNodes = [new("A", "Direct", "42", false, []), new("B", "Direct", "0", false, []),
+                new("C", "Direct", null, false, [])]
+        };
+        UpdateSnapshot(state);
+        var groups = (StackPanel)proxyPage.FindName("GroupsPanel");
+        for (var index = 0; index < 2; index++)
+        {
+            var button = (Button)((Grid)((StackPanel)((Border)groups.Children[index]).Child).Children[0]).Children[0];
+            ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
+        }
+        await Task.Delay(150);
+        RootGrid.UpdateLayout();
+        void AssertCurrent(ListView list, string name)
+        {
+            var items = list.Items.OfType<ListViewItem>().ToArray();
+            if ((list.SelectedItem as ListViewItem)?.Tag?.ToString() != name)
+                throw new InvalidOperationException("Automatic group selected row does not match core now.");
+            foreach (var item in items)
+            {
+                var current = item.Tag?.ToString() == name;
+                if (VisualDescendants<TextBlock>(item).Any(text => text.Text == "当前") != current)
+                    throw new InvalidOperationException("Current badge is missing or stale.");
+                var mark = ((Grid)item.Content).Children.OfType<FontIcon>().Single();
+                if ((mark.Opacity == 1) != current)
+                    throw new InvalidOperationException("Current checkmark is missing or stale.");
+            }
+        }
+        var lists = VisualDescendants<ListView>(proxyPage).Where(list => list.Items.Count > 0).ToArray();
+        if (lists.Length != 2) throw new InvalidOperationException("Automatic groups did not expand.");
+        AssertCurrent(lists[0], "A");
+        AssertCurrent(lists[1], "B");
+        foreach (var expected in new[] { "42 ms", "超时", "未测速" })
+            if (!VisualDescendants<TextBlock>(lists[0]).Any(text => text.Text == expected))
+                throw new InvalidOperationException($"Latency state missing: {expected}");
+        state = state with { ProxyGroups = state.ProxyGroups.Select(group => group with { Current = "C" }).ToArray() };
+        proxyPage.UpdateSnapshot(state);
+        await Task.Delay(150);
+        RootGrid.UpdateLayout();
+        foreach (var list in VisualDescendants<ListView>(proxyPage).Where(list => list.Items.Count > 0)) AssertCurrent(list, "C");
+        DashboardScrollViewer.ChangeView(null, 190, null, true);
+        await SaveDiagnosticFrameAsync(directory, "proxy-delay-states");
+        await File.WriteAllTextAsync(Path.Combine(directory, "proxy-delay-checks.json"), JsonSerializer.Serialize(new
+        {
+            UrlTestCurrentMarked = true, FallbackCurrentMarked = true, AutomaticSwitchMovesMarker = true,
+            MillisecondsTimeoutAndUntestedDistinct = true
+        }, DiagnosticJsonOptions));
+        DashboardScrollViewer.ChangeView(null, 0, null, true);
+    }
     private async Task VerifyThemeUnlockAsync(string directory)
     {
         if (NakhimovThemeOption.Visibility != Visibility.Collapsed)

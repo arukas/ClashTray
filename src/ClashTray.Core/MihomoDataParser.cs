@@ -44,23 +44,46 @@ public static class MihomoDataParser
         foreach (var property in proxies.EnumerateObject().Take(MaxProxyEntries))
         {
             var value = property.Value;
+            if (value.ValueKind != JsonValueKind.Object) continue;
+            var delay = ReadLatestDelay(value);
             var type = GetString(value, "type") ?? "Unknown";
             var current = GetString(value, "now");
             var members = GetStringArray(value, "all");
             var isGroup = members.Length > 0 || type is "Selector" or "URLTest" or "Fallback" or "LoadBalance";
             if (isGroup)
             {
-                groups.Add(new ProxyGroup(property.Name, type, current, members));
+                groups.Add(new ProxyGroup(property.Name, type, current, members, delay));
             }
             else
             {
-                nodes.Add(new ProxyNode(property.Name, type, null, false, []));
+                nodes.Add(new ProxyNode(property.Name, type, delay, false, []));
             }
         }
 
         var currentNames = groups.Select(group => group.Current).Where(name => name is not null).ToHashSet(StringComparer.OrdinalIgnoreCase);
         nodes = nodes.Select(node => node with { IsCurrent = currentNames.Contains(node.Name) }).ToList();
         return (groups, nodes);
+    }
+
+    private static string? ReadLatestDelay(JsonElement proxy)
+    {
+        if (!proxy.TryGetProperty("history", out var history) || history.ValueKind != JsonValueKind.Array
+            || history.GetArrayLength() == 0) return null;
+        var latest = history[history.GetArrayLength() - 1];
+        return latest.ValueKind == JsonValueKind.Object && latest.TryGetProperty("delay", out var delay)
+            && delay.ValueKind == JsonValueKind.Number && delay.TryGetInt32(out var milliseconds) && milliseconds >= 0
+                ? milliseconds.ToString(CultureInfo.InvariantCulture) : null;
+    }
+
+    public static IReadOnlyDictionary<string, int?> ParseGroupDelays(JsonDocument document)
+    {
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            throw new JsonException("Mihomo 组测速结果格式无效。");
+        var delays = new Dictionary<string, int?>(StringComparer.Ordinal);
+        foreach (var property in document.RootElement.EnumerateObject().Take(MaxProxyEntries))
+            delays[property.Name] = property.Value.ValueKind == JsonValueKind.Number
+                && property.Value.TryGetInt32(out var value) && value >= 0 ? value : null;
+        return delays;
     }
 
     public static TrafficSnapshot ParseTraffic(JsonDocument document)

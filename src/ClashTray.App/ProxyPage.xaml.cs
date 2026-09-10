@@ -9,6 +9,7 @@ public sealed partial class ProxyPage : UserControl
 {
     private readonly ClashTrayRuntime _runtime;
     private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _testingGroups = new(StringComparer.Ordinal);
     private readonly DispatcherTimer _searchTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private RuntimeSnapshot? _snapshot;
     private string? _signature;
@@ -45,6 +46,7 @@ public sealed partial class ProxyPage : UserControl
         var searching = query.Length > 0;
         var delays = snapshot.ProxyNodes.GroupBy(node => node.Name, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First().Delay, StringComparer.Ordinal);
+        foreach (var proxyGroup in snapshot.ProxyGroups) delays[proxyGroup.Name] = proxyGroup.Delay;
         EmptyState.Visibility = snapshot.ProxyGroups.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         NodeSearchBox.Visibility = snapshot.ProxyGroups.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
 
@@ -85,22 +87,27 @@ public sealed partial class ProxyPage : UserControl
             {
                 Content = new FontIcon { Glyph = "\uE9D9", FontSize = 14 },
                 Style = (Style)Application.Current.Resources["ClashTrayIconButtonStyle"],
-                IsEnabled = group.Current is not null
+                IsEnabled = snapshot.Core.State == CoreState.Running && group.Members.Count > 0 && !_testingGroups.Contains(group.Name)
             };
-            ToolTipService.SetToolTip(test, "测试当前节点延迟");
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(test, $"测试 {group.Name} 当前节点延迟");
+            ToolTipService.SetToolTip(test, "测试整组节点延迟");
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(test, $"测试 {group.Name} 整组节点延迟");
             test.Click += async (_, _) =>
             {
-                if (group.Current is null) return;
+                if (!_testingGroups.Add(group.Name)) return;
                 test.IsEnabled = false;
+                DelayText.Text = $"{group.Name} · 正在测试整组节点…";
                 try
                 {
-                    var delay = await _runtime.TestProxyDelayAsync(group.Current);
-                    delayLabel.Text = delay is null ? "超时" : $"{delay} ms";
-                    DelayText.Text = $"{group.Current} · {delayLabel.Text}";
+                    var results = await _runtime.TestProxyGroupDelayAsync(group.Name);
+                    var available = results.Count(result => result.Value > 0);
+                    DelayText.Text = $"{group.Name} · 测速完成，{available} 个可用，{results.Count - available} 个未连通";
                 }
-                catch (Exception exception) { DelayText.Text = exception.Message; }
-                finally { test.IsEnabled = true; }
+                catch (Exception exception) { DelayText.Text = $"{group.Name} · 测速失败：{exception.Message}"; }
+                finally
+                {
+                    _testingGroups.Remove(group.Name);
+                    if (_snapshot is not null) RenderGroups(_snapshot);
+                }
             };
 
             var body = new StackPanel { Spacing = 4, Margin = new Thickness(4, 0, 4, 4) };
@@ -147,8 +154,22 @@ public sealed partial class ProxyPage : UserControl
                         VerticalAlignment = VerticalAlignment.Center,
                         FontWeight = selected ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal
                     };
-                    Grid.SetColumn(label, 1);
-                    content.Children.Add(label);
+                    var nameRow = new Grid { ColumnSpacing = 6 };
+                    nameRow.ColumnDefinitions.Add(new ColumnDefinition());
+                    nameRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                    nameRow.Children.Add(label);
+                    if (selected)
+                    {
+                        var currentLabel = new TextBlock
+                        {
+                            Text = "当前", FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
+                            Style = (Style)Application.Current.Resources["ClashTrayAccentTextStyle"]
+                        };
+                        Grid.SetColumn(currentLabel, 1);
+                        nameRow.Children.Add(currentLabel);
+                    }
+                    Grid.SetColumn(nameRow, 1);
+                    content.Children.Add(nameRow);
                     delays.TryGetValue(member, out var delay);
                     var detail = new TextBlock
                     {
@@ -257,7 +278,7 @@ public sealed partial class ProxyPage : UserControl
 
     private static string FormatDelay(string? delay) =>
         string.IsNullOrWhiteSpace(delay) || delay == "—" ? "未测速" :
-        int.TryParse(delay, out var value) ? $"{value} ms" : delay;
+        int.TryParse(delay, out var value) ? value > 0 ? $"{value} ms" : "超时" : delay;
 
     private Style SecondaryTextStyle => (Style)Resources["ProxySecondaryText"];
 
