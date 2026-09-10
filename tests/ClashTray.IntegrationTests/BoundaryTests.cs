@@ -16,13 +16,15 @@ public sealed class BoundaryTests
     }
 
     [TestMethod]
-    public async Task TunCommandCannotTargetControllerWithoutRunningCore()
+    [DataRow("test-secret")]
+    [DataRow("")]
+    public async Task TunCommandCannotTargetControllerWithoutRunningCore(string secret)
     {
         await using var controller = new ServiceRuntimeController();
         var request = new ServiceRequest(
             Guid.NewGuid(),
             ServiceCommand.EnableTun,
-            JsonSerializer.Serialize(new ServiceTunPayload(9090, "test-secret", true)));
+            JsonSerializer.Serialize(new ServiceTunPayload(9090, secret, true)));
 
         var response = await controller.HandleAsync(request, CancellationToken.None);
 

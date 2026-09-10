@@ -159,17 +159,19 @@ public sealed class MihomoApiCompatibilityTests
     }
 
     [TestMethod]
-    public async Task FakeIpCacheFlushUsesPostAndBearerAuthentication()
+    [DataRow("test-secret", "Bearer test-secret")]
+    [DataRow("", null)]
+    public async Task FakeIpCacheFlushUsesPostAndOptionalAuthentication(string secret, string? expectedAuthorization)
     {
         var handler = new RecordingHandler();
         using var httpClient = new HttpClient(handler);
-        var api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), "test-secret");
+        var api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), secret);
 
         using var response = await api.ClearFakeIpCacheAsync();
 
         Assert.AreEqual(HttpMethod.Post, handler.Method);
         Assert.AreEqual("/cache/fakeip/flush", handler.PathAndQuery);
-        Assert.AreEqual("Bearer test-secret", handler.Authorization);
+        Assert.AreEqual(expectedAuthorization, handler.Authorization);
     }
 
     [TestMethod]

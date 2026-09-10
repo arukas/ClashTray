@@ -19,8 +19,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly SettingsStore _settingsStore;
     private readonly CoreDiscovery _coreDiscovery;
     private readonly SystemProxyManager _systemProxy;
-    private readonly ControllerSecretStore _secretStore;
-    private readonly RuntimeConfigBuilder _runtimeConfigBuilder;
     private readonly ServicePipeClient _servicePipeClient = new();
     private readonly CoreUpdater _coreUpdater;
     private readonly SubscriptionScheduler _subscriptionScheduler;
@@ -58,8 +56,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _settingsStore = new SettingsStore(_paths);
         _coreDiscovery = new CoreDiscovery(_paths);
         _systemProxy = new SystemProxyManager(_paths);
-        _secretStore = new ControllerSecretStore(_paths);
-        _runtimeConfigBuilder = new RuntimeConfigBuilder(_secretStore);
         _coreUpdater = new CoreUpdater(_paths);
         _subscriptionScheduler = new SubscriptionScheduler(
             cancellation => _configurationStore.ListAsync(cancellation),
@@ -179,7 +175,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             UpdateCoreState(CoreState.Validating, null);
             var runtimeConfigPath = Path.Combine(_paths.RuntimeRoot, "mihomo", "active-config.yaml");
-            await _runtimeConfigBuilder.BuildAsync(profile.Path, runtimeConfigPath, _settings, cancellationToken);
+            await RuntimeConfigBuilder.BuildAsync(profile.Path, runtimeConfigPath, _settings, cancellationToken);
 
             var runtimeDirectory = Path.Combine(_paths.RuntimeRoot, "mihomo");
             var servicePayload = JsonSerializer.Serialize(new ServiceCorePayload(
@@ -187,7 +183,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 runtimeConfigPath,
                 runtimeDirectory,
                 _settings.ControllerPort,
-                _secretStore.GetOrCreate()));
+                string.Empty));
             UpdateCoreState(CoreState.Starting, null);
             ServiceResponse? serviceResponse = null;
             try
@@ -772,7 +768,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             Publish();
             var payload = JsonSerializer.Serialize(new ServiceTunPayload(
                 _settings.ControllerPort,
-                _secretStore.GetOrCreate(),
+                string.Empty,
                 enabled));
             var response = await _servicePipeClient.SendAsync(
                 enabled ? ServiceCommand.EnableTun : ServiceCommand.DisableTun,
@@ -1277,7 +1273,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private MihomoApiClient CreateApiClient()
     {
         var controllerUri = new Uri($"http://127.0.0.1:{_settings.ControllerPort}/");
-        return new MihomoApiClient(_httpClient, controllerUri, _secretStore.GetOrCreate());
+        return new MihomoApiClient(_httpClient, controllerUri, string.Empty);
     }
 
     private async Task ApplyProgramOverridesAsync(

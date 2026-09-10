@@ -179,7 +179,7 @@ Use three trust boundaries:
 Security requirements:
 
 - Bind the Mihomo External Controller to `127.0.0.1`, never `0.0.0.0` by default.
-- Generate a strong per-install controller secret. Never commit secrets or subscription URLs.
+- Configure the local controller with an explicitly empty secret, as requested by the user. Do not generate or restore a random controller secret. Keep the controller bound to 127.0.0.1. Never commit subscription URLs or other credentials.
 - Restrict the service named pipe with explicit ACLs.
 - Never allow arbitrary executable paths, arbitrary shell commands, or unrestricted file writes through IPC.
 - Store per-user secrets using Windows-supported protected storage such as DPAPI/Credential Locker.

@@ -186,7 +186,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private async Task<ServiceResponse> SetTunAsync(ServiceRequest request, bool enabled, CancellationToken cancellationToken)
     {
         var payload = Deserialize<ServiceTunPayload>(request.Payload);
-        if (payload.ControllerPort is < 1 or > 65535 || string.IsNullOrWhiteSpace(payload.ControllerSecret))
+        if (payload.ControllerPort is < 1 or > 65535 || payload.ControllerSecret is null)
         {
             return Failure(request, "TUN 请求参数无效。", _processManager.State);
         }
@@ -358,7 +358,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             || !IsAllowedRuntimePath(payload.ConfigurationPath, allowYaml: true)
             || !IsAllowedRuntimePath(payload.WorkingDirectory, allowYaml: false)
             || payload.ControllerPort is < 1 or > 65535
-            || string.IsNullOrWhiteSpace(payload.ControllerSecret))
+            || payload.ControllerSecret is null)
         {
             throw new InvalidOperationException("服务拒绝了不受信任的核心路径或参数。");
         }

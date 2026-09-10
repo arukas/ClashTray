@@ -59,7 +59,7 @@ public sealed class MihomoApiClient
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(controllerUri);
-        ArgumentException.ThrowIfNullOrWhiteSpace(secret);
+        ArgumentNullException.ThrowIfNull(secret);
         if (streamingFirstRecordTimeout is not null && streamingFirstRecordTimeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(streamingFirstRecordTimeout));
@@ -210,7 +210,10 @@ public sealed class MihomoApiClient
     public ClientWebSocket CreateWebSocket()
     {
         var socket = new ClientWebSocket();
-        socket.Options.SetRequestHeader("Authorization", $"Bearer {_secret}");
+        if (_secret.Length > 0)
+        {
+            socket.Options.SetRequestHeader("Authorization", $"Bearer {_secret}");
+        }
         return socket;
     }
 
@@ -242,7 +245,10 @@ public sealed class MihomoApiClient
     private HttpRequestMessage CreateRequest(HttpMethod method, string path)
     {
         var request = new HttpRequestMessage(method, new Uri(_controllerUri, path));
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _secret);
+        if (_secret.Length > 0)
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _secret);
+        }
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return request;
     }

@@ -119,22 +119,23 @@ public sealed class RuntimeStateTests
         paths.EnsureDirectories();
         var source = Path.Combine(paths.ConfigurationsRoot, "source.yaml");
         var destination = Path.Combine(paths.RuntimeRoot, "mihomo", "active.yaml");
-        await File.WriteAllTextAsync(source, "external-controller: 0.0.0.0:9999\nsecret: old\nmixed-port: 1111\nallow-lan: true\nipv6: false\nproxies: []\n");
+        await File.WriteAllTextAsync(source, "external-controller: 0.0.0.0:9999\nsecret: old\nmixed-port: 1111\nallow-lan: true\nipv6: true\nproxies: []\n");
 
         try
         {
-            var builder = new RuntimeConfigBuilder(new ControllerSecretStore(paths));
-            await builder.BuildAsync(source, destination, new AppSettings(ControllerPort: 9191, MixedPort: 8899));
+            await RuntimeConfigBuilder.BuildAsync(source, destination, new AppSettings(ControllerPort: 9191, MixedPort: 8899));
             var generated = await File.ReadAllTextAsync(destination);
 
             StringAssert.Contains(generated, "external-controller: 127.0.0.1:9191");
             StringAssert.Contains(generated, "mixed-port: 8899");
             StringAssert.Contains(generated, "allow-lan: false");
-            StringAssert.Contains(generated, "ipv6: true");
+            StringAssert.Contains(generated, "ipv6: false");
             Assert.IsFalse(generated.Contains("0.0.0.0:9999", StringComparison.Ordinal));
             Assert.IsFalse(generated.Contains("secret: old", StringComparison.Ordinal));
+            StringAssert.Contains(generated, "secret: ''");
+            Assert.IsFalse(File.Exists(Path.Combine(paths.LocalRoot, "controller-secret.bin")));
             Assert.IsFalse(generated.Contains("allow-lan: true", StringComparison.Ordinal));
-            Assert.IsFalse(generated.Contains("ipv6: false", StringComparison.Ordinal));
+            Assert.IsFalse(generated.Contains("ipv6: true", StringComparison.Ordinal));
             Assert.AreEqual(
                 0,
                 Directory.EnumerateFiles(Path.GetDirectoryName(destination)!, "*.tmp").Count());
@@ -146,7 +147,7 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
-    public async Task RuntimeConfigBuilderMakesUnitedStatesGroupIncludeAllMatchingProxies()
+    public async Task RuntimeConfigBuilderPreservesInlineProxyGroupWithoutAddingFilters()
     {
         var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
         var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
@@ -166,16 +167,14 @@ public sealed class RuntimeStateTests
 
         try
         {
-            var builder = new RuntimeConfigBuilder(new ControllerSecretStore(paths));
-            await builder.BuildAsync(source, destination, new AppSettings(ControllerPort: 9191));
+            await RuntimeConfigBuilder.BuildAsync(source, destination, new AppSettings(ControllerPort: 9191));
             var generated = await File.ReadAllTextAsync(destination);
 
-            StringAssert.Contains(generated, "name: 美国常用");
-            StringAssert.Contains(generated, "include-all: true");
-            StringAssert.Contains(
-                generated,
-                "filter: '(?i)(?:^|[^A-Za-z])(?:US|USA)(?:[^A-Za-z]|$)|美国|United[ _-]?States'");
-            StringAssert.Contains(generated, "proxies: [自动选择, US-1]");
+            StringAssert.Contains(generated, "- { name: 美国常用, type: select, proxies: [自动选择, US-1] }");
+            Assert.IsFalse(generated.Contains("include-all:", StringComparison.Ordinal));
+            Assert.IsFalse(generated.Contains("filter:", StringComparison.Ordinal));
+            var original = await File.ReadAllTextAsync(source);
+            StringAssert.StartsWith(generated, original.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {
@@ -184,7 +183,7 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
-    public async Task RuntimeConfigBuilderOverridesExistingUnitedStatesGroupFilter()
+    public async Task RuntimeConfigBuilderPreservesExistingProxyGroupFilter()
     {
         var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
         var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
@@ -208,16 +207,14 @@ public sealed class RuntimeStateTests
 
         try
         {
-            var builder = new RuntimeConfigBuilder(new ControllerSecretStore(paths));
-            await builder.BuildAsync(source, destination, new AppSettings(ControllerPort: 9191));
+            await RuntimeConfigBuilder.BuildAsync(source, destination, new AppSettings(ControllerPort: 9191));
             var generated = await File.ReadAllTextAsync(destination);
 
-            StringAssert.Contains(generated, "include-all: true");
-            Assert.IsFalse(generated.Contains("include-all: false", StringComparison.Ordinal));
-            Assert.IsFalse(generated.Contains("filter: old-filter", StringComparison.Ordinal));
-            StringAssert.Contains(
-                generated,
-                "filter: '(?i)(?:^|[^A-Za-z])(?:US|USA)(?:[^A-Za-z]|$)|美国|United[ _-]?States'");
+            StringAssert.Contains(generated, "include-all: false");
+            StringAssert.Contains(generated, "filter: old-filter");
+            Assert.IsFalse(generated.Contains("include-all: true", StringComparison.Ordinal));
+            var original = await File.ReadAllTextAsync(source);
+            StringAssert.StartsWith(generated, original.ReplaceLineEndings(Environment.NewLine));
         }
         finally
         {
@@ -239,8 +236,7 @@ public sealed class RuntimeStateTests
 
         try
         {
-            var builder = new RuntimeConfigBuilder(new ControllerSecretStore(paths));
-            await builder.BuildAsync(source, destination, new AppSettings(HttpPort: 8899, ControllerPort: 9191));
+            await RuntimeConfigBuilder.BuildAsync(source, destination, new AppSettings(HttpPort: 8899, ControllerPort: 9191));
             var generated = await File.ReadAllTextAsync(destination);
 
             StringAssert.Contains(generated, "    port: 443");
@@ -267,8 +263,7 @@ public sealed class RuntimeStateTests
 
         try
         {
-            var builder = new RuntimeConfigBuilder(new ControllerSecretStore(paths));
-            await builder.BuildAsync(
+            await RuntimeConfigBuilder.BuildAsync(
                 source,
                 destination,
                 new AppSettings(ControllerPort: 9191, TunEnabled: false));
@@ -295,8 +290,7 @@ public sealed class RuntimeStateTests
 
         try
         {
-            var builder = new RuntimeConfigBuilder(new ControllerSecretStore(paths));
-            await builder.BuildAsync(
+            await RuntimeConfigBuilder.BuildAsync(
                 source,
                 destination,
                 new AppSettings(ControllerPort: 9191, TunEnabled: false));

@@ -30,8 +30,6 @@ public sealed class AppPaths
 
     public string ProxyOwnershipFile => Path.Combine(LocalRoot, "system-proxy-ownership.json");
 
-    public string ControllerSecretFile => Path.Combine(LocalRoot, "controller-secret.bin");
-
     public void EnsureDirectories()
     {
         Directory.CreateDirectory(LocalRoot);
