@@ -1,11 +1,37 @@
 # Third-party notices
 
-ClashTray controls the separately distributed [Mihomo](https://github.com/MetaCubeX/mihomo) core and does not embed or copy its source. The Full Windows EXE installer bundles the official `mihomo-windows-amd64-v1.19.30.zip` binary without source changes and installs it beside the corresponding `Mihomo-LICENSE.txt` and release metadata under `%PROGRAMDATA%\ClashTray\core`. NoCore and Framework installers intentionally omit the binary; the app can obtain it through the verified updater.
+## Mihomo
 
-The desktop UI uses Microsoft Windows App SDK and WinUI 3 through NuGet. The package's license and notice files remain governed by the corresponding Microsoft package distribution and should be included in the release artifact when required by the selected distribution channel.
+ClashTray can control the separately executed [Mihomo](https://github.com/MetaCubeX/mihomo) core.
 
-ClashTray itself does not add telemetry, analytics, account services, advertisements, or remote dashboard code.
+Mihomo is licensed under the GNU General Public License v3.0.
+
+ClashTray does not incorporate Mihomo source code into the ClashTray application or service. Mihomo runs as a separate executable and ClashTray communicates with it through its External Controller HTTP/WebSocket interface and normal process-management interfaces.
+
+The ClashTray Full and NoCET installers redistribute an official, unmodified Mihomo Windows binary. Each bundled distribution includes:
+
+- the Mihomo GPLv3 license text;
+- the exact Mihomo version;
+- the SHA-256 of the redistributed binary archive;
+- a Corresponding Source link for that exact version;
+- a downloadable source archive where provided by the release process.
+
+The installed `Mihomo-Release.txt` records the binary archive URL, binary checksum, exact Corresponding Source URL, source archive URL, upstream project, architecture, and the independent license boundary. NoCore and Framework installers intentionally omit the binary; the app can obtain it through the verified updater.
+
+Mihomo remains governed by the GNU GPL v3.0. ClashTray remains governed by the MIT License.
+
+## Microsoft Windows App SDK and WinUI 3
+
+The desktop UI uses Microsoft Windows App SDK and WinUI 3 through NuGet. The package's license and notice files remain governed by the corresponding Microsoft package distribution and should be included in release artifacts when required by the selected distribution channel.
 
 ## ClashBar acknowledgment
 
-ClashTray also thanks [Sitoi/ClashBar](https://github.com/Sitoi/clashbar) for demonstrating a compact, menu-bar-first proxy workflow. ClashTray is an independent Windows implementation and does not redistribute ClashBar source code or assets. This acknowledgment does not change ClashTray's MIT license.
+ClashTray acknowledges [Sitoi/ClashBar](https://github.com/Sitoi/clashbar) for demonstrating a compact, menu-bar-first proxy client workflow.
+
+ClashTray is an independently implemented Windows application. ClashBar source code and assets are not included in or distributed as part of ClashTray. ClashTray does not claim ownership of ClashBar source code or assets; ClashBar remains governed by its own upstream license.
+
+This acknowledgment does not alter the MIT license of independently implemented ClashTray code.
+
+## Project policy
+
+ClashTray itself does not add telemetry, analytics, account services, advertisements, or remote dashboard code. See [development-policy.md](development-policy.md) for the source-authorship and integration rules used by the project.

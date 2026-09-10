@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/arukas/ClashTray/actions/workflows/ci.yml/badge.svg)](https://github.com/arukas/ClashTray/actions/workflows/ci.yml) [![Release](https://github.com/arukas/ClashTray/actions/workflows/release.yml/badge.svg)](https://github.com/arukas/ClashTray/actions/workflows/release.yml)
 
-ClashTray 是独立的 Windows 实现，使用 WinUI 3、.NET 10 和官方 Mihomo 核心。产品流程参考了 [Sitoi/ClashBar](https://github.com/Sitoi/clashbar) 对“菜单栏优先”体验的探索；ClashTray 没有复制 ClashBar 的 Swift 源码、名称、图标或视觉资源，Windows 端界面和资源均为本项目独立实现。
+ClashTray 是使用 C#、.NET 10 和 WinUI 3 独立实现的 Windows Mihomo 客户端。产品流程参考了 [Sitoi/ClashBar](https://github.com/Sitoi/clashbar) 对紧凑、托盘优先代理客户端交互的探索；ClashBar 的源代码和资源不属于 ClashTray，也不随 ClashTray 分发。
 
 ## 功能
 
@@ -20,21 +20,22 @@ ClashTray 是独立的 Windows 实现，使用 WinUI 3、.NET 10 和官方 Mihom
 
 ## 体积与发布版本
 
-GitHub Actions 会在 Windows runner 上构建并发布三种 x64 产物。Full 和 NoCore 使用压缩的自包含单文件发布；Framework 使用 framework-dependent 单文件宿主，payload 仍为压缩 ZIP，因此不会把 Mihomo 二进制塞进安装包。
+GitHub Actions 会在 Windows runner 上构建并发布四种 x64 产物。Full、NoCET 和 NoCore 使用压缩的自包含单文件发布；Framework 使用 framework-dependent 单文件宿主，payload 仍为压缩 ZIP，因此不会把 Mihomo 二进制塞进安装包。
 
 | 版本 | 内容 | 适合谁 |
 | --- | --- | --- |
 | `ClashTray-Setup-Full.exe` | 自包含 App + Service + 已验证的 Mihomo 核心 | 下载后直接使用 |
+| `ClashTray-Setup-NoCET.exe` | 自包含 App + Service + 已验证的 Mihomo 核心，关闭 CET 兼容标志 | 补丁较旧、无法启动 .NET 10 的 Windows 10 22H2 |
 | `ClashTray-Setup-NoCore.exe` | 自包含 App + Service，不内置核心 | 已有核心，或希望首次运行后再更新核心 |
 | `ClashTray-Setup-Framework.exe` | Framework-dependent App + Service，不内置核心 | 已安装 .NET 10 和 Windows App SDK，追求最小下载体积 |
 
-Full 使用 `packaging/mihomo-release.json` 中固定的官方版本和校验值。NoCore / Framework 安装时不会删除已有的 `%PROGRAMDATA%\ClashTray\core`；新安装可以在应用内通过经过验证的核心更新流程补齐核心。Framework 版本需要目标机器已具备 .NET 10 Desktop Runtime 和可用的 Windows App SDK runtime，普通用户优先选择 Full。 WinUI 3 是保留桌面 UI 所需的组件，不能从客户端本身删除；Framework 版本只是把 .NET / Windows App SDK runtime 外置，因此体积更小但安装前提更多。
+Full 和 NoCET 使用 `packaging/mihomo-release.json` 中固定的官方版本和校验值。NoCET 只作为旧补丁 Windows 10 的兼容包，关闭 .NET 进程的 CET 兼容标志，会减少一层硬件控制流防护；普通用户优先选择 Full。NoCore / Framework 安装时不会删除已有的 `%PROGRAMDATA%\ClashTray\core`；新安装可以在应用内通过经过验证的核心更新流程补齐核心。Framework 版本需要目标机器已具备 .NET 10 Desktop Runtime 和可用的 Windows App SDK runtime。WinUI 3 是保留桌面 UI 所需的组件，不能从客户端本身删除；Framework 版本只是把 .NET / Windows App SDK runtime 外置，因此体积更小但安装前提更多。
 
 每个 EXE 旁边都会生成同名 `.sha256` 校验文件。发布页还会提供 `SHA256SUMS.txt`，不要从不明镜像下载核心或安装器。
 
 ## 安装与快速上手
 
-系统要求：Windows 11，或受支持的 Windows 10 22H2；x64；Full 版本自带 .NET 运行时。首次安装会请求一次 UAC 权限，用于安装受限的 `ClashTrayService`；日常使用以普通用户权限运行。
+系统要求：Windows 11，或受支持的 Windows 10 22H2；x64；Full 和 NoCET 版本自带 .NET 运行时。补丁较旧的 Windows 10 22H2 可优先尝试 NoCET；正常情况下请使用 Full 并安装所有可用的 Windows 更新。首次安装会请求一次 UAC 权限，用于安装受限的 `ClashTrayService`；日常使用以普通用户权限运行。
 
 1. 从 [Releases](https://github.com/arukas/ClashTray/releases) 下载合适版本并核对 SHA-256。
 2. 运行安装器，完成服务注册后从托盘打开 ClashTray。
@@ -70,6 +71,9 @@ dotnet test ClashTray.sln --configuration Debug --property:Platform=x64 --no-bui
 # 默认 Full：包含经过校验的 Mihomo 核心
 .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant Full
 
+# 旧版 Windows 10 兼容包：自包含、包含核心、关闭 CET
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant NoCET
+
 # 自包含但不带核心
 .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant NoCore
 
@@ -93,7 +97,7 @@ dotnet test ClashTray.sln --configuration Debug --property:Platform=x64 --no-bui
 
 感谢 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 提供核心能力，也感谢 [Sitoi/ClashBar](https://github.com/Sitoi/clashbar) 对轻量菜单栏代理客户端交互方向的启发。
 
-ClashTray 本身采用 [MIT License](LICENSE)。Mihomo 和 Microsoft Windows App SDK / WinUI 3 仍按各自上游许可证和通知文件分发，详见 [docs/third-party-notices.md](docs/third-party-notices.md)。
+ClashTray 本身采用 [MIT License](LICENSE)。Mihomo 是独立运行的第三方核心，采用 GNU GPL v3.0。Full 和 NoCET 安装器包含官方未修改的 Mihomo Windows 二进制；其 GPLv3 许可证、精确版本、二进制校验值以及对应版本的源代码获取信息随发行版提供。ClashTray 与 Mihomo 通过 Mihomo External Controller HTTP/WebSocket 接口和进程管理边界通信。详见 [docs/third-party-notices.md](docs/third-party-notices.md)。
 
 ## 贡献
 

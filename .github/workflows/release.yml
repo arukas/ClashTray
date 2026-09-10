@@ -54,13 +54,24 @@ jobs:
           $outputRoot = Join-Path $env:GITHUB_WORKSPACE 'release-output'
           New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
           $packageVersion = ($version -split '-', 2)[0]
-          foreach ($variant in @('Full', 'NoCore', 'Framework')) {
+          foreach ($variant in @('Full', 'NoCET', 'NoCore', 'Framework')) {
             & .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion $packageVersion -Variant $variant -OutputDirectory (Join-Path $outputRoot $variant)
             if ($LASTEXITCODE -ne 0) { throw "Build-EXE.ps1 failed for $variant." }
           }
+          $mihomoRelease = Get-Content -LiteralPath '.\packaging\mihomo-release.json' -Raw | ConvertFrom-Json
+          if ($mihomoRelease.version -notmatch '^v\d+\.\d+\.\d+$') { throw "Invalid pinned Mihomo version: $($mihomoRelease.version)" }
+          $mihomoVersion = $mihomoRelease.version
+          $mihomoSourceArchiveName = "mihomo-$mihomoVersion-source.tar.gz"
+          $mihomoSourceArchiveUri = "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/$mihomoVersion"
+          $mihomoSourceArchivePath = Join-Path $outputRoot $mihomoSourceArchiveName
+          Invoke-WebRequest -Uri $mihomoSourceArchiveUri -OutFile $mihomoSourceArchivePath
+          if (-not (Test-Path -LiteralPath $mihomoSourceArchivePath -PathType Leaf) -or (Get-Item -LiteralPath $mihomoSourceArchivePath).Length -eq 0) {
+            throw "Mihomo source archive was not downloaded: $mihomoSourceArchiveUri"
+          }
           $files = Get-ChildItem -LiteralPath $outputRoot -Recurse -File -Include '*.exe', '*.sha256'
-          if ($files.Count -lt 6) { throw "Expected three installers and three checksum files, found $($files.Count)." }
-          $checksumLines = foreach ($file in (Get-ChildItem -LiteralPath $outputRoot -Recurse -File -Filter '*.exe' | Sort-Object FullName)) {
+          if ($files.Count -ne 8) { throw "Expected four installers and four checksum files, found $($files.Count)." }
+          $checksumFiles = Get-ChildItem -LiteralPath $outputRoot -Recurse -File | Where-Object { $_.Extension -eq '.exe' -or $_.Name -eq $mihomoSourceArchiveName } | Sort-Object FullName
+          $checksumLines = foreach ($file in $checksumFiles) {
             $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($file.Name)"
           }
@@ -81,8 +92,12 @@ jobs:
           RELEASE_REF: ${{ github.ref_name }}
         run: |
           $tag = if ($env:RELEASE_REF -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { $env:RELEASE_REF } else { "v$env:RELEASE_VERSION" }
-          $assets = Get-ChildItem -LiteralPath 'release-output' -Recurse -File -Include '*.exe', '*.sha256', 'SHA256SUMS.txt' | Select-Object -ExpandProperty FullName
+          $assets = Get-ChildItem -LiteralPath 'release-output' -Recurse -File -Include '*.exe', '*.sha256', '*.tar.gz', 'SHA256SUMS.txt' | Select-Object -ExpandProperty FullName
           $downloadBase = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag"
+          $mihomoRelease = Get-Content -LiteralPath '.\packaging\mihomo-release.json' -Raw | ConvertFrom-Json
+          $mihomoVersion = $mihomoRelease.version
+          $mihomoSourceUri = "https://github.com/MetaCubeX/mihomo/tree/$mihomoVersion"
+          $mihomoSourceArchiveName = "mihomo-$mihomoVersion-source.tar.gz"
           $notesLines = @(
             '## 下载',
             '',
@@ -91,10 +106,19 @@ jobs:
             '| 版本 | 适用场景 | 下载 |',
             '| --- | --- | --- |',
             "| **Full** | 内置 Mihomo，开箱即用（推荐） | [下载 EXE]($downloadBase/ClashTray-Setup-Full.exe) · [SHA-256]($downloadBase/ClashTray-Setup-Full.sha256) |",
+            "| **NoCET** | 为补丁较旧的 Windows 10 22H2 提供的兼容包（关闭 CET，内置 Mihomo） | [下载 EXE]($downloadBase/ClashTray-Setup-NoCET.exe) · [SHA-256]($downloadBase/ClashTray-Setup-NoCET.sha256) |",
             "| **NoCore** | 不带核心，适合已有核心或希望减小体积 | [下载 EXE]($downloadBase/ClashTray-Setup-NoCore.exe) · [SHA-256]($downloadBase/ClashTray-Setup-NoCore.sha256) |",
             "| **Framework** | 不带核心，依赖 .NET 10 Desktop Runtime 和 Windows App SDK | [下载 EXE]($downloadBase/ClashTray-Setup-Framework.exe) · [SHA-256]($downloadBase/ClashTray-Setup-Framework.sha256) |",
             '',
             "[下载完整校验清单]($downloadBase/SHA256SUMS.txt)",
+            '',
+            '## Third-party component',
+            '',
+            'The Full and NoCET installers include an unmodified official Mihomo binary.',
+            "- Mihomo version: $mihomoVersion",
+            '- License: GNU General Public License v3.0',
+            "- Corresponding Source: $mihomoSourceUri",
+            "- Source archive: [$mihomoSourceArchiveName]($downloadBase/$mihomoSourceArchiveName)",
             '',
             '> 安装器适用于 Windows 10/11 x64。'
           )

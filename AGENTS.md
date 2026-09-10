@@ -47,6 +47,7 @@ Build **ClashTray**, a lightweight, Windows-only, tray-first desktop client powe
 The product is functionally inspired by [Sitoi/ClashBar](https://github.com/Sitoi/ClashBar), but it must be an independent Windows-native implementation:
 
 - Do not port or copy ClashBar's Swift source code.
+- Do not translate, rewrite, or mechanically convert ClashBar GPL source files into C#. Study GPL projects only for public behavior, protocol requirements, and user-experience concepts; implement the feature independently and review any proposed source reuse before incorporating it.
 - Do not copy its name, logo, icons, screenshots, or proprietary-looking visual assets.
 - Public behavior and workflows may be used as a functional reference.
 - Use original Windows Fluent styling and original product assets.

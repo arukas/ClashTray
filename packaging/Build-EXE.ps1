@@ -6,7 +6,7 @@ param(
     [ValidatePattern('^\d+\.\d+\.\d+(\.\d+)?$')]
     [string]$PackageVersion = '0.1.0',
 
-    [ValidateSet('Full', 'NoCore', 'Framework')]
+    [ValidateSet('Full', 'NoCET', 'NoCore', 'Framework')]
     [string]$Variant = 'Full',
 
     [string]$OutputDirectory
@@ -16,8 +16,9 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$includeCore = $Variant -eq 'Full'
+$includeCore = $Variant -in @('Full', 'NoCET')
 $selfContained = $Variant -ne 'Framework'
+$disableCet = $Variant -eq 'NoCET'
 $mihomoRelease = $null
 $mihomoVersion = $null
 if ($includeCore) {
@@ -44,11 +45,13 @@ $servicePublish = Join-Path $stageRoot 'service'
 $setupPublish = Join-Path $stageRoot 'setup'
 $appBuildOutput = Join-Path $repoRoot "src\ClashTray.App\bin\x64\$Configuration\net10.0-windows10.0.19041.0\win-x64"
 $payloadZip = Join-Path $stageRoot 'ClashTray-Payload.zip'
-$coreArchive = if ($mihomoVersion) { Join-Path $stageRoot "mihomo-windows-amd64-$mihomoVersion.zip" } else { $null }
+$mihomoBinaryArchivePath = if ($mihomoVersion) { Join-Path $stageRoot "mihomo-windows-amd64-$mihomoVersion.zip" } else { $null }
 $coreExtract = Join-Path $stageRoot 'mihomo-extract'
 
-$mihomoArchiveUri = if ($mihomoVersion) { "https://github.com/MetaCubeX/mihomo/releases/download/$mihomoVersion/mihomo-windows-amd64-$mihomoVersion.zip" } else { $null }
-$mihomoArchiveSha256 = if ($mihomoRelease) { $mihomoRelease.windowsAmd64Sha256 } else { $null }
+$mihomoBinaryArchiveUri = if ($mihomoVersion) { "https://github.com/MetaCubeX/mihomo/releases/download/$mihomoVersion/mihomo-windows-amd64-$mihomoVersion.zip" } else { $null }
+$mihomoBinaryArchiveSha256 = if ($mihomoRelease) { $mihomoRelease.windowsAmd64Sha256 } else { $null }
+$mihomoSourceUri = if ($mihomoVersion) { "https://github.com/MetaCubeX/mihomo/tree/$mihomoVersion" } else { $null }
+$mihomoSourceArchiveUri = if ($mihomoVersion) { "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/$mihomoVersion" } else { $null }
 $mihomoLicenseUri = if ($mihomoVersion) { "https://raw.githubusercontent.com/MetaCubeX/mihomo/$mihomoVersion/LICENSE" } else { $null }
 
 $appProject = Join-Path $repoRoot 'src\ClashTray.App\ClashTray.App.csproj'
@@ -123,14 +126,14 @@ function Prepare-MihomoPayload {
 
     New-Item -ItemType Directory -Path $corePayload, $coreExtract -Force | Out-Null
     Write-Host "Downloading official Mihomo $mihomoVersion core..."
-    Invoke-WebRequest -Uri $mihomoArchiveUri -OutFile $coreArchive
+    Invoke-WebRequest -Uri $mihomoBinaryArchiveUri -OutFile $mihomoBinaryArchivePath
 
-    $actualHash = (Get-FileHash -LiteralPath $coreArchive -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actualHash -ne $mihomoArchiveSha256) {
-        throw "Mihomo archive SHA-256 mismatch. Expected $mihomoArchiveSha256, received $actualHash."
+    $actualHash = (Get-FileHash -LiteralPath $mihomoBinaryArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $mihomoBinaryArchiveSha256) {
+        throw "Mihomo binary archive SHA-256 mismatch. Expected $mihomoBinaryArchiveSha256, received $actualHash."
     }
 
-    Expand-Archive -LiteralPath $coreArchive -DestinationPath $coreExtract -Force
+    Expand-Archive -LiteralPath $mihomoBinaryArchivePath -DestinationPath $coreExtract -Force
     $coreExecutables = @(Get-ChildItem -LiteralPath $coreExtract -Recurse -File |
         Where-Object { $_.Name -eq 'mihomo-windows-amd64.exe' })
     if ($coreExecutables.Count -ne 1) {
@@ -145,12 +148,39 @@ function Prepare-MihomoPayload {
         throw 'The Mihomo license file was not downloaded.'
     }
 
+    $releaseMetadataPath = Join-Path $corePayload 'Mihomo-Release.txt'
     @(
         "Mihomo version: $mihomoVersion"
-        "Source archive: $mihomoArchiveUri"
-        "Archive SHA-256: $mihomoArchiveSha256"
+        'License: GNU General Public License v3.0'
+        ''
+        "Binary archive: $mihomoBinaryArchiveUri"
+        "Binary SHA-256: $mihomoBinaryArchiveSha256"
+        ''
+        "Corresponding Source: $mihomoSourceUri"
+        "Source archive: $mihomoSourceArchiveUri"
+        ''
+        'Upstream project: MetaCubeX/mihomo'
         'Architecture: Windows x64 (amd64)'
-    ) | Set-Content -LiteralPath (Join-Path $corePayload 'Mihomo-Release.txt') -Encoding ascii
+        ''
+        'This Mihomo binary is distributed unmodified by ClashTray.'
+        'Mihomo is licensed separately under GNU GPL v3.0.'
+        'ClashTray itself is licensed under the MIT License.'
+    ) | Set-Content -LiteralPath $releaseMetadataPath -Encoding ascii
+
+    $metadata = Get-Content -LiteralPath $releaseMetadataPath -Raw
+    foreach ($requiredLine in @(
+        'Mihomo version:'
+        'License: GNU General Public License v3.0'
+        'Binary archive:'
+        'Binary SHA-256:'
+        'Corresponding Source:'
+        'Source archive:'
+        'Upstream project:'
+    )) {
+        if ($metadata -notmatch [regex]::Escape($requiredLine)) {
+            throw "Mihomo release metadata is missing required entry: $requiredLine"
+        }
+    }
 }
 
 if (-not (Test-Path -LiteralPath $appProject -PathType Leaf)) {
@@ -162,6 +192,9 @@ if (-not (Test-Path -LiteralPath $serviceProject -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $setupProject -PathType Leaf)) {
     throw "Setup project was not found: $setupProject"
 }
+if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'LICENSE') -PathType Leaf)) {
+    throw 'The ClashTray MIT license file was not found.'
+}
 
 Write-Host "Publishing ClashTray EXE installer ($Configuration, win-x64, version $PackageVersion)..."
 Write-Host "Variant: $Variant (core bundled: $includeCore; self-contained: $selfContained)"
@@ -172,7 +205,7 @@ if (Test-Path -LiteralPath $stageRoot) {
 }
 New-Item -ItemType Directory -Path $stageRoot, $outputRoot -Force | Out-Null
 
-Invoke-Dotnet @(
+$appPublishArguments = @(
     'publish', $appProject,
     '--configuration', $Configuration,
     '--framework', 'net10.0-windows10.0.19041.0',
@@ -184,13 +217,17 @@ Invoke-Dotnet @(
     "--property:WindowsAppSDKSelfContained=$($selfContained.ToString().ToLowerInvariant())",
     '--property:PublishReadyToRun=false'
 )
+if ($disableCet) {
+    $appPublishArguments += '--property:CETCompat=false'
+}
+Invoke-Dotnet -Arguments $appPublishArguments
 
 # dotnet publish does not carry the WinUI-generated XBF/PRI files from the
 # regular build output into a custom publish directory. They are required at
 # runtime by Application.LoadComponent in an unpackaged WinUI application.
 Copy-AppXamlResources -Source $appBuildOutput -Destination $appPublish
 
-Invoke-Dotnet @(
+$servicePublishArguments = @(
     'publish', $serviceProject,
     '--configuration', $Configuration,
     '--framework', 'net10.0-windows10.0.19041.0',
@@ -199,6 +236,10 @@ Invoke-Dotnet @(
     '--output', $servicePublish,
     '--property:Platform=x64'
 )
+if ($disableCet) {
+    $servicePublishArguments += '--property:CETCompat=false'
+}
+Invoke-Dotnet -Arguments $servicePublishArguments
 
 Copy-PublishTree -Source $appPublish -Destination $appPayload
 Copy-PublishTree -Source $servicePublish -Destination $servicePayload
@@ -210,7 +251,8 @@ Prepare-MihomoPayload
 
 $requiredPayloadFiles = @(
     (Join-Path $appPayload 'ClashTray.App.exe'),
-    (Join-Path $servicePayload 'ClashTray.Service.exe')
+    (Join-Path $servicePayload 'ClashTray.Service.exe'),
+    (Join-Path $appPayload 'ClashTray-LICENSE.txt')
 )
 if ($includeCore) {
     $requiredPayloadFiles += @(
@@ -230,7 +272,7 @@ if (-not (Test-Path -LiteralPath $payloadZip -PathType Leaf)) {
     throw "Payload archive was not created: $payloadZip"
 }
 
-Invoke-Dotnet @(
+$setupPublishArguments = @(
     'publish', $setupProject,
     '--configuration', $Configuration,
     '--framework', 'net10.0-windows10.0.19041.0',
@@ -245,6 +287,10 @@ Invoke-Dotnet @(
     '--property:IncludeNativeLibrariesForSelfExtract=true',
     "--property:EnableCompressionInSingleFile=$($selfContained.ToString().ToLowerInvariant())"
 )
+if ($disableCet) {
+    $setupPublishArguments += '--property:CETCompat=false'
+}
+Invoke-Dotnet -Arguments $setupPublishArguments
 
 $publishedSetup = Join-Path $setupPublish 'ClashTray.Setup.exe'
 if (-not (Test-Path -LiteralPath $publishedSetup -PathType Leaf)) {
