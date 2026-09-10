@@ -8,6 +8,8 @@ namespace ClashTray.App;
 public sealed partial class SettingsPage : UserControl
 {
     private readonly ClashTrayRuntime _runtime;
+    private AppSettings? _loadedSettings;
+    private bool _saving;
 
     public SettingsPage(ClashTrayRuntime runtime)
     {
@@ -24,6 +26,7 @@ public sealed partial class SettingsPage : UserControl
 
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_saving) return;
         if (!TryReadPort(HttpPortBox, "HTTP", out var httpPort)
             || !TryReadPort(SocksPortBox, "SOCKS", out var socksPort)
             || !TryReadPort(MixedPortBox, "Mixed", out var mixedPort)
@@ -41,6 +44,8 @@ public sealed partial class SettingsPage : UserControl
         var current = _runtime.Settings;
         var logLevel = (LogLevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? current.LogLevel;
         var theme = (ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Theme;
+        _saving = true;
+        SaveSettingsButton.IsEnabled = false;
         try
         {
             await _runtime.UpdateSettingsAsync(current with
@@ -68,6 +73,11 @@ public sealed partial class SettingsPage : UserControl
         catch (Exception exception)
         {
             StatusText.Text = $"设置保存失败：{exception.Message}";
+        }
+        finally
+        {
+            _saving = false;
+            SaveSettingsButton.IsEnabled = true;
         }
     }
 
@@ -162,31 +172,42 @@ public sealed partial class SettingsPage : UserControl
 
     private void LoadSettings(AppSettings settings)
     {
-        if (StartWithWindowsSwitch is null)
-        {
-            return;
-        }
+        if (StartWithWindowsSwitch is null || settings == _loadedSettings) return;
 
-        StartWithWindowsSwitch.IsOn = settings.StartWithWindows;
-        StartCoreSwitch.IsOn = settings.StartCoreAutomatically;
-        AllowLanSwitch.IsOn = settings.AllowLan;
-        Ipv6Switch.IsOn = settings.Ipv6;
-        TcpConcurrentSwitch.IsOn = settings.TcpConcurrent;
-        SubscriptionRefreshHoursBox.Value = Math.Clamp(settings.SubscriptionRefreshHours, 1, 168);
-        HttpPortBox.Value = settings.HttpPort;
-        SocksPortBox.Value = settings.SocksPort;
-        MixedPortBox.Value = settings.MixedPort;
-        ControllerPortBox.Value = settings.ControllerPort;
-        BypassListBox.Text = settings.BypassList;
-        LogLevelBox.SelectedItem = LogLevelBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Content?.ToString() == settings.LogLevel)
-            ?? LogLevelBox.Items.FirstOrDefault();
+        // Merge external settings changes only into fields the user has not edited.
+        // Do not reassign unchanged values: NumberBox may still contain uncommitted text.
+        bool ShouldRefresh<T>(T displayed, Func<AppSettings, T> select) =>
+            _loadedSettings is null ||
+            (!EqualityComparer<T>.Default.Equals(select(_loadedSettings), select(settings))
+                && EqualityComparer<T>.Default.Equals(displayed, select(_loadedSettings)));
+
+        if (ShouldRefresh(StartWithWindowsSwitch.IsOn, value => value.StartWithWindows))
+            StartWithWindowsSwitch.IsOn = settings.StartWithWindows;
+        if (ShouldRefresh(StartCoreSwitch.IsOn, value => value.StartCoreAutomatically))
+            StartCoreSwitch.IsOn = settings.StartCoreAutomatically;
+        if (ShouldRefresh(AllowLanSwitch.IsOn, value => value.AllowLan)) AllowLanSwitch.IsOn = settings.AllowLan;
+        if (ShouldRefresh(Ipv6Switch.IsOn, value => value.Ipv6)) Ipv6Switch.IsOn = settings.Ipv6;
+        if (ShouldRefresh(TcpConcurrentSwitch.IsOn, value => value.TcpConcurrent)) TcpConcurrentSwitch.IsOn = settings.TcpConcurrent;
+        if (ShouldRefresh(SubscriptionRefreshHoursBox.Value, value => (double)value.SubscriptionRefreshHours))
+            SubscriptionRefreshHoursBox.Value = settings.SubscriptionRefreshHours;
+        if (ShouldRefresh(HttpPortBox.Value, value => (double)value.HttpPort)) HttpPortBox.Value = settings.HttpPort;
+        if (ShouldRefresh(SocksPortBox.Value, value => (double)value.SocksPort)) SocksPortBox.Value = settings.SocksPort;
+        if (ShouldRefresh(MixedPortBox.Value, value => (double)value.MixedPort)) MixedPortBox.Value = settings.MixedPort;
+        if (ShouldRefresh(ControllerPortBox.Value, value => (double)value.ControllerPort)) ControllerPortBox.Value = settings.ControllerPort;
+        if (ShouldRefresh(BypassListBox.Text, value => value.BypassList)) BypassListBox.Text = settings.BypassList;
+        if (ShouldRefresh((LogLevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString(), value => value.LogLevel))
+            LogLevelBox.SelectedItem = LogLevelBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Content?.ToString() == settings.LogLevel)
+                ?? LogLevelBox.Items.FirstOrDefault();
+        var refreshTheme = ShouldRefresh((ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.Theme);
         var hiddenTheme = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == "nakhimov");
         if (settings.NakhimovUnlocked && hiddenTheme is null)
             ThemeBox.Items.Add(new ComboBoxItem { Content = "Nakhimov", Tag = "nakhimov" });
         else if (!settings.NakhimovUnlocked && hiddenTheme is not null)
             ThemeBox.Items.Remove(hiddenTheme);
-        ThemeBox.SelectedItem = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.Theme)
-            ?? ThemeBox.Items.FirstOrDefault();
+        if (refreshTheme)
+            ThemeBox.SelectedItem = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.Theme)
+                ?? ThemeBox.Items.FirstOrDefault();
+        _loadedSettings = settings;
     }
 
     private bool TryReadSubscriptionRefreshHours(out int hours)

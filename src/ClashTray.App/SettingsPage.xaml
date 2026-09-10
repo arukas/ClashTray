@@ -12,6 +12,7 @@
             <StackPanel Grid.Column="1" Margin="10,0,0,0" Spacing="1">
                 <TextBlock Text="设置" FontSize="20" FontWeight="SemiBold" />
                 <TextBlock Text="调整启动、代理端口和 Mihomo 运行参数" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                <TextBlock Text="修改后请点击下方“保存设置”生效。" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap"/>
             </StackPanel>
         </Grid>
 
@@ -72,7 +73,7 @@
                     </ComboBox>
                 </Grid>
                 <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Left">
-                    <Button Content="保存设置" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" />
+                    <Button x:Name="SaveSettingsButton" Content="保存设置" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" />
                     <Button Content="清理 DNS" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearDnsButton_Click" />
                     <Button Content="清理 FakeIP" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearFakeIpButton_Click" />
                     <Button Content="更新 Geo" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="UpdateGeoButton_Click" />

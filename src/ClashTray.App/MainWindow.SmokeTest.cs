@@ -87,6 +87,7 @@ public sealed partial class MainWindow
         }
         await VerifyNodeScrollingAsync(directory, sample);
         await VerifyProxyDelayDisplayAsync(directory, sample);
+        await VerifySettingsDraftAsync(directory);
         NativeMethods.GetWindowRect(_windowHandle, out var actual);
         var anchor = GetTrayRect();
         var monitor = NativeMethods.MonitorFromRect(ref anchor, NativeMethods.MONITOR_DEFAULTTONEAREST);
@@ -207,6 +208,77 @@ public sealed partial class MainWindow
         DashboardScrollViewer.ChangeView(null, 0, null, true);
     }
 
+    private async Task VerifySettingsDraftAsync(string directory)
+    {
+        var page = _settingsPage!;
+        NavigateTo(page, "设置");
+        await Task.Delay(100);
+        var windows = (ToggleSwitch)page.FindName("StartWithWindowsSwitch");
+        var core = (ToggleSwitch)page.FindName("StartCoreSwitch");
+        var port = (NumberBox)page.FindName("HttpPortBox");
+        var bypass = (TextBox)page.FindName("BypassListBox");
+        var theme = (ComboBox)page.FindName("ThemeBox");
+        var save = (Button)page.FindName("SaveSettingsButton");
+        var status = (TextBlock)page.FindName("StatusText");
+        var windowsToggle = (IToggleProvider)new ToggleSwitchAutomationPeer(windows).GetPattern(PatternInterface.Toggle);
+        var coreToggle = (IToggleProvider)new ToggleSwitchAutomationPeer(core).GetPattern(PatternInterface.Toggle);
+        var invokeSave = (IInvokeProvider)new ButtonAutomationPeer(save).GetPattern(PatternInterface.Invoke);
+        windowsToggle.Toggle();
+        coreToggle.Toggle();
+        var draftPort = _runtime!.Settings.HttpPort + 10;
+        port.Value = draftPort;
+        bypass.Text = "localhost;127.*;example.test";
+        for (var index = 0; index < 8; index++)
+        {
+            UpdateSnapshot(_runtime.Snapshot);
+            await Task.Delay(30);
+        }
+        if (!windows.IsOn || !core.IsOn || port.Value != draftPort || bypass.Text != "localhost;127.*;example.test")
+            throw new InvalidOperationException("Live snapshots overwrote an unsaved settings field.");
+        await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = "dark" });
+        page.UpdateSnapshot(_runtime.Snapshot);
+        if (!windows.IsOn || !core.IsOn || port.Value != draftPort
+            || (theme.SelectedItem as ComboBoxItem)?.Tag?.ToString() != "dark")
+            throw new InvalidOperationException("An external theme change lost drafts or failed to update the untouched theme.");
+        port.Value = _runtime.Settings.MixedPort;
+        invokeSave.Invoke();
+        await Task.Delay(100);
+        if (!windows.IsOn || !core.IsOn || _runtime.Settings.StartCoreAutomatically
+            || !status.Text.Contains("不能重复", StringComparison.Ordinal))
+            throw new InvalidOperationException("Validation failure lost the startup drafts or falsely saved them.");
+        port.Value = draftPort;
+        // Exercise both switches without ever changing the real Windows startup registry.
+        windowsToggle.Toggle();
+        invokeSave.Invoke();
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            await Task.Delay(30);
+            if (_runtime.Settings.StartCoreAutomatically && save.IsEnabled) break;
+        }
+        var store = new ClashTray.Core.SettingsStore(new ClashTray.Core.AppPaths(
+            Path.Combine(directory, "user"), Path.Combine(directory, "service")));
+        var persisted = await store.LoadAsync();
+        if (!persisted.StartCoreAutomatically || persisted.StartWithWindows || persisted.HttpPort != draftPort
+            || persisted.BypassList != "localhost;127.*;example.test")
+            throw new InvalidOperationException("Saved startup/core preferences and edited fields did not survive reload.");
+        UpdateSnapshot(_runtime.Snapshot);
+        if (!core.IsOn || windows.IsOn || port.Value != draftPort)
+            throw new InvalidOperationException("Saved values reverted after another snapshot.");
+        var reopened = new SettingsPage(_runtime);
+        if (!((ToggleSwitch)reopened.FindName("StartCoreSwitch")).IsOn)
+            throw new InvalidOperationException("A recreated settings page lost the saved core startup preference.");
+        OtherPageScrollViewer.ChangeView(null, 0, null, true);
+        await SaveDiagnosticFrameAsync(directory, "settings-startup");
+        await File.WriteAllTextAsync(Path.Combine(directory, "settings-draft-checks.json"), JsonSerializer.Serialize(new
+        {
+            BothStartupSwitchesSurviveSnapshots = true, PortAndTextDraftsPreserved = true,
+            ExternalThemeMergesWithoutLosingDrafts = true, InvalidSavePreservesDrafts = true,
+            SavedCoreStartupSurvivesReload = true, RecreatedPageLoadsSavedValues = true,
+            WindowsStartupRegistryChanged = false,
+            ManualChecks = "Windows sign-in startup and automatic core launch after sign-in were not exercised."
+        }, DiagnosticJsonOptions));
+        NavigateTo(_proxyPage, "代理");
+    }
     private async Task VerifyProxyDelayDisplayAsync(string directory, RuntimeSnapshot sample)
     {
         var proxyPage = _proxyPage!;

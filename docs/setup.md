@@ -24,6 +24,11 @@ The Windows Service is optional during ordinary development. If it is installed,
 
 New settings default to Mixed port 7890, SOCKS port 7891, HTTP port 7892, and IPv6 disabled. Existing saved IPv6 preferences are preserved. Existing saved port settings are preserved; change them in Settings and restart the core to apply the new ports. The generated controller secret is explicitly empty; no random secret is generated or read from an old controller-secret.bin file. The controller listens only on 127.0.0.1 and API requests omit authentication headers. After upgrading from a version with a generated secret, restart the core to apply the empty secret.
 
+## Editing settings
+
+The Settings page keeps changes as an editable draft until **保存设置** is pressed, including **随 Windows 启动** and **启动后自动启动核心**. Live traffic/controller/provider refreshes must not overwrite this draft. Changes made elsewhere (such as the header theme menu) merge into untouched fields; validation or save failures keep edits available for correction. Successful saves persist the values and a newly opened settings page loads them.
+
+The isolated WinUI smoke flow verifies both startup switches, port/text drafts, repeated snapshots, external theme changes, validation failure and saved-core-startup reload without modifying the real Windows startup registry. Actual sign-in startup still requires manual Windows verification.
 ## EXE installer (current distribution path)
 
 The current release path is a set of x64 EXE installers; Full is the recommended self-contained variant and NoCET is the compatibility variant for older-patched Windows 10 22H2 systems. It does not use MSIX, AppX signing, or the Windows Store. Build it from the repository root:
