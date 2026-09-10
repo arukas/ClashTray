@@ -9,6 +9,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using WinRT.Interop;
 using Windows.ApplicationModel.DataTransfer;
+using Windows.Storage;
 
 namespace ClashTray.App;
 
@@ -87,14 +88,17 @@ public sealed partial class MainWindow : Window
             _windowHandle = WindowNative.GetWindowHandle(this);
         }
 
-        var trayRect = GetTrayRect();
-        var monitor = NativeMethods.MonitorFromRect(ref trayRect, NativeMethods.MONITOR_DEFAULTTONEAREST);
-        var info = new NativeMethods.MonitorInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfo>() };
+        NativeMethods.Rect trayRect = GetTrayRect();
+        nint monitor = NativeMethods.MonitorFromRect(ref trayRect, NativeMethods.MONITOR_DEFAULTTONEAREST);
+        NativeMethods.MonitorInfo info = new NativeMethods.MonitorInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfo>() };
         if (!NativeMethods.GetMonitorInfo(monitor, ref info))
+        {
             throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
-        var dpi = NativeMethods.GetDpiForMonitor(monitor, 0, out var monitorDpi, out _) == 0
+        }
+
+        uint dpi = NativeMethods.GetDpiForMonitor(monitor, 0, out uint monitorDpi, out _) == 0
             ? monitorDpi : NativeMethods.GetDpiForWindow(_windowHandle);
-        var bounds = FlyoutPlacement.Calculate(
+        ScreenBounds bounds = FlyoutPlacement.Calculate(
             new(info.Monitor.Left, info.Monitor.Top, info.Monitor.Width, info.Monitor.Height),
             new(info.Work.Left, info.Work.Top, info.Work.Width, info.Work.Height), dpi == 0 ? 1 : dpi / 96d);
         NativeMethods.SetWindowPos(
@@ -130,16 +134,16 @@ public sealed partial class MainWindow : Window
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
         ApplyTheme(_runtime?.Settings.Theme ?? "system");
-        var core = snapshot.Core;
+        CoreStatus core = snapshot.Core;
         _updatingSnapshot = true;
-        var coreBusy = core.State is CoreState.Validating
+        bool coreBusy = core.State is CoreState.Validating
             or CoreState.Starting
             or CoreState.Stopping
             or CoreState.Restarting;
         CoreActionButton.IsEnabled = !coreBusy;
         SystemProxySwitch.IsEnabled = snapshot.SystemProxy is not (SystemProxyState.Enabling or SystemProxyState.Disabling);
         TunSwitch.IsEnabled = snapshot.Tun is not (TunState.Enabling or TunState.Disabling);
-        var coreRunning = core.State == CoreState.Running;
+        bool coreRunning = core.State == CoreState.Running;
         RuleModeButton.IsEnabled = coreRunning;
         GlobalModeButton.IsEnabled = coreRunning;
         DirectModeButton.IsEnabled = coreRunning;
@@ -212,11 +216,15 @@ public sealed partial class MainWindow : Window
         {
             _lastTrafficSample = DateTime.UtcNow;
             _trafficHistory.Enqueue((core.UploadBytesPerSecond, core.DownloadBytesPerSecond));
-            while (_trafficHistory.Count > 60) _trafficHistory.Dequeue();
+            while (_trafficHistory.Count > 60)
+            {
+                _trafficHistory.Dequeue();
+            }
+
             DrawTraffic();
         }
 
-        var settings = _runtime?.Settings;
+        AppSettings settings = _runtime?.Settings;
         if (settings is not null)
         {
             HttpEndpointButton.Content = $"HTTP {settings.HttpPort}";
@@ -227,7 +235,7 @@ public sealed partial class MainWindow : Window
 
         ConfigurationsComboBox.SelectionChanged -= ConfigurationsComboBox_SelectionChanged;
         ConfigurationsComboBox.Items.Clear();
-        foreach (var configuration in snapshot.Configurations)
+        foreach (ConfigurationProfile configuration in snapshot.Configurations)
         {
             ConfigurationsComboBox.Items.Add(new ComboBoxItem { Content = configuration.Name, Tag = configuration.Id });
             if (configuration.IsActive || configuration.Id == _selectedConfigurationId)
@@ -236,7 +244,7 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        var selectedItem = ConfigurationsComboBox.Items
+        ComboBoxItem? selectedItem = ConfigurationsComboBox.Items
             .OfType<ComboBoxItem>()
             .FirstOrDefault(item => string.Equals(item.Tag as string, _selectedConfigurationId, StringComparison.OrdinalIgnoreCase));
         ConfigurationsComboBox.SelectedItem = selectedItem;
@@ -261,11 +269,11 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var picker = new FileOpenPicker();
+        FileOpenPicker picker = new FileOpenPicker();
         picker.FileTypeFilter.Add(".yaml");
         picker.FileTypeFilter.Add(".yml");
         InitializeWithWindow.Initialize(picker, _windowHandle);
-        var file = await picker.PickSingleFileAsync();
+        StorageFile file = await picker.PickSingleFileAsync();
         if (file is null)
         {
             return;
@@ -288,10 +296,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var urlBox = new TextBox { PlaceholderText = "https://example.com/mihomo.yaml", MinWidth = 320 };
-        var nameBox = new TextBox { PlaceholderText = "可选名称", Margin = new Thickness(0, 8, 0, 0) };
-        var content = new StackPanel { Children = { new TextBlock { Text = "订阅地址" }, urlBox, nameBox } };
-        var dialog = new ContentDialog
+        TextBox urlBox = new TextBox { PlaceholderText = "https://example.com/mihomo.yaml", MinWidth = 320 };
+        TextBox nameBox = new TextBox { PlaceholderText = "可选名称", Margin = new Thickness(0, 8, 0, 0) };
+        StackPanel content = new StackPanel { Children = { new TextBlock { Text = "订阅地址" }, urlBox, nameBox } };
+        ContentDialog dialog = new ContentDialog
         {
             Title = "添加订阅",
             Content = content,
@@ -300,7 +308,7 @@ public sealed partial class MainWindow : Window
             XamlRoot = RootGrid.XamlRoot
         };
         if (await dialog.ShowAsync() != ContentDialogResult.Primary
-            || !Uri.TryCreate(urlBox.Text.Trim(), UriKind.Absolute, out var uri)
+            || !Uri.TryCreate(urlBox.Text.Trim(), UriKind.Absolute, out Uri uri)
             || uri.Scheme is not ("http" or "https"))
         {
             return;
@@ -318,7 +326,7 @@ public sealed partial class MainWindow : Window
 
     private void ApplyFlyoutWindowStyle()
     {
-        var extendedStyle = NativeMethods.GetWindowLongPtr(_windowHandle, NativeMethods.GWL_EXSTYLE).ToInt64();
+        long extendedStyle = NativeMethods.GetWindowLongPtr(_windowHandle, NativeMethods.GWL_EXSTYLE).ToInt64();
         extendedStyle |= NativeMethods.WS_EX_TOOLWINDOW;
         extendedStyle &= ~NativeMethods.WS_EX_APPWINDOW;
         NativeMethods.SetWindowLongPtr(_windowHandle, NativeMethods.GWL_EXSTYLE, new IntPtr(extendedStyle));
@@ -332,8 +340,8 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var style = NativeMethods.GetWindowLongPtr(_windowHandle, NativeMethods.GWL_STYLE).ToInt64();
-        var extendedStyle = NativeMethods.GetWindowLongPtr(_windowHandle, NativeMethods.GWL_EXSTYLE).ToInt64();
+        long style = NativeMethods.GetWindowLongPtr(_windowHandle, NativeMethods.GWL_STYLE).ToInt64();
+        long extendedStyle = NativeMethods.GetWindowLongPtr(_windowHandle, NativeMethods.GWL_EXSTYLE).ToInt64();
         if (_isPinned)
         {
             style |= NativeMethods.WS_CAPTION | NativeMethods.WS_SYSMENU | NativeMethods.WS_THICKFRAME | NativeMethods.WS_MINIMIZEBOX;
@@ -351,9 +359,12 @@ public sealed partial class MainWindow : Window
         NativeMethods.SetWindowLongPtr(_windowHandle, NativeMethods.GWL_EXSTYLE, new IntPtr(extendedStyle));
         if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
         {
-            var corners = 2;
-            var cornerResult = NativeMethods.DwmSetWindowAttribute(_windowHandle, 33, ref corners, sizeof(int));
-            if (cornerResult < 0) System.Diagnostics.Debug.WriteLine($"Rounded window corners unavailable: {cornerResult:X8}");
+            int corners = 2;
+            int cornerResult = NativeMethods.DwmSetWindowAttribute(_windowHandle, 33, ref corners, sizeof(int));
+            if (cornerResult < 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"Rounded window corners unavailable: {cornerResult:X8}");
+            }
         }
         NativeMethods.SetWindowPos(
             _windowHandle,
@@ -367,12 +378,12 @@ public sealed partial class MainWindow : Window
 
     private NativeMethods.Rect GetTrayRect()
     {
-        if (_trayIcon?.TryGetIconRect(out var rect) == true)
+        if (_trayIcon?.TryGetIconRect(out NativeMethods.Rect rect) == true)
         {
             return rect;
         }
 
-        NativeMethods.GetCursorPos(out var point);
+        NativeMethods.GetCursorPos(out NativeMethods.Point point);
         return new NativeMethods.Rect
         {
             Left = point.X - 8,
@@ -392,7 +403,10 @@ public sealed partial class MainWindow : Window
         };
         ToolTipService.SetToolTip(PinButton, _isPinned ? "取消固定" : "固定窗口");
         ApplyWindowMode();
-        if (!_isPinned) ShowPanel();
+        if (!_isPinned)
+        {
+            ShowPanel();
+        }
     }
 
     private async void CoreActionButton_Click(object sender, RoutedEventArgs e) => await _app.ToggleCoreAsync();
@@ -435,7 +449,7 @@ public sealed partial class MainWindow : Window
 
     private async void RefreshConfigurationButton_Click(object sender, RoutedEventArgs e)
     {
-        var selected = GetSelectedConfiguration();
+        ConfigurationProfile selected = GetSelectedConfiguration();
         if (selected is not null && _runtime is not null)
         {
             try
@@ -451,10 +465,10 @@ public sealed partial class MainWindow : Window
 
     private async void DeleteConfigurationButton_Click(object sender, RoutedEventArgs e)
     {
-        var selected = GetSelectedConfiguration();
+        ConfigurationProfile selected = GetSelectedConfiguration();
         if (selected is not null && _runtime is not null)
         {
-            var dialog = new ContentDialog
+            ContentDialog dialog = new ContentDialog
             {
                 Title = "删除配置",
                 Content = selected.IsActive
@@ -499,7 +513,7 @@ public sealed partial class MainWindow : Window
 
     private ConfigurationProfile? GetSelectedConfiguration()
     {
-        var id = (ConfigurationsComboBox.SelectedItem as ComboBoxItem)?.Tag as string;
+        string id = (ConfigurationsComboBox.SelectedItem as ComboBoxItem)?.Tag as string;
         return _runtime?.Snapshot.Configurations.FirstOrDefault(configuration => configuration.Id == id);
     }
 
@@ -528,7 +542,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var package = new DataPackage();
+        DataPackage package = new DataPackage();
         package.SetText(endpoint);
         Clipboard.SetContent(package);
     }
@@ -546,7 +560,7 @@ public sealed partial class MainWindow : Window
 
     private void NavigateTo(UIElement? page, string title)
     {
-        var isDashboard = page == _proxyPage;
+        bool isDashboard = page == _proxyPage;
         DashboardScrollViewer.Visibility = isDashboard ? Visibility.Visible : Visibility.Collapsed;
         OtherPageScrollViewer.Visibility = isDashboard ? Visibility.Collapsed : Visibility.Visible;
         if (page is not null && !isDashboard)
@@ -566,18 +580,22 @@ public sealed partial class MainWindow : Window
 
     private void DrawTraffic()
     {
-        if (TrafficGraph is null || UploadLine is null || DownloadLine is null) return;
-        var samples = _trafficHistory.ToArray();
-        var width = Math.Max(1, TrafficGraph.ActualWidth);
-        var peak = samples.Length == 0 ? 1 : Math.Max(1, samples.Max(s => Math.Max(s.Up, s.Down)));
-        var upload = new PointCollection();
-        var download = new PointCollection();
-        for (var i = 0; i < 60; i++)
+        if (TrafficGraph is null || UploadLine is null || DownloadLine is null)
         {
-            var index = i - (60 - samples.Length);
-            var sample = index < 0 ? (Up: 0d, Down: 0d) : samples[index];
-            var x = i * width / 59;
-            var height = Math.Max(3, TrafficGraph.ActualHeight) - 2;
+            return;
+        }
+
+        (double Up, double Down)[] samples = _trafficHistory.ToArray();
+        double width = Math.Max(1, TrafficGraph.ActualWidth);
+        double peak = samples.Length == 0 ? 1 : Math.Max(1, samples.Max(s => Math.Max(s.Up, s.Down)));
+        PointCollection upload = new PointCollection();
+        PointCollection download = new PointCollection();
+        for (int i = 0; i < 60; i++)
+        {
+            int index = i - (60 - samples.Length);
+            (double Up, double Down) sample = index < 0 ? (Up: 0d, Down: 0d) : samples[index];
+            double x = i * width / 59;
+            double height = Math.Max(3, TrafficGraph.ActualHeight) - 2;
             upload.Add(new Windows.Foundation.Point(x, height - (height - 2) * Math.Max(0, sample.Up) / peak));
             download.Add(new Windows.Foundation.Point(x, height - (height - 2) * Math.Max(0, sample.Down) / peak));
         }
@@ -596,8 +614,8 @@ public sealed partial class MainWindow : Window
 
     private static string FormatRate(double bytesPerSecond)
     {
-        var value = bytesPerSecond;
-        var unit = "B/s";
+        double value = bytesPerSecond;
+        string unit = "B/s";
         if (value >= 1024)
         {
             value /= 1024;

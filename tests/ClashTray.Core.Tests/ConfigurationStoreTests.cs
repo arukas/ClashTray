@@ -1,4 +1,3 @@
-using ClashTray.Core;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core.Tests;
@@ -13,17 +12,17 @@ public sealed class ConfigurationStoreTests
     [DataRow(2)]
     public async Task SubscriptionImportAndRefreshSendBundledMihomoUserAgent(int downloads)
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        using var handler = new SubscriptionHandler();
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        using SubscriptionHandler handler = new SubscriptionHandler();
         try
         {
-            var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
-            var store = new ConfigurationStore(paths, handler);
-            var uri = new Uri("https://subscription.invalid/config");
-            for (var index = 0; index < downloads; index++)
+            AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            ConfigurationStore store = new ConfigurationStore(paths, handler);
+            Uri uri = new Uri("https://subscription.invalid/config");
+            for (int index = 0; index < downloads; index++)
             {
                 // Manual and scheduled refresh use the same import path with the saved URI/name.
-                var update = await store.ImportSubscriptionWithResultAsync(uri, "Test subscription");
+                ConfigurationImportResult update = await store.ImportSubscriptionWithResultAsync(uri, "Test subscription");
                 Assert.AreEqual(index == 0, update.ContentChanged);
                 Assert.AreEqual(uri, update.Profile.SubscriptionUri);
                 Assert.AreEqual(64, update.Sha256.Length);
@@ -37,24 +36,27 @@ public sealed class ConfigurationStoreTests
         }
         finally
         {
-            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
         }
     }
 
     [TestMethod]
     public async Task SubscriptionImportDetectsChangedContentBySha256()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        using var handler = new SubscriptionHandler();
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        using SubscriptionHandler handler = new SubscriptionHandler();
         try
         {
-            var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
-            var store = new ConfigurationStore(paths, handler);
-            var uri = new Uri("https://subscription.invalid/config");
+            AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            ConfigurationStore store = new ConfigurationStore(paths, handler);
+            Uri uri = new Uri("https://subscription.invalid/config");
 
-            var first = await store.ImportSubscriptionWithResultAsync(uri);
+            ConfigurationImportResult first = await store.ImportSubscriptionWithResultAsync(uri);
             handler.ResponseBody = "mixed-port: 7891\n";
-            var second = await store.ImportSubscriptionWithResultAsync(uri);
+            ConfigurationImportResult second = await store.ImportSubscriptionWithResultAsync(uri);
 
             Assert.IsTrue(first.ContentChanged);
             Assert.IsTrue(second.ContentChanged);
@@ -63,19 +65,22 @@ public sealed class ConfigurationStoreTests
         }
         finally
         {
-            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
         }
     }
 
     [TestMethod]
     public async Task SubscriptionUserAgentDoesNotBypassConfigurationValidation()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        using var handler = new SubscriptionHandler { ResponseBody = "<html>Login required</html>" };
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        using SubscriptionHandler handler = new SubscriptionHandler { ResponseBody = "<html>Login required</html>" };
         try
         {
-            var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
-            var store = new ConfigurationStore(paths, handler);
+            AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            ConfigurationStore store = new ConfigurationStore(paths, handler);
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
                 store.ImportSubscriptionAsync(new Uri("https://subscription.invalid/config")));
             Assert.AreEqual("clash.meta/v1.19.30", handler.UserAgents.Single());
@@ -83,7 +88,10 @@ public sealed class ConfigurationStoreTests
         }
         finally
         {
-            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
         }
     }
 
@@ -95,7 +103,7 @@ public sealed class ConfigurationStoreTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var userAgent = request.Headers.UserAgent.ToString();
+            string userAgent = request.Headers.UserAgent.ToString();
             UserAgents.Add(userAgent);
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
@@ -119,7 +127,7 @@ public sealed class ConfigurationStoreTests
     [TestMethod]
     public void BoundedBufferRetainsNewestItems()
     {
-        var buffer = new BoundedBuffer<int>(2);
+        BoundedBuffer<int> buffer = new BoundedBuffer<int>(2);
         buffer.Add(1);
         buffer.Add(2);
         buffer.Add(3);
@@ -130,15 +138,15 @@ public sealed class ConfigurationStoreTests
     [TestMethod]
     public async Task ReloadRejectsConfigurationPathOutsideStore()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
-        var store = new ConfigurationStore(paths);
-        var outsidePath = Path.Combine(root, "outside.yaml");
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationStore store = new ConfigurationStore(paths);
+        string outsidePath = Path.Combine(root, "outside.yaml");
         await File.WriteAllTextAsync(outsidePath, "mixed-port: 7890\n");
 
         try
         {
-            var profile = new ConfigurationProfile("outside", "outside", outsidePath, null, null, false);
+            ConfigurationProfile profile = new ConfigurationProfile("outside", "outside", outsidePath, null, null, false);
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => store.ReloadAsync(profile));
         }
         finally
@@ -150,20 +158,20 @@ public sealed class ConfigurationStoreTests
     [TestMethod]
     public async Task ListIgnoresMetadataWithPathTraversalIdentifier()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
-        var store = new ConfigurationStore(paths);
-        var configurationPath = Path.Combine(paths.ConfigurationsRoot, "valid.yaml");
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationStore store = new ConfigurationStore(paths);
+        string configurationPath = Path.Combine(paths.ConfigurationsRoot, "valid.yaml");
         await File.WriteAllTextAsync(configurationPath, "mixed-port: 7890\n");
         await File.WriteAllTextAsync(
             Path.Combine(paths.ConfigurationsRoot, "malicious.json"),
             "{\"Id\":\"..\\\\outside\\\\target\",\"Name\":\"bad\",\"Path\":\""
-            + configurationPath.Replace("\\", "\\\\")
+            + configurationPath.Replace("\\", "\\\\", StringComparison.Ordinal)
             + "\",\"IsActive\":false}");
 
         try
         {
-            var profiles = await store.ListAsync();
+            IReadOnlyList<ConfigurationProfile> profiles = await store.ListAsync();
 
             Assert.AreEqual(0, profiles.Count);
         }
@@ -176,17 +184,17 @@ public sealed class ConfigurationStoreTests
     [TestMethod]
     public async Task DeleteRejectsMetadataPathTraversalIdentifier()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
-        var store = new ConfigurationStore(paths);
-        var configurationPath = Path.Combine(paths.ConfigurationsRoot, "valid.yaml");
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationStore store = new ConfigurationStore(paths);
+        string configurationPath = Path.Combine(paths.ConfigurationsRoot, "valid.yaml");
         await File.WriteAllTextAsync(configurationPath, "mixed-port: 7890\n");
-        var outsidePath = Path.Combine(root, "outside.json");
+        string outsidePath = Path.Combine(root, "outside.json");
         await File.WriteAllTextAsync(outsidePath, "keep");
 
         try
         {
-            var profile = new ConfigurationProfile(
+            ConfigurationProfile profile = new ConfigurationProfile(
                 "..\\outside",
                 "bad",
                 configurationPath,

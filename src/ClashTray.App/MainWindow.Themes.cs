@@ -38,14 +38,20 @@ public sealed partial class MainWindow
 
     private void QueueThemeRefresh() => DispatcherQueue.TryEnqueue(() =>
     {
-        if (!_themeTrackingStopped) UpdateThemeAssets();
+        if (!_themeTrackingStopped)
+        {
+            UpdateThemeAssets();
+        }
     });
 
     private void ApplyTheme(string theme)
     {
-        var normalizedTheme = theme.Trim().ToLowerInvariant();
+        string normalizedTheme = theme.Trim().ToLowerInvariant();
         if (normalizedTheme == "nakhimov" && _runtime?.Settings.NakhimovUnlocked != true)
+        {
             normalizedTheme = "system";
+        }
+
         _themeName = normalizedTheme;
         RootGrid.RequestedTheme = normalizedTheme switch
         {
@@ -83,22 +89,32 @@ public sealed partial class MainWindow
 
     private void ApplyNakhimovPalette(bool enabled)
     {
-        if (_nakhimovPaletteApplied == enabled) return;
+        if (_nakhimovPaletteApplied == enabled)
+        {
+            return;
+        }
+
         _nakhimovPaletteApplied = enabled;
         // Keep the HighContrast dictionary untouched, so Windows retains full control.
-        var dictionary = (ResourceDictionary)Application.Current.Resources.ThemeDictionaries["Default"];
-        var colors = enabled
+        ResourceDictionary dictionary = (ResourceDictionary)Application.Current.Resources.ThemeDictionaries["Default"];
+        Color[] colors = enabled
             ? new[] { Color.FromArgb(255, 24, 37, 33), Color.FromArgb(255, 35, 53, 46), Color.FromArgb(255, 64, 88, 76) }
             : new[] { Color.FromArgb(255, 25, 28, 34), Color.FromArgb(255, 36, 40, 48), Color.FromArgb(255, 54, 60, 70) };
-        var keys = new[] { "ClashTrayCanvasBrush", "ClashTraySurfaceBrush", "ClashTrayStrokeBrush" };
-        for (var index = 0; index < keys.Length; index++)
+        string[] keys = new[] { "ClashTrayCanvasBrush", "ClashTraySurfaceBrush", "ClashTrayStrokeBrush" };
+        for (int index = 0; index < keys.Length; index++)
+        {
             ((SolidColorBrush)dictionary[keys[index]]).Color = colors[index];
+        }
     }
 
     private void UpdateThemeAssets()
     {
-        if (ThemeLogo is null) return;
-        var asset = _themeName == "nakhimov" ? "Nakhimov"
+        if (ThemeLogo is null)
+        {
+            return;
+        }
+
+        string asset = _themeName == "nakhimov" ? "Nakhimov"
             : RootGrid.ActualTheme == ElementTheme.Dark ? "Dark" : "Light";
         if (_logoAsset != asset)
         {
@@ -106,10 +122,10 @@ public sealed partial class MainWindow
             _logoAsset = asset;
         }
         // The taskbar can use a different theme from the app. Keep its icon legible.
-        var darkTaskbar = true;
+        bool darkTaskbar = true;
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+            using RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
             darkTaskbar = key?.GetValue("SystemUsesLightTheme") is not int light || light == 0;
         }
         catch (Exception exception) when (exception is System.Security.SecurityException or UnauthorizedAccessException or IOException)
@@ -118,11 +134,11 @@ public sealed partial class MainWindow
         }
         if (_accessibilitySettings.HighContrast)
         {
-            var background = _themeUiSettings.GetColorValue(UIColorType.Background);
+            Color background = _themeUiSettings.GetColorValue(UIColorType.Background);
             darkTaskbar = (background.R * 299 + background.G * 587 + background.B * 114) < 128000;
             if (_themeName != "nakhimov")
             {
-                var contrastAsset = darkTaskbar ? "Dark" : "Light";
+                string contrastAsset = darkTaskbar ? "Dark" : "Light";
                 if (_logoAsset != contrastAsset)
                 {
                     ThemeLogo.Source = new BitmapImage(new Uri($"ms-appx:///Assets/Themes/{contrastAsset}/logo.png"));
@@ -136,15 +152,22 @@ public sealed partial class MainWindow
     private void ResetLogoClicks()
     {
         _logoUnlock.Reset();
-        if (EasterEggTip is not null) EasterEggTip.IsOpen = false;
+        if (EasterEggTip is not null)
+        {
+            EasterEggTip.IsOpen = false;
+        }
     }
 
     private async void LogoButton_Click(object sender, RoutedEventArgs e) => await HandleLogoClickAsync();
 
     private async Task HandleLogoClickAsync()
     {
-        if (_runtime is null || _unlockInProgress) return;
-        var remaining = _logoUnlock.Click(Environment.TickCount64);
+        if (_runtime is null || _unlockInProgress)
+        {
+            return;
+        }
+
+        int remaining = _logoUnlock.Click(Environment.TickCount64);
         if (remaining > 0)
         {
             if (remaining <= 2)
@@ -158,7 +181,7 @@ public sealed partial class MainWindow
         _unlockInProgress = true;
         try
         {
-            var wasUnlocked = _runtime.Settings.NakhimovUnlocked;
+            bool wasUnlocked = _runtime.Settings.NakhimovUnlocked;
             await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = "nakhimov", NakhimovUnlocked = true });
             ApplyTheme(_runtime.Settings.Theme);
             EasterEggTip.Title = wasUnlocked ? "欢迎回来，Nakhimov" : "Nakhimov 已解锁";
@@ -176,7 +199,11 @@ public sealed partial class MainWindow
 
     private async void ThemeOption_Click(object sender, RoutedEventArgs e)
     {
-        if (_updatingThemeControls || _runtime is null || sender is not RadioButton { Tag: string theme }) return;
+        if (_updatingThemeControls || _runtime is null || sender is not RadioButton { Tag: string theme })
+        {
+            return;
+        }
+
         ResetLogoClicks();
         ThemeFlyout.Hide();
         try

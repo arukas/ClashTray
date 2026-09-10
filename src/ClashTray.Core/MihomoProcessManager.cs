@@ -25,7 +25,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         {
             State = CoreState.Validating;
             OnStateChanged();
-            var result = await RunOneShotAsync(executablePath, $"-t -f \"{configurationPath}\"", cancellationToken);
+            int result = await RunOneShotAsync(executablePath, $"-t -f \"{configurationPath}\"", cancellationToken);
             State = result == 0 ? CoreState.Stopped : CoreState.Failed;
             OnStateChanged();
             return result == 0;
@@ -129,7 +129,10 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
 
         OnStateChanged();
-        lifetime?.Cancel();
+        if (lifetime is not null)
+        {
+            await lifetime.CancelAsync();
+        }
         if (process is not null)
         {
             try
@@ -168,7 +171,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
     private void StartProcess(string executablePath, string configurationPath, string workingDirectory)
     {
         Directory.CreateDirectory(workingDirectory);
-        var startInfo = new ProcessStartInfo
+        ProcessStartInfo startInfo = new ProcessStartInfo
         {
             FileName = executablePath,
             Arguments = $"-d \"{workingDirectory}\" -f \"{configurationPath}\"",
@@ -178,8 +181,8 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        var lifetime = new CancellationTokenSource();
+        Process process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        CancellationTokenSource lifetime = new CancellationTokenSource();
         process.Exited += ProcessExited;
         lock (_processGate)
         {
@@ -197,7 +200,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             _ = DrainAsync(process.StandardOutput, isError: false, lifetime.Token);
             _ = DrainAsync(process.StandardError, isError: true, lifetime.Token);
 
-            var running = !HasExited(process);
+            bool running = !HasExited(process);
             lock (_processGate)
             {
                 if (ReferenceEquals(_process, process))
@@ -234,7 +237,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
 
     private static async Task<int> RunOneShotAsync(string executablePath, string arguments, CancellationToken cancellationToken)
     {
-        var startInfo = new ProcessStartInfo
+        ProcessStartInfo startInfo = new ProcessStartInfo
         {
             FileName = executablePath,
             Arguments = arguments,
@@ -243,9 +246,9 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Unable to start Mihomo validation.");
-        var standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var standardError = process.StandardError.ReadToEndAsync(cancellationToken);
+        using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("Unable to start Mihomo validation.");
+        Task<string> standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        Task<string> standardError = process.StandardError.ReadToEndAsync(cancellationToken);
         await process.WaitForExitAsync(cancellationToken);
         await Task.WhenAll(standardOutput, standardError);
         return process.ExitCode;
@@ -257,7 +260,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                var line = await ReadLineLimitedAsync(reader, cancellationToken);
+                string? line = await ReadLineLimitedAsync(reader, cancellationToken);
                 if (line is null)
                 {
                     break;
@@ -278,12 +281,12 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         StreamReader reader,
         CancellationToken cancellationToken)
     {
-        var builder = new StringBuilder(Math.Min(MaxLogLineCharacters, 1024));
-        var buffer = new char[1024];
-        var truncated = false;
+        StringBuilder builder = new StringBuilder(Math.Min(MaxLogLineCharacters, 1024));
+        char[] buffer = new char[1024];
+        bool truncated = false;
         while (true)
         {
-            var count = await reader.ReadAsync(buffer.AsMemory(), cancellationToken);
+            int count = await reader.ReadAsync(buffer.AsMemory(), cancellationToken);
             if (count == 0)
             {
                 if (builder.Length == 0 && !truncated)
@@ -294,9 +297,9 @@ public sealed class MihomoProcessManager : IAsyncDisposable
                 break;
             }
 
-            for (var index = 0; index < count; index++)
+            for (int index = 0; index < count; index++)
             {
-                var character = buffer[index];
+                char character = buffer[index];
                 if (character == '\n')
                 {
                     return FormatLogLine(builder, truncated);
@@ -331,7 +334,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             return;
         }
 
-        var shouldNotify = false;
+        bool shouldNotify = false;
         lock (_processGate)
         {
             if (!ReferenceEquals(_process, process))

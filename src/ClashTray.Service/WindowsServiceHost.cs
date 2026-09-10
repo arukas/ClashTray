@@ -25,6 +25,16 @@ internal sealed class WindowsServiceHost : ServiceBase
 
     protected override void OnShutdown() => DisposeCommandHost();
 
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            DisposeCommandHost();
+        }
+
+        base.Dispose(disposing);
+    }
+
     private void DisposeCommandHost()
     {
         _commandHost?.DisposeAsync().AsTask().GetAwaiter().GetResult();

@@ -9,7 +9,7 @@ internal static class AtomicFile
         ReadOnlyMemory<byte> content,
         CancellationToken cancellationToken = default)
     {
-        var temporaryPath = CreateTemporaryPath(path);
+        string temporaryPath = CreateTemporaryPath(path);
         try
         {
             await File.WriteAllBytesAsync(temporaryPath, content, cancellationToken);
@@ -27,10 +27,10 @@ internal static class AtomicFile
         JsonSerializerOptions options,
         CancellationToken cancellationToken = default)
     {
-        var temporaryPath = CreateTemporaryPath(path);
+        string temporaryPath = CreateTemporaryPath(path);
         try
         {
-            await using (var stream = new FileStream(
+            await using (FileStream stream = new FileStream(
                 temporaryPath,
                 FileMode.CreateNew,
                 FileAccess.Write,

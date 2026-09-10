@@ -1,0 +1,79 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+
+[*.cs]
+# Keep declarations and control flow explicit so type and lifetime boundaries are reviewable.
+csharp_style_var_for_built_in_types = false:error
+csharp_style_var_when_type_is_apparent = false:error
+csharp_style_var_elsewhere = false:error
+csharp_prefer_braces = true:error
+dotnet_style_require_accessibility_modifiers = always:error
+
+# Treat correctness-oriented IDE diagnostics as build-breaking issues.
+dotnet_diagnostic.IDE0005.severity = error
+dotnet_diagnostic.IDE0059.severity = error
+dotnet_diagnostic.CA1068.severity = error
+
+# CA2007 cannot be applied consistently to await-using declarations without changing
+# resource types; continuation policy is kept explicit at each UI/library boundary.
+dotnet_diagnostic.CA2007.severity = none
+
+# These event payloads are immutable domain state/telemetry values; wrapping them in
+# EventArgs would change the existing application contract without improving safety.
+[src/ClashTray.Core/ClashTrayRuntime.cs]
+dotnet_diagnostic.CA1003.severity = none
+dotnet_diagnostic.CA1031.severity = none
+
+[src/ClashTray.Core/MihomoProcessManager.cs]
+dotnet_diagnostic.CA1003.severity = none
+
+# The proxy snapshot intentionally stores the raw registry string so restoration can
+# round-trip the user's original WinINet state exactly.
+[src/ClashTray.Core/SystemProxyManager.cs]
+dotnet_diagnostic.CA1054.severity = none
+dotnet_diagnostic.CA1056.severity = none
+dotnet_diagnostic.CA1031.severity = none
+
+# Lowercase is part of the Mihomo protocol, stable configuration IDs, file extensions,
+# and persisted log/theme values; uppercasing would change observable behavior.
+[src/ClashTray.Core/MihomoApiClient.cs]
+dotnet_diagnostic.CA1308.severity = none
+
+[src/ClashTray.Core/MihomoDataParser.cs]
+dotnet_diagnostic.CA1308.severity = none
+
+[src/ClashTray.Core/RuntimeConfigBuilder.cs]
+dotnet_diagnostic.CA1308.severity = none
+
+[src/ClashTray.Core/ConfigurationStore.cs]
+dotnet_diagnostic.CA1308.severity = none
+
+# These handlers are deliberate trust-boundary translators: they preserve cancellation,
+# update state/rollback information, and convert unexpected external failures into a
+# bounded user-visible result.
+[src/ClashTray.Core/SubscriptionScheduler.cs]
+dotnet_diagnostic.CA1031.severity = none
+
+[src/ClashTray.Service/ServiceRuntimeController.cs]
+dotnet_diagnostic.CA1031.severity = none
+
+[src/ClashTray.Service/ServiceCommandHost.cs]
+dotnet_diagnostic.CA1031.severity = none
+
+[src/ClashTray.Setup/Program.cs]
+dotnet_diagnostic.CA1031.severity = none
+
+[src/ClashTray.Setup/SetupLog.cs]
+dotnet_diagnostic.CA1031.severity = none
+
+# Test classes must remain public for MSTest discovery; native interop declarations are
+# public because the App test-linking surface consumes them directly.
+[tests/**/*.cs]
+dotnet_diagnostic.CA1515.severity = none
+
+[src/ClashTray.App/NativeMethods.cs]
+dotnet_diagnostic.CA1515.severity = none

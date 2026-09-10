@@ -5,9 +5,9 @@ namespace ClashTray.Core;
 
 internal interface ISettingsStore
 {
-    Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default);
+    public Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default);
 
-    Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default);
+    public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default);
 }
 
 public sealed class SettingsStore : ISettingsStore
@@ -36,8 +36,8 @@ public sealed class SettingsStore : ISettingsStore
                 return new AppSettings();
             }
 
-            await using var stream = File.OpenRead(_paths.SettingsFile);
-            var settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken)
+            await using FileStream stream = File.OpenRead(_paths.SettingsFile);
+            AppSettings settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken)
                 ?? new AppSettings();
             SettingsValidator.Validate(settings);
             return settings;
@@ -62,6 +62,7 @@ public sealed class SettingsStore : ISettingsStore
 
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(settings);
         SettingsValidator.Validate(settings);
         await AtomicFile.WriteJsonAsync(_paths.SettingsFile, settings, _options, cancellationToken);
     }

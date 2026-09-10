@@ -33,7 +33,7 @@ public sealed class SubscriptionScheduler : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _cts.Cancel();
+        await _cts.CancelAsync();
         if (_task is not null)
         {
             try
@@ -54,10 +54,10 @@ public sealed class SubscriptionScheduler : IAsyncDisposable
         {
             try
             {
-                var hours = Math.Clamp(_settings().SubscriptionRefreshHours, 1, 168);
+                int hours = Math.Clamp(_settings().SubscriptionRefreshHours, 1, 168);
                 await _delay(TimeSpan.FromHours(hours), _cts.Token);
-                var profiles = await _listProfiles(_cts.Token);
-                foreach (var profile in profiles.Where(profile => profile.SubscriptionUri is not null))
+                IReadOnlyList<ConfigurationProfile> profiles = await _listProfiles(_cts.Token);
+                foreach (ConfigurationProfile? profile in profiles.Where(profile => profile.SubscriptionUri is not null))
                 {
                     try
                     {

@@ -20,16 +20,16 @@ public sealed class BoundaryTests
     [DataRow("")]
     public async Task TunCommandCannotTargetControllerWithoutRunningCore(string secret)
     {
-        await using var controller = new ServiceRuntimeController();
-        var request = new ServiceRequest(
+        await using ServiceRuntimeController controller = new ServiceRuntimeController();
+        ServiceRequest request = new ServiceRequest(
             Guid.NewGuid(),
             ServiceCommand.EnableTun,
             JsonSerializer.Serialize(new ServiceTunPayload(9090, secret, true)));
 
-        var response = await controller.HandleAsync(request, CancellationToken.None);
+        ServiceResponse response = await controller.HandleAsync(request, CancellationToken.None);
 
         Assert.IsFalse(response.Succeeded);
         Assert.AreEqual(CoreState.Stopped, response.Core);
-        StringAssert.Contains(response.Error, "核心尚未运行");
+        StringAssert.Contains(response.Error, "核心尚未运行", StringComparison.Ordinal);
     }
 }

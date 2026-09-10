@@ -22,7 +22,7 @@ public partial class App : Application, IAsyncDisposable
         _runtime = new ClashTrayRuntime(smokeDirectory is null ? null : new AppPaths(Path.Combine(smokeDirectory, "user"), Path.Combine(smokeDirectory, "service")));
         UnhandledException += (_, e) =>
         {
-            var directory = _smokeDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClashTray", "logs");
+            string directory = _smokeDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClashTray", "logs");
             Directory.CreateDirectory(directory);
             File.AppendAllText(Path.Combine(directory, "startup-error.log"), $"{DateTimeOffset.Now:O} {e.Exception}\n");
         };
@@ -40,10 +40,20 @@ public partial class App : Application, IAsyncDisposable
         _mainWindow.HidePanel();
         _trayIcon = new TrayIconService(_mainWindow, OnTrayInteraction, _mainWindow.HandleDeactivation);
         _trayIcon.MenuItemSelected += OnMenuItemSelected;
-        if (_smokeDirectory is null) _trayIcon.Install();
+        if (_smokeDirectory is null)
+        {
+            _trayIcon.Install();
+        }
+
         _mainWindow.Initialize(_trayIcon, _runtime);
-        if (_smokeDirectory is null) _ = InitializeRuntimeAsync();
-        else _ = RunSmokeTestAsync();
+        if (_smokeDirectory is null)
+        {
+            _ = InitializeRuntimeAsync();
+        }
+        else
+        {
+            _ = RunSmokeTestAsync();
+        }
     }
 
     private async Task RunSmokeTestAsync()
@@ -123,13 +133,13 @@ public partial class App : Application, IAsyncDisposable
 
     internal async Task ToggleSystemProxyAsync()
     {
-        var currentState = _runtime.Snapshot.SystemProxy;
+        SystemProxyState currentState = _runtime.Snapshot.SystemProxy;
         if (currentState is SystemProxyState.Enabling or SystemProxyState.Disabling)
         {
             return;
         }
 
-        var enabled = currentState is not (SystemProxyState.On or SystemProxyState.RestoreRequired);
+        bool enabled = currentState is not (SystemProxyState.On or SystemProxyState.RestoreRequired);
         try
         {
             await _runtime.SetSystemProxyAsync(enabled);
@@ -278,7 +288,7 @@ public partial class App : Application, IAsyncDisposable
 
     private void UpdateTrayState(RuntimeSnapshot snapshot)
     {
-        var state = snapshot.Tun is TunState.On
+        TrayState state = snapshot.Tun is TunState.On
             ? TrayState.Tun
             : snapshot.SystemProxy is SystemProxyState.On
                 ? TrayState.SystemProxy

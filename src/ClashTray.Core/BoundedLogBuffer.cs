@@ -20,9 +20,10 @@ public sealed class BoundedLogBuffer
 
     public void Add(LogEntry entry)
     {
+        ArgumentNullException.ThrowIfNull(entry);
         lock (_gate)
         {
-            var last = _items.Last?.Value;
+            LogEntry? last = _items.Last?.Value;
             if (last is not null
                 && string.Equals(last.Source, entry.Source, StringComparison.Ordinal)
                 && string.Equals(last.Level, entry.Level, StringComparison.OrdinalIgnoreCase)

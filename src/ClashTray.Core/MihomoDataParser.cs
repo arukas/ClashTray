@@ -11,12 +11,16 @@ public static class MihomoDataParser
     private const int MaxRuleEntries = 5_000;
     private const int MaxProviderEntries = 500;
 
-    public static string? ParseVersion(JsonDocument document) =>
-        GetString(document.RootElement, "version");
+    public static string? ParseVersion(JsonDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return GetString(document.RootElement, "version");
+    }
 
     public static ProxyMode? ParseMode(JsonDocument document)
     {
-        if (!document.RootElement.TryGetProperty("mode", out var mode)
+        ArgumentNullException.ThrowIfNull(document);
+        if (!document.RootElement.TryGetProperty("mode", out JsonElement mode)
             || mode.ValueKind != JsonValueKind.String)
         {
             return null;
@@ -33,23 +37,28 @@ public static class MihomoDataParser
 
     public static (IReadOnlyList<ProxyGroup> Groups, IReadOnlyList<ProxyNode> Nodes) ParseProxies(JsonDocument document)
     {
-        if (!document.RootElement.TryGetProperty("proxies", out var proxies)
+        ArgumentNullException.ThrowIfNull(document);
+        if (!document.RootElement.TryGetProperty("proxies", out JsonElement proxies)
             || proxies.ValueKind != JsonValueKind.Object)
         {
             return ([], []);
         }
 
-        var groups = new List<ProxyGroup>();
-        var nodes = new List<ProxyNode>();
-        foreach (var property in proxies.EnumerateObject().Take(MaxProxyEntries))
+        List<ProxyGroup> groups = new List<ProxyGroup>();
+        List<ProxyNode> nodes = new List<ProxyNode>();
+        foreach (JsonProperty property in proxies.EnumerateObject().Take(MaxProxyEntries))
         {
-            var value = property.Value;
-            if (value.ValueKind != JsonValueKind.Object) continue;
-            var delay = ReadLatestDelay(value);
-            var type = GetString(value, "type") ?? "Unknown";
-            var current = GetString(value, "now");
-            var members = GetStringArray(value, "all");
-            var isGroup = members.Length > 0 || type is "Selector" or "URLTest" or "Fallback" or "LoadBalance";
+            JsonElement value = property.Value;
+            if (value.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            string? delay = ReadLatestDelay(value);
+            string type = GetString(value, "type") ?? "Unknown";
+            string? current = GetString(value, "now");
+            string[] members = GetStringArray(value, "all");
+            bool isGroup = members.Length > 0 || type is "Selector" or "URLTest" or "Fallback" or "LoadBalance";
             if (isGroup)
             {
                 groups.Add(new ProxyGroup(property.Name, type, current, members, delay));
@@ -60,47 +69,59 @@ public static class MihomoDataParser
             }
         }
 
-        var currentNames = groups.Select(group => group.Current).Where(name => name is not null).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        HashSet<string?> currentNames = groups.Select(group => group.Current).Where(name => name is not null).ToHashSet(StringComparer.OrdinalIgnoreCase);
         nodes = nodes.Select(node => node with { IsCurrent = currentNames.Contains(node.Name) }).ToList();
         return (groups, nodes);
     }
 
     private static string? ReadLatestDelay(JsonElement proxy)
     {
-        if (!proxy.TryGetProperty("history", out var history) || history.ValueKind != JsonValueKind.Array
-            || history.GetArrayLength() == 0) return null;
-        var latest = history[history.GetArrayLength() - 1];
-        return latest.ValueKind == JsonValueKind.Object && latest.TryGetProperty("delay", out var delay)
-            && delay.ValueKind == JsonValueKind.Number && delay.TryGetInt32(out var milliseconds) && milliseconds >= 0
+        if (!proxy.TryGetProperty("history", out JsonElement history) || history.ValueKind != JsonValueKind.Array
+            || history.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        JsonElement latest = history[history.GetArrayLength() - 1];
+        return latest.ValueKind == JsonValueKind.Object && latest.TryGetProperty("delay", out JsonElement delay)
+            && delay.ValueKind == JsonValueKind.Number && delay.TryGetInt32(out int milliseconds) && milliseconds >= 0
                 ? milliseconds.ToString(CultureInfo.InvariantCulture) : null;
     }
 
     public static IReadOnlyDictionary<string, int?> ParseGroupDelays(JsonDocument document)
     {
+        ArgumentNullException.ThrowIfNull(document);
         if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
             throw new JsonException("Mihomo 组测速结果格式无效。");
-        var delays = new Dictionary<string, int?>(StringComparer.Ordinal);
-        foreach (var property in document.RootElement.EnumerateObject().Take(MaxProxyEntries))
+        }
+
+        Dictionary<string, int?> delays = new Dictionary<string, int?>(StringComparer.Ordinal);
+        foreach (JsonProperty property in document.RootElement.EnumerateObject().Take(MaxProxyEntries))
+        {
             delays[property.Name] = property.Value.ValueKind == JsonValueKind.Number
-                && property.Value.TryGetInt32(out var value) && value >= 0 ? value : null;
+                && property.Value.TryGetInt32(out int value) && value >= 0 ? value : null;
+        }
+
         return delays;
     }
 
     public static TrafficSnapshot ParseTraffic(JsonDocument document)
     {
-        var root = document.RootElement;
-        var upTotal = GetLongOrNull(root, "upTotal")
+        ArgumentNullException.ThrowIfNull(document);
+        JsonElement root = document.RootElement;
+        long upTotal = GetLongOrNull(root, "upTotal")
             ?? GetLongOrNull(root, "uploadTotal")
             ?? GetLongOrNull(root, "upload")
             ?? 0;
-        var downTotal = GetLongOrNull(root, "downTotal")
+        long downTotal = GetLongOrNull(root, "downTotal")
             ?? GetLongOrNull(root, "downloadTotal")
             ?? GetLongOrNull(root, "download")
             ?? 0;
-        var upSpeed = GetDoubleOrNull(root, "up")
+        double upSpeed = GetDoubleOrNull(root, "up")
             ?? GetDoubleOrNull(root, "upSpeed")
             ?? 0;
-        var downSpeed = GetDoubleOrNull(root, "down")
+        double downSpeed = GetDoubleOrNull(root, "down")
             ?? GetDoubleOrNull(root, "downSpeed")
             ?? 0;
         return new TrafficSnapshot(
@@ -113,28 +134,30 @@ public static class MihomoDataParser
 
     public static long ParseMemoryBytes(JsonDocument document)
     {
-        var root = document.RootElement;
-        var inUse = GetLong(root, "inuse");
+        ArgumentNullException.ThrowIfNull(document);
+        JsonElement root = document.RootElement;
+        long inUse = GetLong(root, "inuse");
         if (inUse != 0)
         {
             return inUse;
         }
 
-        var camelCaseInUse = GetLong(root, "inUse");
+        long camelCaseInUse = GetLong(root, "inUse");
         if (camelCaseInUse != 0)
         {
             return camelCaseInUse;
         }
 
-        var memory = GetLong(root, "memory");
+        long memory = GetLong(root, "memory");
         return memory != 0 ? memory : GetLong(root, "bytes");
     }
 
     public static bool? ParseTunEnabled(JsonDocument document)
     {
-        if (!document.RootElement.TryGetProperty("tun", out var tun)
+        ArgumentNullException.ThrowIfNull(document);
+        if (!document.RootElement.TryGetProperty("tun", out JsonElement tun)
             || tun.ValueKind != JsonValueKind.Object
-            || !tun.TryGetProperty("enable", out var enable))
+            || !tun.TryGetProperty("enable", out JsonElement enable))
         {
             return null;
         }
@@ -142,25 +165,32 @@ public static class MihomoDataParser
         return enable.ValueKind is JsonValueKind.True or JsonValueKind.False ? enable.GetBoolean() : null;
     }
 
-    public static bool? ParseAllowLan(JsonDocument document) =>
-        GetBoolean(document.RootElement, "allow-lan", "allowLan");
+    public static bool? ParseAllowLan(JsonDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return GetBoolean(document.RootElement, "allow-lan", "allowLan");
+    }
 
-    public static bool? ParseIpv6(JsonDocument document) =>
-        GetBoolean(document.RootElement, "ipv6");
+    public static bool? ParseIpv6(JsonDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return GetBoolean(document.RootElement, "ipv6");
+    }
 
     public static IReadOnlyList<ConnectionInfo> ParseConnections(JsonDocument document)
     {
-        if (!document.RootElement.TryGetProperty("connections", out var connections)
+        ArgumentNullException.ThrowIfNull(document);
+        if (!document.RootElement.TryGetProperty("connections", out JsonElement connections)
             || connections.ValueKind != JsonValueKind.Array)
         {
             return [];
         }
 
-        var result = new List<ConnectionInfo>();
-        foreach (var connection in connections.EnumerateArray().Take(MaxConnectionEntries))
+        List<ConnectionInfo> result = new List<ConnectionInfo>();
+        foreach (JsonElement connection in connections.EnumerateArray().Take(MaxConnectionEntries))
         {
-            var metadata = connection.TryGetProperty("metadata", out var metadataElement) ? metadataElement : default;
-            var chains = GetStringArray(connection, "chains");
+            JsonElement metadata = connection.TryGetProperty("metadata", out JsonElement metadataElement) ? metadataElement : default;
+            string[] chains = GetStringArray(connection, "chains");
             result.Add(new ConnectionInfo(
                 GetString(connection, "id") ?? Guid.NewGuid().ToString("N"),
                 GetString(metadata, "network") ?? "-",
@@ -179,14 +209,15 @@ public static class MihomoDataParser
 
     public static IReadOnlyList<RuleInfo> ParseRules(JsonDocument document)
     {
-        if (!document.RootElement.TryGetProperty("rules", out var rules)
+        ArgumentNullException.ThrowIfNull(document);
+        if (!document.RootElement.TryGetProperty("rules", out JsonElement rules)
             || rules.ValueKind != JsonValueKind.Array)
         {
             return [];
         }
 
-        var result = new List<RuleInfo>();
-        foreach (var rule in rules.EnumerateArray().Take(MaxRuleEntries))
+        List<RuleInfo> result = new List<RuleInfo>();
+        foreach (JsonElement rule in rules.EnumerateArray().Take(MaxRuleEntries))
         {
             if (rule.ValueKind == JsonValueKind.Object)
             {
@@ -203,9 +234,9 @@ public static class MihomoDataParser
                 continue;
             }
 
-            var type = GetText(rule[0]) ?? "-";
-            var payload = GetText(rule[1]) ?? "-";
-            var proxy = GetText(rule[2]) ?? "-";
+            string type = GetText(rule[0]) ?? "-";
+            string payload = GetText(rule[1]) ?? "-";
+            string proxy = GetText(rule[2]) ?? "-";
             result.Add(new RuleInfo(type, payload, proxy, GetInt(rule, 3)));
         }
 
@@ -214,16 +245,18 @@ public static class MihomoDataParser
 
     public static IReadOnlyList<ProviderStatus> ParseProviders(JsonDocument document, string fallbackType)
     {
-        if (!document.RootElement.TryGetProperty("providers", out var providers)
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(fallbackType);
+        if (!document.RootElement.TryGetProperty("providers", out JsonElement providers)
             || providers.ValueKind != JsonValueKind.Object)
         {
             return [];
         }
 
-        var result = new List<ProviderStatus>();
-        foreach (var property in providers.EnumerateObject().Take(MaxProviderEntries))
+        List<ProviderStatus> result = new List<ProviderStatus>();
+        foreach (JsonProperty property in providers.EnumerateObject().Take(MaxProviderEntries))
         {
-            var value = property.Value;
+            JsonElement value = property.Value;
             result.Add(new ProviderStatus(
                 property.Name,
                 fallbackType,
@@ -238,17 +271,19 @@ public static class MihomoDataParser
 
     public static IReadOnlyList<LogEntry> ParseLogs(JsonDocument document, string source)
     {
-        var result = new List<LogEntry>();
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(source);
+        List<LogEntry> result = new List<LogEntry>();
         if (document.RootElement.ValueKind == JsonValueKind.Array)
         {
-            foreach (var item in document.RootElement.EnumerateArray())
+            foreach (JsonElement item in document.RootElement.EnumerateArray())
             {
                 result.Add(ParseLog(item, source));
             }
         }
-        else if (document.RootElement.TryGetProperty("logs", out var logs) && logs.ValueKind == JsonValueKind.Array)
+        else if (document.RootElement.TryGetProperty("logs", out JsonElement logs) && logs.ValueKind == JsonValueKind.Array)
         {
-            foreach (var item in logs.EnumerateArray())
+            foreach (JsonElement item in logs.EnumerateArray())
             {
                 result.Add(ParseLog(item, source));
             }
@@ -263,9 +298,9 @@ public static class MihomoDataParser
 
     private static LogEntry ParseLog(JsonElement item, string source)
     {
-        var timestamp = ParseTimestamp(GetString(item, "time"));
-        var level = GetString(item, "type") ?? GetString(item, "level") ?? "info";
-        var message = GetString(item, "payload") ?? GetString(item, "message") ?? item.ToString();
+        DateTimeOffset timestamp = ParseTimestamp(GetString(item, "time"));
+        string level = GetString(item, "type") ?? GetString(item, "level") ?? "info";
+        string message = GetString(item, "payload") ?? GetString(item, "message") ?? item.ToString();
         return new LogEntry(timestamp, source, level, message);
     }
 
@@ -277,13 +312,13 @@ public static class MihomoDataParser
         || item.TryGetProperty("message", out _);
 
     private static DateTimeOffset ParseTimestamp(string? value) =>
-        DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var timestamp)
+        DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out DateTimeOffset timestamp)
             ? timestamp
             : DateTimeOffset.UtcNow;
 
     private static string? GetString(JsonElement element, string property)
     {
-        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var value))
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out JsonElement value))
         {
             return null;
         }
@@ -298,9 +333,9 @@ public static class MihomoDataParser
             return null;
         }
 
-        foreach (var property in properties)
+        foreach (string property in properties)
         {
-            if (element.TryGetProperty(property, out var value)
+            if (element.TryGetProperty(property, out JsonElement value)
                 && value.ValueKind is JsonValueKind.True or JsonValueKind.False)
             {
                 return value.GetBoolean();
@@ -321,7 +356,7 @@ public static class MihomoDataParser
     private static string[] GetStringArray(JsonElement element, string property)
     {
         if (element.ValueKind != JsonValueKind.Object
-            || !element.TryGetProperty(property, out var value)
+            || !element.TryGetProperty(property, out JsonElement value)
             || value.ValueKind != JsonValueKind.Array)
         {
             return [];
@@ -336,41 +371,41 @@ public static class MihomoDataParser
     }
 
     private static long GetLong(JsonElement element, string property) =>
-        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out var value) && value.TryGetInt64(out var number)
+        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out JsonElement value) && value.TryGetInt64(out long number)
             ? number
             : 0;
 
     private static long? GetLongOrNull(JsonElement element, string property) =>
         element.ValueKind == JsonValueKind.Object
-            && element.TryGetProperty(property, out var value)
-            && value.TryGetInt64(out var number)
+            && element.TryGetProperty(property, out JsonElement value)
+            && value.TryGetInt64(out long number)
                 ? number
                 : null;
 
     private static double? GetDoubleOrNull(JsonElement element, string property) =>
         element.ValueKind == JsonValueKind.Object
-            && element.TryGetProperty(property, out var value)
-            && value.TryGetDouble(out var number)
+            && element.TryGetProperty(property, out JsonElement value)
+            && value.TryGetDouble(out double number)
                 ? number
                 : null;
 
     private static int GetInt(JsonElement element, string property) =>
-        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out var value) && value.TryGetInt32(out var number)
+        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out JsonElement value) && value.TryGetInt32(out int number)
             ? number
             : 0;
 
     private static int GetInt(JsonElement element, int index) =>
-        element.ValueKind == JsonValueKind.Array && element.GetArrayLength() > index && element[index].TryGetInt32(out var number)
+        element.ValueKind == JsonValueKind.Array && element.GetArrayLength() > index && element[index].TryGetInt32(out int number)
             ? number
             : 0;
 
     private static int GetCount(JsonElement element, string property)
     {
-        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var value))
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out JsonElement value))
         {
             return 0;
         }
 
-        return value.ValueKind == JsonValueKind.Array ? value.GetArrayLength() : value.TryGetInt32(out var count) ? count : 0;
+        return value.ValueKind == JsonValueKind.Array ? value.GetArrayLength() : value.TryGetInt32(out int count) ? count : 0;
     }
 }

@@ -36,7 +36,7 @@ internal static class WindowsServiceManager
 
     public static void InstallOrUpdate(string serviceExecutablePath, string userSid)
     {
-        var fullServicePath = Path.GetFullPath(serviceExecutablePath);
+        string fullServicePath = Path.GetFullPath(serviceExecutablePath);
         SetupLog.Write($"准备安装服务，路径：{fullServicePath}");
         if (!File.Exists(fullServicePath)
             || !string.Equals(Path.GetFileName(fullServicePath), ServiceExecutableName, StringComparison.OrdinalIgnoreCase))
@@ -53,10 +53,10 @@ internal static class WindowsServiceManager
             throw new InvalidOperationException("当前 Windows 用户标识无效。", exception);
         }
 
-        var managerHandle = OpenManager(ScManagerConnect | ScManagerCreateService);
+        nint managerHandle = OpenManager(ScManagerConnect | ScManagerCreateService);
         try
         {
-            var existingPath = GetExistingBinaryPath(managerHandle);
+            string? existingPath = GetExistingBinaryPath(managerHandle);
             SetupLog.Write($"现有服务路径：{existingPath ?? "不存在"}");
             if (existingPath is not null)
             {
@@ -69,7 +69,7 @@ internal static class WindowsServiceManager
                 SetupLog.Write("旧服务删除完成。");
             }
 
-            var serviceHandle = CreateService(
+            nint serviceHandle = CreateService(
                 managerHandle,
                 ServiceName,
                 "ClashTray Service",
@@ -94,7 +94,7 @@ internal static class WindowsServiceManager
                 SetupLog.Write("新服务创建完成，准备启动。");
                 if (!StartService(serviceHandle, 0, IntPtr.Zero))
                 {
-                    var error = Marshal.GetLastWin32Error();
+                    int error = Marshal.GetLastWin32Error();
                     if (error != ErrorServiceAlreadyRunning)
                     {
                         ThrowWin32("启动 ClashTray 服务失败", error);
@@ -118,16 +118,16 @@ internal static class WindowsServiceManager
     public static void RemoveOwnedService()
     {
         SetupLog.Write("准备删除已有 ClashTray 服务。");
-        var managerHandle = OpenManager(ScManagerConnect);
+        nint managerHandle = OpenManager(ScManagerConnect);
         try
         {
-            var serviceHandle = OpenService(
+            nint serviceHandle = OpenService(
                 managerHandle,
                 ServiceName,
                 ServiceQueryConfig | ServiceQueryStatus | ServiceStop | Delete);
             if (serviceHandle == IntPtr.Zero)
             {
-                var error = Marshal.GetLastWin32Error();
+                int error = Marshal.GetLastWin32Error();
                 if (error == ErrorServiceDoesNotExist)
                 {
                     SetupLog.Write("已有 ClashTray 服务不存在，无需删除。");
@@ -139,7 +139,7 @@ internal static class WindowsServiceManager
 
             try
             {
-                var binaryPath = GetBinaryPath(serviceHandle);
+                string? binaryPath = GetBinaryPath(serviceHandle);
                 if (binaryPath is not null && !IsOwnedServicePath(binaryPath))
                 {
                     throw new InvalidOperationException($"系统中已有同名服务，但路径不是 ClashTray 服务：{binaryPath}");
@@ -148,7 +148,7 @@ internal static class WindowsServiceManager
                 StopService(serviceHandle);
                 if (!DeleteService(serviceHandle))
                 {
-                    var error = Marshal.GetLastWin32Error();
+                    int error = Marshal.GetLastWin32Error();
                     if (error != ErrorServiceMarkedForDelete)
                     {
                         ThrowWin32("删除 ClashTray 服务失败", error);
@@ -172,10 +172,10 @@ internal static class WindowsServiceManager
     private static void RemoveExisting(IntPtr managerHandle)
     {
         SetupLog.Write("安装阶段发现已有服务，准备删除并重建。");
-        var serviceHandle = OpenService(managerHandle, ServiceName, ServiceQueryStatus | ServiceStop | Delete);
+        nint serviceHandle = OpenService(managerHandle, ServiceName, ServiceQueryStatus | ServiceStop | Delete);
         if (serviceHandle == IntPtr.Zero)
         {
-            var error = Marshal.GetLastWin32Error();
+            int error = Marshal.GetLastWin32Error();
             if (error == ErrorServiceDoesNotExist)
             {
                 return;
@@ -189,7 +189,7 @@ internal static class WindowsServiceManager
             StopService(serviceHandle);
             if (!DeleteService(serviceHandle))
             {
-                var error = Marshal.GetLastWin32Error();
+                int error = Marshal.GetLastWin32Error();
                 if (error != ErrorServiceMarkedForDelete)
                 {
                     ThrowWin32("删除旧 ClashTray 服务失败", error);
@@ -206,7 +206,7 @@ internal static class WindowsServiceManager
 
     private static IntPtr OpenManager(uint access)
     {
-        var handle = OpenSCManager(null, null, access);
+        nint handle = OpenSCManager(null, null, access);
         if (handle == IntPtr.Zero)
         {
             ThrowLastWin32("打开 Windows 服务控制管理器失败");
@@ -217,10 +217,10 @@ internal static class WindowsServiceManager
 
     private static string? GetExistingBinaryPath(IntPtr managerHandle)
     {
-        var serviceHandle = OpenService(managerHandle, ServiceName, ServiceQueryConfig);
+        nint serviceHandle = OpenService(managerHandle, ServiceName, ServiceQueryConfig);
         if (serviceHandle == IntPtr.Zero)
         {
-            var error = Marshal.GetLastWin32Error();
+            int error = Marshal.GetLastWin32Error();
             if (error == ErrorServiceDoesNotExist)
             {
                 return null;
@@ -247,8 +247,8 @@ internal static class WindowsServiceManager
 
     private static string? GetBinaryPath(IntPtr serviceHandle)
     {
-        QueryServiceConfig(serviceHandle, IntPtr.Zero, 0, out var bytesNeeded);
-        var firstError = Marshal.GetLastWin32Error();
+        QueryServiceConfig(serviceHandle, IntPtr.Zero, 0, out int bytesNeeded);
+        int firstError = Marshal.GetLastWin32Error();
         if (bytesNeeded <= 0 && firstError != ErrorInsufficientBuffer)
         {
             ThrowWin32("读取 ClashTray 服务配置失败", firstError);
@@ -259,7 +259,7 @@ internal static class WindowsServiceManager
             throw new InvalidOperationException("Windows 服务配置大小无效。");
         }
 
-        var buffer = Marshal.AllocHGlobal(bytesNeeded);
+        nint buffer = Marshal.AllocHGlobal(bytesNeeded);
         try
         {
             if (!QueryServiceConfig(serviceHandle, buffer, bytesNeeded, out _))
@@ -267,7 +267,7 @@ internal static class WindowsServiceManager
                 ThrowLastWin32("读取 ClashTray 服务路径失败");
             }
 
-            var config = Marshal.PtrToStructure<QueryServiceConfigData>(buffer);
+            QueryServiceConfigData config = Marshal.PtrToStructure<QueryServiceConfigData>(buffer);
             return config.lpBinaryPathName == IntPtr.Zero
                 ? null
                 : Marshal.PtrToStringUni(config.lpBinaryPathName);
@@ -280,15 +280,15 @@ internal static class WindowsServiceManager
 
     private static bool IsOwnedServicePath(string path)
     {
-        var candidate = path.Trim();
+        string candidate = path.Trim();
         if (candidate.StartsWith('"'))
         {
-            var closingQuote = candidate.IndexOf('"', 1);
+            int closingQuote = candidate.IndexOf('"', 1);
             candidate = closingQuote > 1 ? candidate[1..closingQuote] : candidate.Trim('"');
         }
         else
         {
-            var executableMarker = candidate.IndexOf(ServiceExecutableName, StringComparison.OrdinalIgnoreCase);
+            int executableMarker = candidate.IndexOf(ServiceExecutableName, StringComparison.OrdinalIgnoreCase);
             if (executableMarker >= 0)
             {
                 candidate = candidate[..(executableMarker + ServiceExecutableName.Length)];
@@ -301,7 +301,7 @@ internal static class WindowsServiceManager
 
     private static void StopService(IntPtr serviceHandle)
     {
-        if (!QueryServiceStatus(serviceHandle, out var status))
+        if (!QueryServiceStatus(serviceHandle, out ServiceStatus status))
         {
             ThrowLastWin32("读取 ClashTray 服务状态失败");
         }
@@ -312,9 +312,9 @@ internal static class WindowsServiceManager
         }
 
         if (status.dwCurrentState != ServiceStopPending
-            && !ControlService(serviceHandle, ServiceControlStop, out status))
+            && !ControlService(serviceHandle, ServiceControlStop, out _))
         {
-            var error = Marshal.GetLastWin32Error();
+            int error = Marshal.GetLastWin32Error();
             if (error != ErrorServiceNotActive)
             {
                 ThrowWin32("停止 ClashTray 服务失败", error);
@@ -326,10 +326,10 @@ internal static class WindowsServiceManager
 
     private static void WaitForState(IntPtr serviceHandle, uint expectedState, TimeSpan timeout)
     {
-        var deadline = Stopwatch.GetTimestamp() + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+        long deadline = Stopwatch.GetTimestamp() + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
         while (Stopwatch.GetTimestamp() < deadline)
         {
-            if (!QueryServiceStatus(serviceHandle, out var status))
+            if (!QueryServiceStatus(serviceHandle, out ServiceStatus status))
             {
                 ThrowLastWin32("读取 ClashTray 服务状态失败");
             }
@@ -359,13 +359,13 @@ internal static class WindowsServiceManager
 
     private static void WaitForRemoval(IntPtr managerHandle)
     {
-        var deadline = Stopwatch.GetTimestamp() + (long)(10 * Stopwatch.Frequency);
+        long deadline = Stopwatch.GetTimestamp() + (long)(10 * Stopwatch.Frequency);
         while (Stopwatch.GetTimestamp() < deadline)
         {
-            var handle = OpenService(managerHandle, ServiceName, ServiceQueryStatus);
+            nint handle = OpenService(managerHandle, ServiceName, ServiceQueryStatus);
             if (handle == IntPtr.Zero)
             {
-                var error = Marshal.GetLastWin32Error();
+                int error = Marshal.GetLastWin32Error();
                 if (error == ErrorServiceDoesNotExist)
                 {
                     return;
@@ -392,13 +392,13 @@ internal static class WindowsServiceManager
 
     private static void SetDescription(IntPtr serviceHandle, string description)
     {
-        var descriptionPointer = Marshal.StringToHGlobalUni(description);
+        nint descriptionPointer = Marshal.StringToHGlobalUni(description);
         try
         {
-            var data = new ServiceDescription { lpDescription = descriptionPointer };
+            ServiceDescription data = new ServiceDescription { lpDescription = descriptionPointer };
             if (!ChangeServiceConfig2(serviceHandle, ServiceConfigDescription, ref data))
             {
-                var error = Marshal.GetLastWin32Error();
+                int error = Marshal.GetLastWin32Error();
                 if (error is not (5 or 87))
                 {
                     ThrowWin32("设置 ClashTray 服务描述失败", error);
@@ -415,12 +415,15 @@ internal static class WindowsServiceManager
 
     private static void ThrowWin32(string message, int error) => throw new Win32Exception(error, message);
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr OpenSCManager(string? machineName, string? databaseName, uint desiredAccess);
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr OpenService(IntPtr managerHandle, string serviceName, uint desiredAccess);
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateService(
         IntPtr managerHandle,
@@ -437,24 +440,31 @@ internal static class WindowsServiceManager
         string? serviceStartName,
         string? password);
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool CloseServiceHandle(IntPtr serviceHandle);
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("advapi32.dll", EntryPoint = "QueryServiceConfigW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool QueryServiceConfig(IntPtr serviceHandle, IntPtr buffer, int bufferSize, out int bytesNeeded);
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool QueryServiceStatus(IntPtr serviceHandle, out ServiceStatus status);
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool ControlService(IntPtr serviceHandle, uint controlCode, out ServiceStatus status);
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool StartService(IntPtr serviceHandle, int argumentCount, IntPtr arguments);
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool DeleteService(IntPtr serviceHandle);
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool ChangeServiceConfig2(IntPtr serviceHandle, uint infoLevel, ref ServiceDescription description);
 

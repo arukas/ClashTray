@@ -42,7 +42,7 @@ internal sealed class TrayIconService : IDisposable
             return;
         }
 
-        var extendedStyle = NativeMethods.GetWindowLongPtr(_windowHandle, NativeMethods.GWL_EXSTYLE).ToInt64();
+        long extendedStyle = NativeMethods.GetWindowLongPtr(_windowHandle, NativeMethods.GWL_EXSTYLE).ToInt64();
         extendedStyle |= NativeMethods.WS_EX_TOOLWINDOW;
         extendedStyle &= ~NativeMethods.WS_EX_APPWINDOW;
         NativeMethods.SetWindowLongPtr(_windowHandle, NativeMethods.GWL_EXSTYLE, new IntPtr(extendedStyle));
@@ -78,10 +78,22 @@ internal sealed class TrayIconService : IDisposable
 
     public void SetTheme(string assetTheme)
     {
-        if (assetTheme is not ("Light" or "Dark")) throw new ArgumentOutOfRangeException(nameof(assetTheme));
-        if (_assetTheme == assetTheme) return;
+        if (assetTheme is not ("Light" or "Dark"))
+        {
+            throw new ArgumentOutOfRangeException(nameof(assetTheme));
+        }
+
+        if (_assetTheme == assetTheme)
+        {
+            return;
+        }
+
         _assetTheme = assetTheme;
-        if (!_installed) return;
+        if (!_installed)
+        {
+            return;
+        }
+
         ReleaseIcon();
         _data.IconHandle = LoadTrayIcon();
         NativeMethods.Shell_NotifyIcon(NativeMethods.NIM_MODIFY, ref _data);
@@ -89,7 +101,7 @@ internal sealed class TrayIconService : IDisposable
 
     public void SetState(TrayState state)
     {
-        var changed = State != state;
+        bool changed = State != state;
         State = state;
         if (!_installed)
         {
@@ -115,7 +127,7 @@ internal sealed class TrayIconService : IDisposable
 
     public bool TryGetIconRect(out NativeMethods.Rect rect)
     {
-        var identifier = new NativeMethods.NotifyIconIdentifier
+        NativeMethods.NotifyIconIdentifier identifier = new NativeMethods.NotifyIconIdentifier
         {
             Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.NotifyIconIdentifier>(),
             WindowHandle = _windowHandle,
@@ -127,7 +139,7 @@ internal sealed class TrayIconService : IDisposable
 
     public void ShowContextMenu(IReadOnlyList<(uint Id, string Text)> items)
     {
-        var menu = NativeMethods.CreatePopupMenu();
+        nint menu = NativeMethods.CreatePopupMenu();
         if (menu == IntPtr.Zero)
         {
             return;
@@ -135,7 +147,7 @@ internal sealed class TrayIconService : IDisposable
 
         try
         {
-            foreach (var item in items)
+            foreach ((uint Id, string Text) item in items)
             {
                 if (item.Id == 0)
                 {
@@ -147,9 +159,9 @@ internal sealed class TrayIconService : IDisposable
                 }
             }
 
-            NativeMethods.GetCursorPos(out var point);
+            NativeMethods.GetCursorPos(out NativeMethods.Point point);
             NativeMethods.SetForegroundWindow(_windowHandle);
-            var selected = NativeMethods.TrackPopupMenu(
+            uint selected = NativeMethods.TrackPopupMenu(
                 menu,
                 NativeMethods.TPM_RIGHTBUTTON | NativeMethods.TPM_RETURNCMD,
                 point.X,
@@ -197,8 +209,11 @@ internal sealed class TrayIconService : IDisposable
     {
         if (message == CallbackMessage)
         {
-            var interaction = TrayCallback.Decode(lParam.ToInt64(), _version4);
-            if (interaction is not null) _interactionHandler(interaction.Value);
+            TrayInteraction? interaction = TrayCallback.Decode(lParam.ToInt64(), _version4);
+            if (interaction is not null)
+            {
+                _interactionHandler(interaction.Value);
+            }
         }
         else if (message == _taskbarCreatedMessage)
         {
@@ -218,8 +233,8 @@ internal sealed class TrayIconService : IDisposable
 
     private IntPtr LoadTrayIcon()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "Assets", "Themes", _assetTheme, "logo.ico");
-        var handle = NativeMethods.LoadImage(
+        string path = Path.Combine(AppContext.BaseDirectory, "Assets", "Themes", _assetTheme, "logo.ico");
+        nint handle = NativeMethods.LoadImage(
             IntPtr.Zero,
             path,
             NativeMethods.IMAGE_ICON,

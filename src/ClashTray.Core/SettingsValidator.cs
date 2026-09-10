@@ -9,7 +9,7 @@ internal static class SettingsValidator
 
     public static void Validate(AppSettings settings)
     {
-        var ports = new[] { settings.HttpPort, settings.SocksPort, settings.MixedPort, settings.ControllerPort };
+        int[] ports = new[] { settings.HttpPort, settings.SocksPort, settings.MixedPort, settings.ControllerPort };
         if (ports.Any(port => port is < 1 or > 65535))
         {
             throw new ArgumentOutOfRangeException(nameof(settings), "端口必须在 1 到 65535 之间。");
@@ -43,8 +43,8 @@ internal static class SettingsValidator
 
         if (settings.BypassList is null
             || settings.BypassList.Length > 4096
-            || settings.BypassList.Contains('\r')
-            || settings.BypassList.Contains('\n'))
+            || settings.BypassList.Contains('\r', StringComparison.Ordinal)
+            || settings.BypassList.Contains('\n', StringComparison.Ordinal))
         {
             throw new ArgumentException("系统代理绕过列表包含无效内容。", nameof(settings));
         }

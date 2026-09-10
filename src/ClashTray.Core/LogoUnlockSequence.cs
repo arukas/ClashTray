@@ -12,11 +12,18 @@ public sealed class LogoUnlockSequence
     {
         if (_clicks > 0 && (timestampMilliseconds < _lastClick
             || timestampMilliseconds - _lastClick > MaximumGapMilliseconds))
+        {
             Reset();
+        }
+
         _lastClick = timestampMilliseconds;
         _clicks++;
-        var remaining = RequiredClicks - _clicks;
-        if (remaining == 0) Reset();
+        int remaining = RequiredClicks - _clicks;
+        if (remaining == 0)
+        {
+            Reset();
+        }
+
         return remaining;
     }
 

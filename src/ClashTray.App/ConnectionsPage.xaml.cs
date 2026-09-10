@@ -33,9 +33,9 @@ public sealed partial class ConnectionsPage : UserControl
             return;
         }
 
-        var search = SearchBox.Text.Trim();
-        var sort = (SortBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
-        var filtered = _connections.Where(connection => string.IsNullOrWhiteSpace(search)
+        string search = SearchBox.Text.Trim();
+        string? sort = (SortBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
+        IEnumerable<ConnectionInfo> filtered = _connections.Where(connection => string.IsNullOrWhiteSpace(search)
             || $"{connection.Source} {connection.Destination} {connection.Rule} {connection.RulePayload} {connection.Chain}".Contains(search, StringComparison.OrdinalIgnoreCase));
         filtered = sort switch
         {
@@ -44,7 +44,7 @@ public sealed partial class ConnectionsPage : UserControl
             _ => filtered.OrderByDescending(connection => connection.StartTime)
         };
         ConnectionsListView.Items.Clear();
-        foreach (var connection in filtered)
+        foreach (ConnectionInfo connection in filtered)
         {
             ConnectionsListView.Items.Add(new ListViewItem
             {

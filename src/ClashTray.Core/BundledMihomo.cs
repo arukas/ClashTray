@@ -11,9 +11,9 @@ public static class BundledMihomo
 
     private static string ReadVersion()
     {
-        using var stream = typeof(BundledMihomo).Assembly.GetManifestResourceStream("ClashTray.MihomoRelease.json")
+        using Stream stream = typeof(BundledMihomo).Assembly.GetManifestResourceStream("ClashTray.MihomoRelease.json")
             ?? throw new InvalidOperationException("Missing bundled Mihomo release metadata.");
-        using var document = JsonDocument.Parse(stream);
+        using JsonDocument document = JsonDocument.Parse(stream);
         return document.RootElement.GetProperty("version").GetString()
             ?? throw new InvalidOperationException("Missing bundled Mihomo version.");
     }

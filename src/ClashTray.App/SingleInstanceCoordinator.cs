@@ -22,14 +22,14 @@ internal sealed class SingleInstanceCoordinator : IDisposable
     public static bool TryAcquire(out SingleInstanceCoordinator? coordinator, bool diagnostic = false)
     {
         coordinator = null;
-        var suffix = diagnostic ? ".Diagnostic" : string.Empty;
-        var mutex = new Mutex(initiallyOwned: true, MutexName + suffix, out var createdNew);
+        string suffix = diagnostic ? ".Diagnostic" : string.Empty;
+        Mutex mutex = new Mutex(initiallyOwned: true, MutexName + suffix, out bool createdNew);
         if (!createdNew)
         {
             mutex.Dispose();
             try
             {
-                using var activationEvent = EventWaitHandle.OpenExisting(ActivationEventName + suffix);
+                using EventWaitHandle activationEvent = EventWaitHandle.OpenExisting(ActivationEventName + suffix);
                 activationEvent.Set();
             }
             catch (WaitHandleCannotBeOpenedException)
@@ -39,7 +39,7 @@ internal sealed class SingleInstanceCoordinator : IDisposable
             return false;
         }
 
-        var activation = new EventWaitHandle(false, EventResetMode.AutoReset, ActivationEventName + suffix);
+        EventWaitHandle activation = new EventWaitHandle(false, EventResetMode.AutoReset, ActivationEventName + suffix);
         coordinator = new SingleInstanceCoordinator(mutex, activation);
         return true;
     }

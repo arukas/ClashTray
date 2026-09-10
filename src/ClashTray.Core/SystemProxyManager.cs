@@ -22,8 +22,8 @@ public sealed class SystemProxyManager
 
     public SystemProxyState DetectState()
     {
-        var current = ReadCurrentState();
-        var ownership = ReadOwnership();
+        ProxyRegistryState current = ReadCurrentState();
+        ProxyOwnershipState? ownership = ReadOwnership();
         if (ownership is not null && IsOwnedByClashTray(current, ownership))
         {
             State = SystemProxyState.On;
@@ -43,13 +43,13 @@ public sealed class SystemProxyManager
     public async Task EnableAsync(int port, string bypassList, CancellationToken cancellationToken = default)
     {
         State = SystemProxyState.Enabling;
-        var current = default(ProxyRegistryState);
-        var registryChanged = false;
-        var backupCreated = false;
+        ProxyRegistryState? current = default(ProxyRegistryState);
+        bool registryChanged = false;
+        bool backupCreated = false;
         try
         {
             current = ReadCurrentState();
-            var existingOwnership = ReadOwnership();
+            ProxyOwnershipState? existingOwnership = ReadOwnership();
             if (existingOwnership is not null && !IsOwnedByClashTray(current, existingOwnership))
             {
                 State = SystemProxyState.RestoreRequired;
@@ -62,7 +62,7 @@ public sealed class SystemProxyManager
                 backupCreated = true;
             }
 
-            using var key = Registry.CurrentUser.OpenSubKey(InternetSettingsPath, writable: true)
+            using RegistryKey key = Registry.CurrentUser.OpenSubKey(InternetSettingsPath, writable: true)
                 ?? throw new InvalidOperationException("Windows Internet Settings registry key is unavailable.");
             registryChanged = true;
             key.SetValue("ProxyEnable", 1, RegistryValueKind.DWord);
@@ -78,7 +78,7 @@ public sealed class SystemProxyManager
         }
         catch
         {
-            var restored = !registryChanged;
+            bool restored = !registryChanged;
             if (registryChanged && current is not null)
             {
                 try
@@ -112,11 +112,11 @@ public sealed class SystemProxyManager
         State = SystemProxyState.Disabling;
         try
         {
-            var current = ReadCurrentState();
-            var ownership = ReadOwnership();
+            ProxyRegistryState current = ReadCurrentState();
+            ProxyOwnershipState? ownership = ReadOwnership();
             if (File.Exists(_paths.ProxyBackupFile))
             {
-                var backup = JsonSerializer.Deserialize<ProxyRegistryState>(await File.ReadAllTextAsync(_paths.ProxyBackupFile, cancellationToken), _jsonOptions);
+                ProxyRegistryState? backup = JsonSerializer.Deserialize<ProxyRegistryState>(await File.ReadAllTextAsync(_paths.ProxyBackupFile, cancellationToken), _jsonOptions);
                 if (backup is not null && ownership is not null && IsOwnedByClashTray(current, ownership))
                 {
                     WriteState(backup);
@@ -148,7 +148,7 @@ public sealed class SystemProxyManager
 
     public static ProxyRegistryState ReadCurrentState()
     {
-        using var key = Registry.CurrentUser.OpenSubKey(InternetSettingsPath, writable: false)
+        using RegistryKey key = Registry.CurrentUser.OpenSubKey(InternetSettingsPath, writable: false)
             ?? throw new InvalidOperationException("Windows Internet Settings registry key is unavailable.");
         return new ProxyRegistryState(
             GetValue(key, "ProxyEnable"),
@@ -160,7 +160,7 @@ public sealed class SystemProxyManager
 
     private static int ReadDword(string name)
     {
-        using var key = Registry.CurrentUser.OpenSubKey(InternetSettingsPath, writable: false);
+        using RegistryKey? key = Registry.CurrentUser.OpenSubKey(InternetSettingsPath, writable: false);
         return key is null ? 0 : GetValue(key, name);
     }
 
@@ -169,7 +169,7 @@ public sealed class SystemProxyManager
 
     private static void WriteState(ProxyRegistryState state)
     {
-        using var key = Registry.CurrentUser.OpenSubKey(InternetSettingsPath, writable: true)
+        using RegistryKey key = Registry.CurrentUser.OpenSubKey(InternetSettingsPath, writable: true)
             ?? throw new InvalidOperationException("Windows Internet Settings registry key is unavailable.");
         key.SetValue("ProxyEnable", state.ProxyEnable, RegistryValueKind.DWord);
         SetOrDelete(key, "ProxyServer", state.ProxyServer);
@@ -233,6 +233,7 @@ internal static class InternetSettingsNotifier
         InternetSetOption(IntPtr.Zero, InternetOptionRefresh, IntPtr.Zero, 0);
     }
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [System.Runtime.InteropServices.DllImport("wininet.dll", SetLastError = true)]
     private static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int dwBufferLength);
 }

@@ -31,10 +31,10 @@ public sealed partial class RulesPage : UserControl
             return;
         }
 
-        var search = SearchBox.Text.Trim();
-        var filter = (FilterBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
+        string search = SearchBox.Text.Trim();
+        string? filter = (FilterBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
         RulesListView.Items.Clear();
-        foreach (var rule in _rules.Where(rule =>
+        foreach (RuleInfo rule in _rules.Where(rule =>
                      (string.IsNullOrWhiteSpace(search) || $"{rule.Type} {rule.Payload} {rule.Proxy}".Contains(search, StringComparison.OrdinalIgnoreCase))
                      && (filter is "全部" or null
                          || filter == "域名" && rule.Type.Contains("DOMAIN", StringComparison.OrdinalIgnoreCase)

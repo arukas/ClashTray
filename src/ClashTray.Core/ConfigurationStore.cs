@@ -29,8 +29,8 @@ public sealed class ConfigurationStore
 
     public async Task<IReadOnlyList<ConfigurationProfile>> ListAsync(CancellationToken cancellationToken = default)
     {
-        var profiles = new List<ConfigurationProfile>();
-        foreach (var path in Directory.EnumerateFiles(_paths.ConfigurationsRoot, "*.json"))
+        List<ConfigurationProfile> profiles = new List<ConfigurationProfile>();
+        foreach (string path in Directory.EnumerateFiles(_paths.ConfigurationsRoot, "*.json"))
         {
             try
             {
@@ -39,8 +39,8 @@ public sealed class ConfigurationStore
                     continue;
                 }
 
-                await using var stream = File.OpenRead(path);
-                var profile = await JsonSerializer.DeserializeAsync<ConfigurationProfile>(stream, _jsonOptions, cancellationToken);
+                await using FileStream stream = File.OpenRead(path);
+                ConfigurationProfile? profile = await JsonSerializer.DeserializeAsync<ConfigurationProfile>(stream, _jsonOptions, cancellationToken);
                 if (profile is not null
                     && IsValidProfileId(profile.Id)
                     && IsConfigurationPathAllowed(profile.Path))
@@ -64,27 +64,28 @@ public sealed class ConfigurationStore
 
     public async Task<ConfigurationProfile> ImportLocalAsync(string sourcePath, string? displayName = null, CancellationToken cancellationToken = default)
     {
-        var extension = Path.GetExtension(sourcePath);
+        ArgumentNullException.ThrowIfNull(sourcePath);
+        string extension = Path.GetExtension(sourcePath);
         if (!SupportedExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("Only .yaml and .yml configuration files are supported.");
         }
 
-        await using var source = File.OpenRead(sourcePath);
-        var bytes = await ReadBytesWithLimitAsync(source, cancellationToken);
+        await using FileStream source = File.OpenRead(sourcePath);
+        byte[] bytes = await ReadBytesWithLimitAsync(source, cancellationToken);
         ValidateYaml(bytes);
-        var id = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()[..16];
-        var safeName = SanitizeName(displayName ?? Path.GetFileNameWithoutExtension(sourcePath));
-        var destination = Path.Combine(_paths.ConfigurationsRoot, $"{id}{extension.ToLowerInvariant()}");
+        string id = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()[..16];
+        string safeName = SanitizeName(displayName ?? Path.GetFileNameWithoutExtension(sourcePath));
+        string destination = Path.Combine(_paths.ConfigurationsRoot, $"{id}{extension.ToLowerInvariant()}");
         await AtomicFile.WriteBytesAsync(destination, bytes, cancellationToken);
-        var profile = new ConfigurationProfile(id, safeName, destination, null, DateTimeOffset.UtcNow, false);
+        ConfigurationProfile profile = new ConfigurationProfile(id, safeName, destination, null, DateTimeOffset.UtcNow, false);
         await SaveMetadataAsync(profile, cancellationToken);
         return profile;
     }
 
     public async Task<ConfigurationProfile> ImportSubscriptionAsync(Uri subscriptionUri, string? displayName = null, CancellationToken cancellationToken = default)
     {
-        var result = await ImportSubscriptionWithResultAsync(subscriptionUri, displayName, cancellationToken);
+        ConfigurationImportResult result = await ImportSubscriptionWithResultAsync(subscriptionUri, displayName, cancellationToken);
         return result.Profile;
     }
 
@@ -93,34 +94,35 @@ public sealed class ConfigurationStore
         string? displayName = null,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(subscriptionUri);
         if (!subscriptionUri.IsAbsoluteUri || subscriptionUri.Scheme is not ("https" or "http"))
         {
             throw new InvalidDataException("Subscription URL must be an absolute HTTP or HTTPS URL.");
         }
 
-        using var httpClient = _subscriptionHandler is null
+        using HttpClient httpClient = _subscriptionHandler is null
             ? new HttpClient()
             : new HttpClient(_subscriptionHandler, disposeHandler: false);
         httpClient.Timeout = TimeSpan.FromSeconds(30);
         httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(BundledMihomo.UserAgent);
-        using var response = await httpClient.GetAsync(subscriptionUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using HttpResponseMessage response = await httpClient.GetAsync(subscriptionUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
-        await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        var bytes = await ReadBytesWithLimitAsync(responseStream, cancellationToken);
+        await using Stream responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        byte[] bytes = await ReadBytesWithLimitAsync(responseStream, cancellationToken);
         ValidateYaml(bytes);
-        var contentHash = SHA256.HashData(bytes);
-        var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(subscriptionUri.ToString()))).ToLowerInvariant()[..16];
-        var safeName = SanitizeName(displayName ?? subscriptionUri.Host);
-        var destination = Path.Combine(_paths.ConfigurationsRoot, $"{id}.yaml");
-        var previousHash = await ComputeFileHashAsync(destination, cancellationToken);
-        var contentChanged = previousHash is null
+        byte[] contentHash = SHA256.HashData(bytes);
+        string id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(subscriptionUri.ToString()))).ToLowerInvariant()[..16];
+        string safeName = SanitizeName(displayName ?? subscriptionUri.Host);
+        string destination = Path.Combine(_paths.ConfigurationsRoot, $"{id}.yaml");
+        byte[]? previousHash = await ComputeFileHashAsync(destination, cancellationToken);
+        bool contentChanged = previousHash is null
             || !CryptographicOperations.FixedTimeEquals(previousHash, contentHash);
         if (contentChanged)
         {
             await AtomicFile.WriteBytesAsync(destination, bytes, cancellationToken);
         }
 
-        var profile = new ConfigurationProfile(id, safeName, destination, subscriptionUri, DateTimeOffset.UtcNow, false);
+        ConfigurationProfile profile = new ConfigurationProfile(id, safeName, destination, subscriptionUri, DateTimeOffset.UtcNow, false);
         await SaveMetadataAsync(profile, cancellationToken);
         return new ConfigurationImportResult(
             profile,
@@ -130,34 +132,36 @@ public sealed class ConfigurationStore
 
     public async Task<ConfigurationProfile> ReloadAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(profile);
         if (profile.SubscriptionUri is not null)
         {
             throw new InvalidOperationException("订阅配置应使用刷新操作。");
         }
 
-        var path = ValidateConfigurationPath(profile.Path);
+        string path = ValidateConfigurationPath(profile.Path);
         if (!File.Exists(path))
         {
             throw new FileNotFoundException("配置文件不存在。", path);
         }
 
-        await using var source = File.OpenRead(path);
-        var bytes = await ReadBytesWithLimitAsync(source, cancellationToken);
+        await using FileStream source = File.OpenRead(path);
+        byte[] bytes = await ReadBytesWithLimitAsync(source, cancellationToken);
         ValidateYaml(bytes);
-        var refreshed = profile with { LastRefreshed = DateTimeOffset.UtcNow };
+        ConfigurationProfile refreshed = profile with { LastRefreshed = DateTimeOffset.UtcNow };
         await SaveMetadataAsync(refreshed, cancellationToken);
         return refreshed;
     }
 
     public async Task DeleteAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
     {
-        var path = ValidateConfigurationPath(profile.Path);
+        ArgumentNullException.ThrowIfNull(profile);
+        string path = ValidateConfigurationPath(profile.Path);
         if (File.Exists(path))
         {
             File.Delete(path);
         }
 
-        var metadataPath = MetadataPath(profile.Id);
+        string metadataPath = MetadataPath(profile.Id);
         if (File.Exists(metadataPath))
         {
             File.Delete(metadataPath);
@@ -173,7 +177,7 @@ public sealed class ConfigurationStore
             throw new InvalidDataException("Configuration is empty.");
         }
 
-        var text = Encoding.UTF8.GetString(content);
+        string text = Encoding.UTF8.GetString(content);
         if (!text.Contains("mixed-port:", StringComparison.OrdinalIgnoreCase)
             && !text.Contains("port:", StringComparison.OrdinalIgnoreCase)
             && !text.Contains("proxies:", StringComparison.OrdinalIgnoreCase)
@@ -210,10 +214,10 @@ public sealed class ConfigurationStore
 
     private bool IsConfigurationPathAllowed(string path)
     {
-        var fullPath = Path.GetFullPath(path);
-        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_paths.ConfigurationsRoot))
+        string fullPath = Path.GetFullPath(path);
+        string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_paths.ConfigurationsRoot))
             + Path.DirectorySeparatorChar;
-        var directory = Path.GetDirectoryName(fullPath);
+        string? directory = Path.GetDirectoryName(fullPath);
         return directory is not null
             && directory.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(_paths.ConfigurationsRoot)), StringComparison.OrdinalIgnoreCase)
             && fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)
@@ -225,11 +229,11 @@ public sealed class ConfigurationStore
 
     private static async Task<byte[]> ReadBytesWithLimitAsync(Stream source, CancellationToken cancellationToken)
     {
-        using var buffer = new MemoryStream();
-        var chunk = new byte[64 * 1024];
+        using MemoryStream buffer = new MemoryStream();
+        byte[] chunk = new byte[64 * 1024];
         while (true)
         {
-            var count = await source.ReadAsync(chunk.AsMemory(), cancellationToken);
+            int count = await source.ReadAsync(chunk.AsMemory(), cancellationToken);
             if (count == 0)
             {
                 return buffer.ToArray();
@@ -246,7 +250,7 @@ public sealed class ConfigurationStore
 
     private static async Task<byte[]?> ComputeFileHashAsync(string path, CancellationToken cancellationToken)
     {
-        var fileInfo = new FileInfo(path);
+        FileInfo fileInfo = new FileInfo(path);
         if (!fileInfo.Exists || fileInfo.Length > MaxConfigurationBytes)
         {
             return null;
@@ -254,7 +258,7 @@ public sealed class ConfigurationStore
 
         try
         {
-            await using var stream = new FileStream(
+            await using FileStream stream = new FileStream(
                 path,
                 FileMode.Open,
                 FileAccess.Read,
@@ -275,8 +279,8 @@ public sealed class ConfigurationStore
 
     private static string SanitizeName(string name)
     {
-        var invalid = Path.GetInvalidFileNameChars();
-        var sanitized = new string(name.Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
+        char[] invalid = Path.GetInvalidFileNameChars();
+        string sanitized = new string(name.Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
         return string.IsNullOrWhiteSpace(sanitized) ? "未命名配置" : sanitized[..Math.Min(64, sanitized.Length)];
     }
 }

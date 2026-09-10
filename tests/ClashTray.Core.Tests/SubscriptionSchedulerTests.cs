@@ -1,5 +1,4 @@
 using ClashTray.Contracts;
-using ClashTray.Core;
 
 namespace ClashTray.Core.Tests;
 
@@ -9,18 +8,18 @@ public sealed class SubscriptionSchedulerTests
     [TestMethod]
     public async Task SchedulerReportsProfileFailureAndKeepsRunning()
     {
-        var failure = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var secondDelayStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var profile = new ConfigurationProfile(
+        TaskCompletionSource<Exception> failure = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> secondDelayStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ConfigurationProfile profile = new ConfigurationProfile(
             "subscription",
             "测试订阅",
             Path.Combine(Path.GetTempPath(), "subscription.yaml"),
             new Uri("https://example.com/subscription.yaml"),
             null,
             false);
-        var delayCount = 0;
+        int delayCount = 0;
 
-        await using var scheduler = new SubscriptionScheduler(
+        await using SubscriptionScheduler scheduler = new SubscriptionScheduler(
             _ => Task.FromResult<IReadOnlyList<ConfigurationProfile>>([profile]),
             (_, _) => Task.FromException(new HttpRequestException("订阅不可用")),
             () => new AppSettings(),
@@ -38,7 +37,7 @@ public sealed class SubscriptionSchedulerTests
             });
 
         scheduler.Start();
-        var exception = await failure.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Exception exception = await failure.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await secondDelayStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.AreEqual(typeof(HttpRequestException), exception.GetType());

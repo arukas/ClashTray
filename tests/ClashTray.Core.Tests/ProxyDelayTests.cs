@@ -1,7 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using ClashTray.Core;
+using ClashTray.Contracts;
 
 namespace ClashTray.Core.Tests;
 
@@ -11,7 +11,7 @@ public sealed class ProxyDelayTests
     [TestMethod]
     public void HistoryUsesLatestRecordAndPreservesUntestedAndFailedStates()
     {
-        using var document = JsonDocument.Parse("""
+        using JsonDocument document = JsonDocument.Parse("""
         {"proxies":{
           "Fresh":{"type":"Direct","history":[{"delay":91},{"delay":23}]},
           "Failed":{"type":"Direct","history":[{"delay":27},{"delay":0}]},
@@ -24,7 +24,7 @@ public sealed class ProxyDelayTests
           "Invalid":false
         }}
         """);
-        var parsed = MihomoDataParser.ParseProxies(document);
+        (IReadOnlyList<ProxyGroup> Groups, IReadOnlyList<ProxyNode> Nodes) parsed = MihomoDataParser.ParseProxies(document);
         Assert.AreEqual("23", parsed.Nodes.Single(node => node.Name == "Fresh").Delay);
         Assert.AreEqual("0", parsed.Nodes.Single(node => node.Name == "Failed").Delay);
         Assert.IsTrue(parsed.Nodes.Where(node => node.Name is not ("Fresh" or "Failed")).All(node => node.Delay is null));
@@ -35,15 +35,15 @@ public sealed class ProxyDelayTests
     [TestMethod]
     public async Task WholeGroupRequestRefreshesAllMembersAndAutomaticSelection()
     {
-        using var handler = new GroupDelayHandler();
-        using var client = new HttpClient(handler);
-        var api = new MihomoApiClient(client, new Uri("http://127.0.0.1:9090/"), "");
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        await using var runtime = new ClashTrayRuntime(new AppPaths(Path.Combine(root, "user"), Path.Combine(root, "service")));
+        using GroupDelayHandler handler = new GroupDelayHandler();
+        using HttpClient client = new HttpClient(handler);
+        MihomoApiClient api = new MihomoApiClient(client, new Uri("http://127.0.0.1:9090/"), "");
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(new AppPaths(Path.Combine(root, "user"), Path.Combine(root, "service")));
         try
         {
             runtime.AttachControllerForTesting(api, false);
-            var result = await runtime.TestProxyGroupDelayAsync("自动 / A+#");
+            IReadOnlyDictionary<string, int?> result = await runtime.TestProxyGroupDelayAsync("自动 / A+#");
             Assert.AreEqual(3, result.Count);
             Assert.AreEqual(31, result["A"]);
             Assert.AreEqual(0, result["B"]);
@@ -54,8 +54,8 @@ public sealed class ProxyDelayTests
             Assert.AreEqual(1, handler.BatchRequests);
             Assert.AreEqual(1, handler.ProxyRefreshes);
             Assert.IsTrue(handler.LastBatchUri!.AbsolutePath.Contains(Uri.EscapeDataString("自动 / A+#"), StringComparison.Ordinal));
-            StringAssert.Contains(handler.LastBatchUri.Query, "timeout=5000");
-            StringAssert.Contains(Uri.UnescapeDataString(handler.LastBatchUri.Query), "url=https://www.gstatic.com/generate_204");
+            StringAssert.Contains(handler.LastBatchUri.Query, "timeout=5000", StringComparison.Ordinal);
+            StringAssert.Contains(Uri.UnescapeDataString(handler.LastBatchUri.Query), "url=https://www.gstatic.com/generate_204", StringComparison.Ordinal);
         }
         finally { Directory.Delete(root, true); }
     }
@@ -63,22 +63,25 @@ public sealed class ProxyDelayTests
     [TestMethod]
     public async Task FailedOrCancelledBatchDoesNotPublishInventedResultsAndCanRetry()
     {
-        using var handler = new GroupDelayHandler();
-        using var client = new HttpClient(handler);
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        await using var runtime = new ClashTrayRuntime(new AppPaths(Path.Combine(root, "user"), Path.Combine(root, "service")));
+        using GroupDelayHandler handler = new GroupDelayHandler();
+        using HttpClient client = new HttpClient(handler);
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(new AppPaths(Path.Combine(root, "user"), Path.Combine(root, "service")));
         try
         {
             runtime.AttachControllerForTesting(new MihomoApiClient(client, new Uri("http://127.0.0.1:9090/"), ""), false);
             await runtime.TestProxyGroupDelayAsync("Automatic");
-            var before = runtime.Snapshot;
+            RuntimeSnapshot before = runtime.Snapshot;
             handler.FailBatch = true;
             await Assert.ThrowsExactlyAsync<HttpRequestException>(() => runtime.TestProxyGroupDelayAsync("Automatic"));
             Assert.AreSame(before, runtime.Snapshot);
             handler.FailBatch = false;
             handler.WaitForCancellation = true;
-            using (var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+            using (CancellationTokenSource cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+            {
                 await Assert.ThrowsAsync<OperationCanceledException>(() => runtime.TestProxyGroupDelayAsync("Automatic", cancellation.Token));
+            }
+
             Assert.AreSame(before, runtime.Snapshot);
             handler.WaitForCancellation = false;
             Assert.AreEqual(3, (await runtime.TestProxyGroupDelayAsync("Automatic")).Count);
@@ -101,8 +104,16 @@ public sealed class ProxyDelayTests
             {
                 BatchRequests++;
                 LastBatchUri = request.RequestUri;
-                if (WaitForCancellation) await Task.Delay(Timeout.Infinite, cancellationToken);
-                if (FailBatch) return new HttpResponseMessage(HttpStatusCode.GatewayTimeout);
+                if (WaitForCancellation)
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+
+                if (FailBatch)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.GatewayTimeout);
+                }
+
                 return Json("""{"A":31,"B":0,"Nested":55}""");
             }
             Assert.AreEqual("/proxies", request.RequestUri.AbsolutePath);

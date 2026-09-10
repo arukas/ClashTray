@@ -21,13 +21,13 @@ public static class SystemProxyRecovery
             return;
         }
 
-        using var profiles = Registry.LocalMachine.OpenSubKey(ProfileListPath, writable: false);
+        using RegistryKey? profiles = Registry.LocalMachine.OpenSubKey(ProfileListPath, writable: false);
         if (profiles is null)
         {
             return;
         }
 
-        foreach (var sid in profiles.GetSubKeyNames())
+        foreach (string sid in profiles.GetSubKeyNames())
         {
             try
             {
@@ -49,29 +49,29 @@ public static class SystemProxyRecovery
     {
         using (profile)
         {
-            var profilePath = profile?.GetValue("ProfileImagePath") as string;
+            string? profilePath = profile?.GetValue("ProfileImagePath") as string;
             if (string.IsNullOrWhiteSpace(profilePath))
             {
                 return;
             }
 
             profilePath = Environment.ExpandEnvironmentVariables(profilePath);
-            var localRoot = Path.Combine(profilePath, "AppData", "Local", "ClashTray");
-            var backupPath = Path.Combine(localRoot, "system-proxy-backup.json");
-            var ownershipPath = Path.Combine(localRoot, "system-proxy-ownership.json");
+            string localRoot = Path.Combine(profilePath, "AppData", "Local", "ClashTray");
+            string backupPath = Path.Combine(localRoot, "system-proxy-backup.json");
+            string ownershipPath = Path.Combine(localRoot, "system-proxy-ownership.json");
             if (!File.Exists(backupPath) || !File.Exists(ownershipPath))
             {
                 return;
             }
 
-            var backup = JsonSerializer.Deserialize<ProxyRegistryState>(File.ReadAllText(backupPath), JsonOptions);
-            var ownership = JsonSerializer.Deserialize<ProxyOwnershipState>(File.ReadAllText(ownershipPath), JsonOptions);
+            ProxyRegistryState? backup = JsonSerializer.Deserialize<ProxyRegistryState>(File.ReadAllText(backupPath), JsonOptions);
+            ProxyOwnershipState? ownership = JsonSerializer.Deserialize<ProxyOwnershipState>(File.ReadAllText(ownershipPath), JsonOptions);
             if (backup is null || ownership is null)
             {
                 return;
             }
 
-            using var internetSettings = Registry.Users.OpenSubKey($"{sid}\\{InternetSettingsPath}", writable: true);
+            using RegistryKey? internetSettings = Registry.Users.OpenSubKey($"{sid}\\{InternetSettingsPath}", writable: true);
             if (internetSettings is null || !IsOwnedByClashTray(internetSettings, ownership))
             {
                 return;
@@ -125,6 +125,7 @@ public static class SystemProxyRecovery
             out _);
     }
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr SendMessageTimeout(
         IntPtr windowHandle,

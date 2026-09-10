@@ -1,6 +1,4 @@
-using System.Diagnostics;
 using ClashTray.Contracts;
-using ClashTray.Core;
 
 namespace ClashTray.Core.Tests;
 
@@ -10,12 +8,12 @@ public sealed class MihomoProcessManagerTests
     [TestMethod]
     public async Task UnexpectedExitIsReportedAndStopRemainsRecoverable()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        var configurationPath = Path.Combine(root, "config.yaml");
+        string configurationPath = Path.Combine(root, "config.yaml");
         await File.WriteAllTextAsync(configurationPath, string.Empty);
-        await using var manager = new MihomoProcessManager();
-        var failed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using MihomoProcessManager manager = new MihomoProcessManager();
+        TaskCompletionSource<bool> failed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         manager.StateChanged += (_, state) =>
         {
             if (state == CoreState.Failed)
@@ -26,7 +24,7 @@ public sealed class MihomoProcessManagerTests
 
         try
         {
-            var commandProcessor = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+            string commandProcessor = Path.Combine(Environment.SystemDirectory, "cmd.exe");
             await manager.StartAsync(commandProcessor, configurationPath, root);
 
             await failed.Task.WaitAsync(TimeSpan.FromSeconds(5));

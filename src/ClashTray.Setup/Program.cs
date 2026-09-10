@@ -89,19 +89,19 @@ internal static class Program
             throw new InvalidOperationException("请先从托盘退出正在运行的 ClashTray，然后重新运行安装程序。");
         }
 
-        var installRoot = InstallPaths.InstallRoot;
-        var setupPath = Environment.ProcessPath ?? throw new InvalidOperationException("无法确定安装程序路径。");
+        string installRoot = InstallPaths.InstallRoot;
+        string setupPath = Environment.ProcessPath ?? throw new InvalidOperationException("无法确定安装程序路径。");
         SetupLog.Write($"当前安装器路径：{setupPath}");
         if (IsPathInside(installRoot, setupPath))
         {
             throw new InvalidOperationException("请从新的安装包位置运行安装程序，不要从当前安装目录内运行升级程序。");
         }
 
-        var stagingRoot = CreateTemporaryDirectory("ClashTray-Setup");
-        var newRoot = InstallPaths.ValidateGeneratedPath(installRoot + ".new-" + Guid.NewGuid().ToString("N"));
-        var backupRoot = InstallPaths.ValidateGeneratedPath(installRoot + ".backup-" + Guid.NewGuid().ToString("N"));
-        var swapped = false;
-        var serviceInstalled = false;
+        string stagingRoot = CreateTemporaryDirectory("ClashTray-Setup");
+        string newRoot = InstallPaths.ValidateGeneratedPath(installRoot + ".new-" + Guid.NewGuid().ToString("N"));
+        string backupRoot = InstallPaths.ValidateGeneratedPath(installRoot + ".backup-" + Guid.NewGuid().ToString("N"));
+        bool swapped = false;
+        bool serviceInstalled = false;
 
         try
         {
@@ -126,9 +126,9 @@ internal static class Program
             swapped = true;
             SetupLog.Write("安装目录替换完成。");
 
-            var servicePath = Path.Combine(installRoot, ServiceDirectoryName, "ClashTray.Service.exe");
-            var userSid = WindowsIdentity.GetCurrent().User?.Value
-                ?? throw new InvalidOperationException("无法确定当前 Windows 用户。" );
+            string servicePath = Path.Combine(installRoot, ServiceDirectoryName, "ClashTray.Service.exe");
+            string userSid = WindowsIdentity.GetCurrent().User?.Value
+                ?? throw new InvalidOperationException("无法确定当前 Windows 用户。");
             WindowsServiceManager.InstallOrUpdate(servicePath, userSid);
             serviceInstalled = true;
             SetupLog.Write("新 ClashTray 服务安装并启动完成。");
@@ -191,7 +191,7 @@ internal static class Program
             throw new InvalidOperationException("请先从托盘退出正在运行的 ClashTray，然后重新运行卸载程序。");
         }
 
-        var dataChoice = ShowMessage(
+        int dataChoice = ShowMessage(
             "是否保留 ClashTray 的配置、订阅和日志？\n\n选择“是”保留数据，选择“否”删除数据，选择“取消”停止卸载。",
             "卸载 ClashTray",
             MessageBoxYesNoCancel | MessageBoxIconInformation);
@@ -212,13 +212,13 @@ internal static class Program
             DeleteDirectoryIfExists(InstallPaths.ProgramDataRoot);
         }
 
-        var installRoot = InstallPaths.InstallRoot;
-        var currentSetupPath = Environment.ProcessPath;
+        string installRoot = InstallPaths.InstallRoot;
+        string? currentSetupPath = Environment.ProcessPath;
         if (currentSetupPath is not null && IsPathInside(installRoot, currentSetupPath))
         {
-            var cleanupPath = Path.Combine(Path.GetTempPath(), $"ClashTray-Cleanup-{Guid.NewGuid():N}.exe");
+            string cleanupPath = Path.Combine(Path.GetTempPath(), $"ClashTray-Cleanup-{Guid.NewGuid():N}.exe");
             File.Copy(currentSetupPath, cleanupPath, overwrite: true);
-            var cleanup = Process.Start(new ProcessStartInfo
+            Process? cleanup = Process.Start(new ProcessStartInfo
             {
                 FileName = cleanupPath,
                 Arguments = $"--cleanup {QuoteArgument(installRoot)} {Environment.ProcessId}",
@@ -245,13 +245,13 @@ internal static class Program
 
     private static int CleanupAfterParentExit(string[] args)
     {
-        if (args.Length < 3 || !int.TryParse(args[2], out var parentProcessId))
+        if (args.Length < 3 || !int.TryParse(args[2], out int parentProcessId))
         {
             return 1;
         }
 
-        var installRoot = InstallPaths.ValidateInstallRoot(args[1]);
-        for (var attempt = 0; attempt < 100 && IsProcessRunning(parentProcessId); attempt++)
+        string installRoot = InstallPaths.ValidateInstallRoot(args[1]);
+        for (int attempt = 0; attempt < 100 && IsProcessRunning(parentProcessId); attempt++)
         {
             Thread.Sleep(100);
         }
@@ -263,18 +263,18 @@ internal static class Program
 
     private static void ExtractPayload(string stagingRoot)
     {
-        using var payload = Assembly.GetExecutingAssembly().GetManifestResourceStream(PayloadResourceName)
+        using Stream payload = Assembly.GetExecutingAssembly().GetManifestResourceStream(PayloadResourceName)
             ?? throw new InvalidOperationException("安装程序未包含应用文件。请重新运行 Build-EXE.ps1 生成安装包。");
-        using var archive = new ZipArchive(payload, ZipArchiveMode.Read, leaveOpen: false);
+        using ZipArchive archive = new ZipArchive(payload, ZipArchiveMode.Read, leaveOpen: false);
         long totalBytes = 0;
-        foreach (var entry in archive.Entries)
+        foreach (ZipArchiveEntry entry in archive.Entries)
         {
             if (string.IsNullOrEmpty(entry.Name))
             {
                 continue;
             }
 
-            var relativePath = NormalizeEntryPath(entry.FullName);
+            string relativePath = NormalizeEntryPath(entry.FullName);
             if (!relativePath.StartsWith(AppDirectoryName + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
                 && !relativePath.StartsWith(ServiceDirectoryName + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
                 && !relativePath.StartsWith(CoreDirectoryName + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
@@ -288,16 +288,16 @@ internal static class Program
             }
 
             totalBytes += entry.Length;
-            var targetPath = GetSafeChildPath(stagingRoot, relativePath);
+            string targetPath = GetSafeChildPath(stagingRoot, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-            using var input = entry.Open();
-            using var output = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.SequentialScan);
+            using Stream input = entry.Open();
+            using FileStream output = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.SequentialScan);
             input.CopyTo(output);
         }
 
         RequirePayloadFile(stagingRoot, AppDirectoryName, "ClashTray.App.exe");
         RequirePayloadFile(stagingRoot, ServiceDirectoryName, "ClashTray.Service.exe");
-        var coreRoot = Path.Combine(stagingRoot, CoreDirectoryName);
+        string coreRoot = Path.Combine(stagingRoot, CoreDirectoryName);
         if (Directory.Exists(coreRoot))
         {
             RequirePayloadFile(stagingRoot, CoreDirectoryName, "mihomo.exe");
@@ -308,7 +308,7 @@ internal static class Program
 
     private static void InstallBundledCore(string stagingRoot)
     {
-        var sourceRoot = Path.Combine(stagingRoot, CoreDirectoryName);
+        string sourceRoot = Path.Combine(stagingRoot, CoreDirectoryName);
         if (!File.Exists(Path.Combine(sourceRoot, "mihomo.exe")))
         {
             // NoCore and Framework packages intentionally leave the core to the
@@ -317,15 +317,15 @@ internal static class Program
             return;
         }
 
-        var targetRoot = InstallPaths.ProgramDataCoreRoot;
-        var targetCore = Path.Combine(targetRoot, "mihomo.exe");
-        var targetLicense = Path.Combine(targetRoot, "Mihomo-LICENSE.txt");
-        var targetRelease = Path.Combine(targetRoot, "Mihomo-Release.txt");
+        string targetRoot = InstallPaths.ProgramDataCoreRoot;
+        string targetCore = Path.Combine(targetRoot, "mihomo.exe");
+        string targetLicense = Path.Combine(targetRoot, "Mihomo-LICENSE.txt");
+        string targetRelease = Path.Combine(targetRoot, "Mihomo-Release.txt");
 
         Directory.CreateDirectory(targetRoot);
         if (!File.Exists(targetCore))
         {
-            var candidate = targetCore + ".new-" + Guid.NewGuid().ToString("N");
+            string candidate = targetCore + ".new-" + Guid.NewGuid().ToString("N");
             File.Copy(Path.Combine(sourceRoot, "mihomo.exe"), candidate, overwrite: false);
             File.Move(candidate, targetCore);
         }
@@ -343,7 +343,7 @@ internal static class Program
 
     private static void StartInstalledApp(string installRoot)
     {
-        var appPath = Path.Combine(installRoot, AppDirectoryName, "ClashTray.App.exe");
+        string appPath = Path.Combine(installRoot, AppDirectoryName, "ClashTray.App.exe");
         if (!File.Exists(appPath))
         {
             throw new FileNotFoundException("安装完成后找不到 ClashTray 桌面程序。", appPath);
@@ -362,13 +362,13 @@ internal static class Program
 
     private static string NormalizeEntryPath(string path)
     {
-        var normalized = path.Replace('/', Path.DirectorySeparatorChar);
+        string normalized = path.Replace('/', Path.DirectorySeparatorChar);
         if (Path.IsPathRooted(normalized))
         {
             throw new InvalidDataException("安装包包含绝对路径。");
         }
 
-        var parts = normalized.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        string[] parts = normalized.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
         if (parts.Any(part => part is "." or ".."))
         {
             throw new InvalidDataException("安装包包含非法路径。");
@@ -379,8 +379,8 @@ internal static class Program
 
     private static string GetSafeChildPath(string root, string relativePath)
     {
-        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
-        var fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
+        string fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
+        string fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
         if (!fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException("安装包路径越过了临时目录。");
@@ -391,7 +391,7 @@ internal static class Program
 
     private static void RequirePayloadFile(string root, string directory, string fileName)
     {
-        var path = Path.Combine(root, directory, fileName);
+        string path = Path.Combine(root, directory, fileName);
         if (!File.Exists(path))
         {
             throw new InvalidDataException($"安装包缺少 {directory}/{fileName}。");
@@ -406,10 +406,10 @@ internal static class Program
         }
 
         Directory.CreateDirectory(targetRoot);
-        foreach (var sourceFile in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
+        foreach (string sourceFile in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
         {
-            var relativePath = Path.GetRelativePath(sourceRoot, sourceFile);
-            var targetFile = Path.Combine(targetRoot, relativePath);
+            string relativePath = Path.GetRelativePath(sourceRoot, sourceFile);
+            string targetFile = Path.Combine(targetRoot, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(targetFile)!);
             File.Copy(sourceFile, targetFile, overwrite: false);
         }
@@ -417,9 +417,9 @@ internal static class Program
 
     private static void WriteUninstallRegistration(string installRoot)
     {
-        using var key = Registry.LocalMachine.CreateSubKey(UninstallRegistryPath, writable: true)
+        using RegistryKey key = Registry.LocalMachine.CreateSubKey(UninstallRegistryPath, writable: true)
             ?? throw new InvalidOperationException("无法写入 Windows 卸载注册表项。");
-        var setupPath = Path.Combine(installRoot, SetupFileName);
+        string setupPath = Path.Combine(installRoot, SetupFileName);
         key.SetValue("DisplayName", "ClashTray", RegistryValueKind.String);
         key.SetValue("DisplayVersion", GetSetupVersion(), RegistryValueKind.String);
         key.SetValue("Publisher", "ClashTray Project", RegistryValueKind.String);
@@ -432,7 +432,7 @@ internal static class Program
 
     private static void RemoveUninstallRegistration()
     {
-        using var key = Registry.LocalMachine.OpenSubKey(
+        using RegistryKey? key = Registry.LocalMachine.OpenSubKey(
             "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
             writable: true);
         key?.DeleteSubKeyTree("ClashTray", throwOnMissingSubKey: false);
@@ -440,14 +440,14 @@ internal static class Program
 
     private static void CreateStartMenuShortcut(string installRoot)
     {
-        var appPath = Path.Combine(installRoot, AppDirectoryName, "ClashTray.App.exe");
-        var shortcutDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms), StartMenuDirectoryName);
+        string appPath = Path.Combine(installRoot, AppDirectoryName, "ClashTray.App.exe");
+        string shortcutDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms), StartMenuDirectoryName);
         Directory.CreateDirectory(shortcutDirectory);
-        var shortcutPath = Path.Combine(shortcutDirectory, "ClashTray.lnk");
+        string shortcutPath = Path.Combine(shortcutDirectory, "ClashTray.lnk");
 
-        var shellType = Type.GetTypeFromProgID("WScript.Shell")
+        Type shellType = Type.GetTypeFromProgID("WScript.Shell")
             ?? throw new InvalidOperationException("Windows 快捷方式组件不可用。");
-        var shell = Activator.CreateInstance(shellType)
+        object shell = Activator.CreateInstance(shellType)
             ?? throw new InvalidOperationException("无法创建 Windows 快捷方式组件。");
         object? shortcutObject = null;
         try
@@ -481,7 +481,7 @@ internal static class Program
 
     private static void RemoveStartMenuShortcut()
     {
-        var shortcutDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms), StartMenuDirectoryName);
+        string shortcutDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms), StartMenuDirectoryName);
         TryDeleteFile(Path.Combine(shortcutDirectory, "ClashTray.lnk"));
         try
         {
@@ -500,13 +500,13 @@ internal static class Program
 
     private static void RemoveCurrentUserStartupEntry()
     {
-        using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryPath, writable: true);
+        using RegistryKey? key = Registry.CurrentUser.OpenSubKey(StartupRegistryPath, writable: true);
         key?.DeleteValue(StartupValueName, throwOnMissingValue: false);
     }
 
     private static bool IsDesktopAppRunning()
     {
-        foreach (var process in Process.GetProcessesByName("ClashTray.App"))
+        foreach (Process process in Process.GetProcessesByName("ClashTray.App"))
         {
             process.Dispose();
             return true;
@@ -519,7 +519,7 @@ internal static class Program
     {
         try
         {
-            using var process = Process.GetProcessById(processId);
+            using Process process = Process.GetProcessById(processId);
             return !process.HasExited;
         }
         catch (ArgumentException)
@@ -534,7 +534,7 @@ internal static class Program
 
     private static string CreateTemporaryDirectory(string prefix)
     {
-        var path = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
+        string path = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(path);
         return path;
     }
@@ -546,7 +546,7 @@ internal static class Program
             return;
         }
 
-        for (var attempt = 0; attempt < 10; attempt++)
+        for (int attempt = 0; attempt < 10; attempt++)
         {
             try
             {
@@ -590,8 +590,8 @@ internal static class Program
 
     private static bool IsPathInside(string root, string path)
     {
-        var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
-        var fullPath = Path.GetFullPath(path);
+        string fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
+        string fullPath = Path.GetFullPath(path);
         return fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -603,6 +603,7 @@ internal static class Program
     private static int ShowMessage(string text, string caption, uint type) =>
         MessageBox(IntPtr.Zero, text, caption, type);
 
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern int MessageBox(IntPtr windowHandle, string text, string caption, uint type);
 
@@ -618,8 +619,8 @@ internal static class Program
 
         public static string ValidateGeneratedPath(string path)
         {
-            var fullPath = Path.GetFullPath(path);
-            var programFiles = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles))) + Path.DirectorySeparatorChar;
+            string fullPath = Path.GetFullPath(path);
+            string programFiles = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles))) + Path.DirectorySeparatorChar;
             if (!fullPath.StartsWith(programFiles, StringComparison.OrdinalIgnoreCase)
                 || string.Equals(fullPath, Path.TrimEndingDirectorySeparator(programFiles), StringComparison.OrdinalIgnoreCase))
             {
@@ -631,7 +632,7 @@ internal static class Program
 
         public static string ValidateInstallRoot(string path)
         {
-            var fullPath = Path.GetFullPath(path);
+            string fullPath = Path.GetFullPath(path);
             if (!string.Equals(fullPath, Path.GetFullPath(InstallRoot), StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException("卸载清理路径不是 ClashTray 安装目录。");

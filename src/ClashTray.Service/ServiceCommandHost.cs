@@ -1,6 +1,7 @@
 using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text;
 using System.Text.Json;
 using ClashTray.Contracts;
 using ClashTray.Core;
@@ -25,7 +26,7 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _cts.Cancel();
+        await _cts.CancelAsync();
         if (_serverTask is not null)
         {
             try
@@ -45,12 +46,12 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
     {
         while (!_cts.IsCancellationRequested)
         {
-            await using var pipe = CreatePipe();
+            await using NamedPipeServerStream pipe = CreatePipe();
             try
             {
                 await pipe.WaitForConnectionAsync(_cts.Token);
-                using var reader = new StreamReader(pipe, leaveOpen: true);
-                await using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
+                using StreamReader reader = new StreamReader(pipe, leaveOpen: true);
+                await using StreamWriter writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
                 string? line;
                 try
                 {
@@ -71,7 +72,7 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                 ServiceResponse response;
                 try
                 {
-                    var request = JsonSerializer.Deserialize<ServiceRequest>(line, _jsonOptions)
+                    ServiceRequest request = JsonSerializer.Deserialize<ServiceRequest>(line, _jsonOptions)
                         ?? throw new InvalidDataException("Invalid service request.");
                     response = await _controller.HandleAsync(request, _cts.Token);
                 }
@@ -94,19 +95,19 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
 
     private static async Task<string?> ReadLineLimitedAsync(StreamReader reader, CancellationToken cancellationToken)
     {
-        var builder = new System.Text.StringBuilder();
-        var buffer = new char[1024];
+        StringBuilder builder = new System.Text.StringBuilder();
+        char[] buffer = new char[1024];
         while (true)
         {
-            var count = await reader.ReadAsync(buffer.AsMemory(), cancellationToken);
+            int count = await reader.ReadAsync(buffer.AsMemory(), cancellationToken);
             if (count == 0)
             {
                 return builder.Length == 0 ? null : builder.ToString().TrimEnd('\r');
             }
 
-            for (var index = 0; index < count; index++)
+            for (int index = 0; index < count; index++)
             {
-                var character = buffer[index];
+                char character = buffer[index];
                 if (character == '\n')
                 {
                     return builder.ToString().TrimEnd('\r');
@@ -124,8 +125,8 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
 
     private NamedPipeServerStream CreatePipe()
     {
-        var security = new PipeSecurity();
-        var user = new SecurityIdentifier(_userSid);
+        PipeSecurity security = new PipeSecurity();
+        SecurityIdentifier user = new SecurityIdentifier(_userSid);
         security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance, AccessControlType.Allow));
         security.AddAccessRule(new PipeAccessRule(
             new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),

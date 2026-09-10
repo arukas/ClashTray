@@ -13,7 +13,7 @@ public sealed class CoreDiscovery
 
     public string? FindExecutable(string? configuredPath = null)
     {
-        var candidates = new List<string>();
+        List<string> candidates = new List<string>();
         if (!string.IsNullOrWhiteSpace(configuredPath))
         {
             candidates.Add(configuredPath);

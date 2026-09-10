@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net.Http;
 using System.Net.WebSockets;
 using System.Text.Json;
 using ClashTray.Contracts;
@@ -60,7 +59,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         IServicePipeClient? servicePipeClient,
         ISettingsStore? settingsStore)
     {
-        var useDefaultEnvironment = paths is null;
+        bool useDefaultEnvironment = paths is null;
         _paths = paths ?? new AppPaths();
         _paths.EnsureDirectories();
         _configurationStore = new ConfigurationStore(_paths);
@@ -101,10 +100,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         _settings = await _settingsStore.LoadAsync(cancellationToken);
-        var storedConfigurations = await _configurationStore.ListAsync(cancellationToken);
-        var activeConfigurationId = _settings.ActiveConfigurationId
+        IReadOnlyList<ConfigurationProfile> storedConfigurations = await _configurationStore.ListAsync(cancellationToken);
+        string? activeConfigurationId = _settings.ActiveConfigurationId
             ?? storedConfigurations.FirstOrDefault(configuration => configuration.IsActive)?.Id;
-        var configurations = storedConfigurations
+        ConfigurationProfile[] configurations = storedConfigurations
             .Select(configuration => configuration with
             {
                 IsActive = string.Equals(configuration.Id, activeConfigurationId, StringComparison.OrdinalIgnoreCase)
@@ -123,7 +122,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await ApplyProgramOverridesAsync(coreRunning: false, cancellationToken: cancellationToken);
         try
         {
-            var serviceStatus = await _servicePipeClient.SendAsync(ServiceCommand.GetStatus, cancellationToken: cancellationToken);
+            ServiceResponse serviceStatus = await _servicePipeClient.SendAsync(ServiceCommand.GetStatus, cancellationToken: cancellationToken);
             _snapshot = _snapshot with
             {
                 Tun = serviceStatus.Tun,
@@ -184,7 +183,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public async Task StartCoreAsync(CancellationToken cancellationToken = default)
     {
         await _operationLock.WaitAsync(cancellationToken);
-        var coreStarted = false;
         try
         {
             if (_snapshot.Core.State == CoreState.Running)
@@ -192,8 +190,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 return;
             }
 
-            var profile = GetActiveConfiguration();
-            var executable = _coreDiscovery.FindExecutable();
+            ConfigurationProfile? profile = GetActiveConfiguration();
+            string? executable = _coreDiscovery.FindExecutable();
             if (executable is null)
             {
                 UpdateCoreState(CoreState.Missing, "未找到 Mihomo 核心，请在设置中安装或选择 mihomo.exe");
@@ -207,11 +205,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             UpdateCoreState(CoreState.Validating, null);
-            var runtimeConfigPath = Path.Combine(_paths.RuntimeRoot, "mihomo", "active-config.yaml");
+            string runtimeConfigPath = Path.Combine(_paths.RuntimeRoot, "mihomo", "active-config.yaml");
             await RuntimeConfigBuilder.BuildAsync(profile.Path, runtimeConfigPath, _settings, cancellationToken);
 
-            var runtimeDirectory = Path.Combine(_paths.RuntimeRoot, "mihomo");
-            var servicePayload = JsonSerializer.Serialize(new ServiceCorePayload(
+            string runtimeDirectory = Path.Combine(_paths.RuntimeRoot, "mihomo");
+            string servicePayload = JsonSerializer.Serialize(new ServiceCorePayload(
                 executable,
                 runtimeConfigPath,
                 runtimeDirectory,
@@ -263,7 +261,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await _processManager.StartAsync(executable, runtimeConfigPath, runtimeDirectory, cancellationToken);
             }
 
-            coreStarted = true;
+            bool coreStarted = true;
             _api = CreateApiClient();
             SetCoreRunningPendingHealth(serviceResponse?.Tun ?? TunState.Unknown);
             try
@@ -319,7 +317,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 try
                 {
-                    var response = await _servicePipeClient.SendAsync(ServiceCommand.StopCore, cancellationToken: cancellationToken);
+                    ServiceResponse response = await _servicePipeClient.SendAsync(ServiceCommand.StopCore, cancellationToken: cancellationToken);
                     if (!response.Succeeded)
                     {
                         _snapshot = _snapshot with { Tun = response.Tun };
@@ -387,7 +385,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task<ConfigurationProfile> ImportLocalConfigurationAsync(string path, string? name = null, CancellationToken cancellationToken = default)
     {
-        var profile = await _configurationStore.ImportLocalAsync(path, name, cancellationToken);
+        ConfigurationProfile profile = await _configurationStore.ImportLocalAsync(path, name, cancellationToken);
         await SetActiveConfigurationAsync(profile.Id, cancellationToken);
         return profile;
     }
@@ -400,7 +398,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             UpdateSubscriptionState(SubscriptionState.Downloading, null);
             try
             {
-                var profile = await _configurationStore.ImportSubscriptionAsync(uri, name, cancellationToken);
+                ConfigurationProfile profile = await _configurationStore.ImportSubscriptionAsync(uri, name, cancellationToken);
                 UpdateSubscriptionState(SubscriptionState.Succeeded, null);
                 await SetActiveConfigurationAsync(profile.Id, cancellationToken);
                 return profile;
@@ -419,6 +417,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task RefreshSubscriptionAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(profile);
         await _subscriptionOperationLock.WaitAsync(cancellationToken);
         try
         {
@@ -437,9 +436,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             return;
         }
 
-        var shouldRemainActive = profile.IsActive
+        bool shouldRemainActive = profile.IsActive
             || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
-        var activeSelectionChanged = !string.Equals(
+        bool activeSelectionChanged = !string.Equals(
             _settings.ActiveConfigurationId,
             profile.Id,
             StringComparison.OrdinalIgnoreCase);
@@ -447,13 +446,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         try
         {
             UpdateSubscriptionState(SubscriptionState.Validating, null);
-            var update = await _configurationStore.ImportSubscriptionWithResultAsync(
+            ConfigurationImportResult update = await _configurationStore.ImportSubscriptionWithResultAsync(
                 profile.SubscriptionUri,
                 profile.Name,
                 cancellationToken);
             UpdateSubscriptionState(SubscriptionState.Applying, null);
             UpdateSubscriptionState(SubscriptionState.Succeeded, null);
-            var configurations = await _configurationStore.ListAsync(cancellationToken);
+            IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
             if (shouldRemainActive)
             {
                 await SetActiveConfigurationAsync(profile.Id, restartCore: false, cancellationToken: cancellationToken);
@@ -497,6 +496,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task ReloadConfigurationAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(profile);
         if (profile.SubscriptionUri is not null)
         {
             await RefreshSubscriptionAsync(profile, cancellationToken);
@@ -504,7 +504,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
 
         await _configurationStore.ReloadAsync(profile, cancellationToken);
-        var configurations = await _configurationStore.ListAsync(cancellationToken);
+        IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
         _snapshot = _snapshot with
         {
             Configurations = configurations.Select(configuration => configuration with
@@ -529,14 +529,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         bool restartCore,
         CancellationToken cancellationToken = default)
     {
-        var configurations = await _configurationStore.ListAsync(cancellationToken);
-        var selected = configurations.FirstOrDefault(configuration => configuration.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+        IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
+        ConfigurationProfile? selected = configurations.FirstOrDefault(configuration => configuration.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
         if (selected is null)
         {
             throw new FileNotFoundException("Configuration profile not found.", id);
         }
 
-        var changed = !string.Equals(_settings.ActiveConfigurationId, id, StringComparison.OrdinalIgnoreCase);
+        bool changed = !string.Equals(_settings.ActiveConfigurationId, id, StringComparison.OrdinalIgnoreCase);
         _settings = _settings with { ActiveConfigurationId = id };
         await _settingsStore.SaveAsync(_settings, cancellationToken);
         _snapshot = _snapshot with
@@ -554,7 +554,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task DeleteConfigurationAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
     {
-        var wasActive = profile.IsActive
+        ArgumentNullException.ThrowIfNull(profile);
+        bool wasActive = profile.IsActive
             || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
         if (wasActive && _snapshot.Core.State == CoreState.Running)
         {
@@ -562,7 +563,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
 
         await _configurationStore.DeleteAsync(profile, cancellationToken);
-        var configurations = await _configurationStore.ListAsync(cancellationToken);
+        IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
         if (wasActive)
         {
             _settings = _settings with { ActiveConfigurationId = null };
@@ -617,8 +618,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             throw new InvalidOperationException("Mihomo 核心尚未运行。");
         }
 
-        using var response = await _api.TestDelayAsync(proxy, new Uri("https://www.gstatic.com/generate_204"), 5000, cancellationToken);
-        if (response.RootElement.TryGetProperty("delay", out var delay) && delay.TryGetInt32(out var milliseconds))
+        using JsonDocument response = await _api.TestDelayAsync(proxy, new Uri("https://www.gstatic.com/generate_204"), 5000, cancellationToken);
+        if (response.RootElement.TryGetProperty("delay", out JsonElement delay) && delay.TryGetInt32(out int milliseconds))
         {
             return milliseconds;
         }
@@ -630,21 +631,25 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         string group, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(group);
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _runtimeCts.Token);
-        var token = linked.Token;
+        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _runtimeCts.Token);
+        CancellationToken token = linked.Token;
         await _operationLock.WaitAsync(token);
         try
         {
-            var api = _api ?? throw new InvalidOperationException("Mihomo 核心尚未运行。");
-            using var response = await api.TestGroupDelayAsync(group, new Uri("https://www.gstatic.com/generate_204"), 5000, token);
-            var delays = MihomoDataParser.ParseGroupDelays(response);
+            MihomoApiClient api = _api ?? throw new InvalidOperationException("Mihomo 核心尚未运行。");
+            using JsonDocument response = await api.TestGroupDelayAsync(group, new Uri("https://www.gstatic.com/generate_204"), 5000, token);
+            IReadOnlyDictionary<string, int?> delays = MihomoDataParser.ParseGroupDelays(response);
             await _dataRefreshLock.WaitAsync(token);
             try
             {
                 // Refresh now/history from the core and apply the confirmed batch result atomically.
-                var proxies = await TryGetProxyDataAsync(api, token);
-                if (!ReferenceEquals(_api, api)) throw new InvalidOperationException("测速期间核心已切换，请重新测速。");
-                string? LatestDelay(string name, string? previous) => delays.TryGetValue(name, out var delay)
+                ProxyDataResult proxies = await TryGetProxyDataAsync(api, token);
+                if (!ReferenceEquals(_api, api))
+                {
+                    throw new InvalidOperationException("测速期间核心已切换，请重新测速。");
+                }
+
+                string? LatestDelay(string name, string? previous) => delays.TryGetValue(name, out int? delay)
                     ? delay?.ToString(System.Globalization.CultureInfo.InvariantCulture) : previous;
                 _snapshot = _snapshot with
                 {
@@ -715,13 +720,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public async Task UpdateSettingsAsync(AppSettings settings, CancellationToken cancellationToken = default, bool reconcileStartup = false)
+    public async Task UpdateSettingsAsync(AppSettings settings, bool reconcileStartup = false, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(settings);
         ValidateSettings(settings);
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            var networkSettingsChanged = settings.AllowLan != _settings.AllowLan
+            bool networkSettingsChanged = settings.AllowLan != _settings.AllowLan
                 || settings.Ipv6 != _settings.Ipv6;
             StartupRegistrationChange? startupChange = null;
             if (reconcileStartup)
@@ -792,8 +798,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         await _operationLock.WaitAsync(cancellationToken);
-        var previousSettings = _settings;
-        var preferenceChanged = persistPreference && previousSettings.SystemProxyEnabled != enabled;
+        AppSettings previousSettings = _settings;
+        bool preferenceChanged = persistPreference && previousSettings.SystemProxyEnabled != enabled;
         try
         {
             if (preferenceChanged)
@@ -843,8 +849,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         await _operationLock.WaitAsync(cancellationToken);
-        var previousSettings = _settings;
-        var preferenceChanged = persistPreference && previousSettings.TunEnabled != enabled;
+        AppSettings previousSettings = _settings;
+        bool preferenceChanged = persistPreference && previousSettings.TunEnabled != enabled;
         try
         {
             if (preferenceChanged)
@@ -856,11 +862,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             _snapshot = _snapshot with { Tun = enabled ? TunState.Enabling : TunState.Disabling };
             Publish();
-            var payload = JsonSerializer.Serialize(new ServiceTunPayload(
+            string payload = JsonSerializer.Serialize(new ServiceTunPayload(
                 _settings.ControllerPort,
                 string.Empty,
                 enabled));
-            var response = await _servicePipeClient.SendAsync(
+            ServiceResponse response = await _servicePipeClient.SendAsync(
                 enabled ? ServiceCommand.EnableTun : ServiceCommand.DisableTun,
                 payload,
                 cancellationToken: cancellationToken);
@@ -952,7 +958,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task<string> InstallCoreUpdateAsync(CoreUpdateManifest manifest, CancellationToken cancellationToken = default)
     {
-        var wasRunning = _snapshot.Core.State == CoreState.Running;
+        bool wasRunning = _snapshot.Core.State == CoreState.Running;
         if (wasRunning)
         {
             await StopCoreAsync(cancellationToken);
@@ -960,7 +966,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         try
         {
-            var path = await _coreUpdater.DownloadAndInstallAsync(manifest, cancellationToken);
+            string path = await _coreUpdater.DownloadAndInstallAsync(manifest, cancellationToken);
             _snapshot = _snapshot with { Core = _snapshot.Core with { Version = FindCoreVersion(), ErrorMessage = null }, ErrorMessage = null };
             Publish();
             if (wasRunning)
@@ -1037,7 +1043,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
         }
 
-        _runtimeCts.Cancel();
+        await _runtimeCts.CancelAsync();
         _api = null;
         await StopLogStreamAsync();
         if (_dataRefreshTask is not null)
@@ -1073,7 +1079,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task RefreshFromApiAsync(CancellationToken cancellationToken)
     {
-        var api = _api;
+        MihomoApiClient? api = _api;
         if (api is null)
         {
             return;
@@ -1085,11 +1091,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task RefreshCoreHealthAsync(MihomoApiClient api, CancellationToken cancellationToken)
     {
-        using var version = await api.GetVersionAsync(cancellationToken);
-        var versionText = MihomoDataParser.ParseVersion(version);
-        using var configurationState = await api.GetConfigurationAsync(force: false, cancellationToken);
-        var mode = MihomoDataParser.ParseMode(configurationState);
-        var tunEnabled = MihomoDataParser.ParseTunEnabled(configurationState);
+        using JsonDocument version = await api.GetVersionAsync(cancellationToken);
+        string? versionText = MihomoDataParser.ParseVersion(version);
+        using JsonDocument configurationState = await api.GetConfigurationAsync(force: false, cancellationToken);
+        ProxyMode? mode = MihomoDataParser.ParseMode(configurationState);
+        bool? tunEnabled = MihomoDataParser.ParseTunEnabled(configurationState);
 
         if (!ReferenceEquals(_api, api))
         {
@@ -1125,12 +1131,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 return;
             }
 
-            var proxyTask = TryGetProxyDataAsync(api, cancellationToken);
-            var trafficTask = TryGetTrafficSnapshotAsync(api, cancellationToken);
-            var memoryTask = TryGetMemoryAsync(api, cancellationToken);
-            var connectionsTask = TryGetConnectionDataAsync(api, cancellationToken);
-            var rulesTask = TryGetRulesAsync(api, cancellationToken);
-            var providersTask = TryGetProvidersAsync(api, cancellationToken);
+            Task<ProxyDataResult> proxyTask = TryGetProxyDataAsync(api, cancellationToken);
+            Task<TrafficDataResult> trafficTask = TryGetTrafficSnapshotAsync(api, cancellationToken);
+            Task<MemoryDataResult> memoryTask = TryGetMemoryAsync(api, cancellationToken);
+            Task<ConnectionDataResult> connectionsTask = TryGetConnectionDataAsync(api, cancellationToken);
+            Task<IReadOnlyList<RuleInfo>> rulesTask = TryGetRulesAsync(api, cancellationToken);
+            Task<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> providersTask = TryGetProvidersAsync(api, cancellationToken);
             await Task.WhenAll(proxyTask, trafficTask, memoryTask, connectionsTask, rulesTask, providersTask);
 
             if (!ReferenceEquals(_api, api))
@@ -1138,14 +1144,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 return;
             }
 
-            var proxyData = await proxyTask;
-            var trafficData = await trafficTask;
-            var memoryData = await memoryTask;
-            var connectionData = await connectionsTask;
-            var rulesData = await rulesTask;
-            var providerData = await providersTask;
-            var currentCore = _snapshot.Core;
-            var traffic = trafficData.Value;
+            ProxyDataResult proxyData = await proxyTask;
+            TrafficDataResult trafficData = await trafficTask;
+            MemoryDataResult memoryData = await memoryTask;
+            ConnectionDataResult connectionData = await connectionsTask;
+            IReadOnlyList<RuleInfo> rulesData = await rulesTask;
+            (IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders) providerData = await providersTask;
+            CoreStatus currentCore = _snapshot.Core;
+            TrafficSnapshot? traffic = trafficData.Value;
 
             _snapshot = _snapshot with
             {
@@ -1180,7 +1186,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         await RefreshCoreHealthWithRetryAsync(cancellationToken);
         await ApplyProgramOverridesAsync(coreRunning: true, cancellationToken: cancellationToken);
-        var api = _api;
+        MihomoApiClient? api = _api;
         if (api is not null)
         {
             await RefreshOptionalDataAsync(api, cancellationToken);
@@ -1189,16 +1195,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task RefreshCoreHealthWithRetryAsync(CancellationToken cancellationToken)
     {
-        var api = _api;
+        MihomoApiClient? api = _api;
         if (api is null)
         {
             return;
         }
 
         Exception? lastException = null;
-        for (var attempt = 0; attempt < 5; attempt++)
+        for (int attempt = 0; attempt < 5; attempt++)
         {
-            var stopwatch = Stopwatch.StartNew();
+            Stopwatch stopwatch = Stopwatch.StartNew();
             try
             {
                 await RefreshCoreHealthAsync(api, cancellationToken);
@@ -1236,8 +1242,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task RunPollingAsync()
     {
-        var retryDelay = TimeSpan.FromSeconds(2);
-        var retryCount = 0;
+        TimeSpan retryDelay = TimeSpan.FromSeconds(2);
+        int retryCount = 0;
         while (ShouldContinuePolling())
         {
             try
@@ -1362,7 +1368,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private MihomoApiClient CreateApiClient()
     {
-        var controllerUri = new Uri($"http://127.0.0.1:{_settings.ControllerPort}/");
+        Uri controllerUri = new Uri($"http://127.0.0.1:{_settings.ControllerPort}/");
         return new MihomoApiClient(_httpClient, controllerUri, string.Empty);
     }
 
@@ -1455,15 +1461,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task ApplyProgramNetworkPreferencesAsync(CancellationToken cancellationToken)
     {
-        var api = _api;
+        MihomoApiClient? api = _api;
         if (api is null)
         {
             return;
         }
 
-        using var configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
-        var currentAllowLan = MihomoDataParser.ParseAllowLan(configuration);
-        var currentIpv6 = MihomoDataParser.ParseIpv6(configuration);
+        using JsonDocument configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
+        bool? currentAllowLan = MihomoDataParser.ParseAllowLan(configuration);
+        bool? currentIpv6 = MihomoDataParser.ParseIpv6(configuration);
         if (currentAllowLan is bool currentAllowLanValue
             && currentAllowLanValue == _settings.AllowLan
             && currentIpv6 is bool currentIpv6Value
@@ -1474,7 +1480,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         try
         {
-            using var response = await api.SetNetworkSettingsAsync(
+            using JsonDocument response = await api.SetNetworkSettingsAsync(
                 _settings.AllowLan,
                 _settings.Ipv6,
                 cancellationToken);
@@ -1504,14 +1510,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task ApplyProgramTunPreferenceAsync(CancellationToken cancellationToken)
     {
-        var api = _api;
+        MihomoApiClient? api = _api;
         if (api is null)
         {
             return;
         }
 
-        using var configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
-        var current = MihomoDataParser.ParseTunEnabled(configuration);
+        using JsonDocument configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
+        bool? current = MihomoDataParser.ParseTunEnabled(configuration);
         if (current is not bool currentValue || currentValue == _settings.TunEnabled)
         {
             return;
@@ -1557,7 +1563,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             await _systemProxy.DisableAsync(cancellationToken);
         }
 
-        var state = _systemProxy.State;
+        SystemProxyState state = _systemProxy.State;
         if (_snapshot.SystemProxy != state)
         {
             _snapshot = _snapshot with { SystemProxy = state };
@@ -1588,9 +1594,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         bool expected,
         CancellationToken cancellationToken)
     {
-        for (var attempt = 0; attempt < 5; attempt++)
+        for (int attempt = 0; attempt < 5; attempt++)
         {
-            using var configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
+            using JsonDocument configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
             if (MihomoDataParser.ParseTunEnabled(configuration) == expected)
             {
                 return true;
@@ -1604,7 +1610,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private static async Task<bool> TryRestoreTunStateAsync(MihomoApiClient api, bool expected)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        using CancellationTokenSource timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         try
         {
             await api.SetTunAsync(expected, timeout.Token);
@@ -1622,14 +1628,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         bool? expectedIpv6,
         CancellationToken cancellationToken)
     {
-        for (var attempt = 0; attempt < 5; attempt++)
+        for (int attempt = 0; attempt < 5; attempt++)
         {
-            using var configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
-            var allowLan = MihomoDataParser.ParseAllowLan(configuration);
-            var ipv6 = MihomoDataParser.ParseIpv6(configuration);
-            var allowLanMatches = !expectedAllowLan.HasValue
+            using JsonDocument configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
+            bool? allowLan = MihomoDataParser.ParseAllowLan(configuration);
+            bool? ipv6 = MihomoDataParser.ParseIpv6(configuration);
+            bool allowLanMatches = !expectedAllowLan.HasValue
                 || allowLan is bool allowLanValue && allowLanValue == expectedAllowLan.Value;
-            var ipv6Matches = !expectedIpv6.HasValue
+            bool ipv6Matches = !expectedIpv6.HasValue
                 || ipv6 is bool ipv6Value && ipv6Value == expectedIpv6.Value;
             if (allowLanMatches && ipv6Matches)
             {
@@ -1652,10 +1658,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             return true;
         }
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        using CancellationTokenSource timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         try
         {
-            using var response = await api.SetNetworkSettingsAsync(allowLan, ipv6, timeout.Token);
+            using JsonDocument response = await api.SetNetworkSettingsAsync(allowLan, ipv6, timeout.Token);
             return await ConfirmNetworkSettingsAsync(api, allowLan, ipv6, timeout.Token);
         }
         catch
@@ -1673,14 +1679,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         lock (_logStreamGate)
         {
-            var api = _api;
+            MihomoApiClient? api = _api;
             if (api is null || _logStreamTask is { IsCompleted: false })
             {
                 return;
             }
 
             _logStreamCts?.Dispose();
-            var streamCts = CancellationTokenSource.CreateLinkedTokenSource(_runtimeCts.Token);
+            CancellationTokenSource streamCts = CancellationTokenSource.CreateLinkedTokenSource(_runtimeCts.Token);
             _logStreamCts = streamCts;
             _logStreamTask = Task.Run(
                 () => RunLogStreamAsync(api, streamCts.Token),
@@ -1700,7 +1706,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _logStreamCts = null;
         }
 
-        streamCts?.Cancel();
+        if (streamCts is not null)
+        {
+            await streamCts.CancelAsync();
+        }
         try
         {
             if (task is not null)
@@ -1728,13 +1737,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task RunLogStreamAsync(MihomoApiClient api, CancellationToken cancellationToken)
     {
-        var retryDelay = TimeSpan.FromSeconds(1);
-        var path = $"/logs?level={Uri.EscapeDataString(_settings.LogLevel)}&format=structured";
+        TimeSpan retryDelay = TimeSpan.FromSeconds(1);
+        string path = $"/logs?level={Uri.EscapeDataString(_settings.LogLevel)}&format=structured";
         while (!cancellationToken.IsCancellationRequested && ReferenceEquals(_api, api))
         {
             try
             {
-                using var socket = await api.ConnectWebSocketAsync(path, cancellationToken);
+                using ClientWebSocket socket = await api.ConnectWebSocketAsync(path, cancellationToken);
                 retryDelay = TimeSpan.FromSeconds(1);
                 await ReceiveLogMessagesAsync(socket, cancellationToken);
             }
@@ -1775,15 +1784,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task ReceiveLogMessagesAsync(ClientWebSocket socket, CancellationToken cancellationToken)
     {
-        var receiveBuffer = new byte[16 * 1024];
+        byte[] receiveBuffer = new byte[16 * 1024];
         while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
         {
-            using var message = new MemoryStream();
-            var isText = true;
-            var isOversized = false;
+            using MemoryStream message = new MemoryStream();
+            bool isText = true;
+            bool isOversized = false;
             while (true)
             {
-                var received = await socket.ReceiveAsync(
+                WebSocketReceiveResult received = await socket.ReceiveAsync(
                     new ArraySegment<byte>(receiveBuffer),
                     cancellationToken);
                 if (received.MessageType == WebSocketMessageType.Close)
@@ -1800,7 +1809,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     }
                     else
                     {
-                        message.Write(receiveBuffer, 0, received.Count);
+                        await message.WriteAsync(receiveBuffer.AsMemory(0, received.Count), cancellationToken);
                     }
                 }
 
@@ -1818,8 +1827,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             message.Position = 0;
             try
             {
-                using var document = JsonDocument.Parse(message);
-                foreach (var entry in MihomoDataParser.ParseLogs(document, "mihomo"))
+                using JsonDocument document = await JsonDocument.ParseAsync(message, cancellationToken: cancellationToken);
+                foreach (LogEntry entry in MihomoDataParser.ParseLogs(document, "mihomo"))
                 {
                     AddMihomoLog(entry);
                 }
@@ -1836,8 +1845,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         try
         {
-            using var document = await api.GetProxiesAsync(cancellationToken);
-            var data = MihomoDataParser.ParseProxies(document);
+            using JsonDocument document = await api.GetProxiesAsync(cancellationToken);
+            (IReadOnlyList<ProxyGroup> Groups, IReadOnlyList<ProxyNode> Nodes) data = MihomoDataParser.ParseProxies(document);
             return new ProxyDataResult(true, data.Groups, data.Nodes);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1855,10 +1864,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         MihomoApiClient api,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        Stopwatch stopwatch = Stopwatch.StartNew();
         try
         {
-            using var document = await api.GetTrafficAsync(cancellationToken);
+            using JsonDocument document = await api.GetTrafficAsync(cancellationToken);
             return new TrafficDataResult(true, MihomoDataParser.ParseTraffic(document));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1876,10 +1885,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         MihomoApiClient api,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
+        Stopwatch stopwatch = Stopwatch.StartNew();
         try
         {
-            using var memory = await api.GetMemoryAsync(cancellationToken);
+            using JsonDocument memory = await api.GetMemoryAsync(cancellationToken);
             return new MemoryDataResult(true, MihomoDataParser.ParseMemoryBytes(memory));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1899,7 +1908,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         try
         {
-            using var document = await api.GetConnectionsAsync(cancellationToken);
+            using JsonDocument document = await api.GetConnectionsAsync(cancellationToken);
             return new ConnectionDataResult(true, MihomoDataParser.ParseConnections(document));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1919,7 +1928,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         try
         {
-            using var document = await api.GetRulesAsync(cancellationToken);
+            using JsonDocument document = await api.GetRulesAsync(cancellationToken);
             return MihomoDataParser.ParseRules(document);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1939,8 +1948,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         try
         {
-            using var providers = await api.GetProvidersAsync(cancellationToken);
-            using var ruleProviders = await api.GetRuleProvidersAsync(cancellationToken);
+            using JsonDocument providers = await api.GetProvidersAsync(cancellationToken);
+            using JsonDocument ruleProviders = await api.GetRuleProvidersAsync(cancellationToken);
             return (MihomoDataParser.ParseProviders(providers, "proxy"), MihomoDataParser.ParseProviders(ruleProviders, "rule"));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1958,8 +1967,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         try
         {
-            using var logs = await _api!.GetLogsAsync(_settings.LogLevel, cancellationToken);
-            foreach (var entry in MihomoDataParser.ParseLogs(logs, "mihomo"))
+            using JsonDocument logs = await _api!.GetLogsAsync(_settings.LogLevel, cancellationToken);
+            foreach (LogEntry entry in MihomoDataParser.ParseLogs(logs, "mihomo"))
             {
                 _logBuffer.Add(entry);
             }
@@ -1978,7 +1987,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private string? FindCoreVersion()
     {
-        var path = _coreDiscovery.FindExecutable();
+        string? path = _coreDiscovery.FindExecutable();
         return path is null ? null : CoreDiscovery.GetVersion(path);
     }
 
@@ -2001,7 +2010,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private void MarkCoreHealthUnconfirmed(string phase, Exception exception, int retryCount = 0)
     {
-        var message = $"核心状态暂时无法确认（{phase}：{DescribeControllerError(exception)}）。";
+        string message = $"核心状态暂时无法确认（{phase}：{DescribeControllerError(exception)}）。";
         LogControllerFailure(phase, "/version 或 /configs", exception, retryCount);
         _snapshot = _snapshot with
         {
@@ -2019,12 +2028,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         int retryCount,
         TimeSpan? elapsed = null)
     {
-        var status = exception is HttpRequestException { StatusCode: { } statusCode }
+        string status = exception is HttpRequestException { StatusCode: { } statusCode }
             ? $"HTTP {(int)statusCode}"
             : "HTTP 未确认";
-        var duration = elapsed is null ? "未测量" : $"{elapsed.Value.TotalMilliseconds:0}ms";
-        var hosting = _usingServiceCore ? "service" : "local";
-        var message = $"{phase}失败：托管方式={hosting}，路径={path}，{status}，耗时={duration}，重试={retryCount}，错误类型={DescribeControllerError(exception)}。";
+        string duration = elapsed is null ? "未测量" : $"{elapsed.Value.TotalMilliseconds:0}ms";
+        string hosting = _usingServiceCore ? "service" : "local";
+        string message = $"{phase}失败：托管方式={hosting}，路径={path}，{status}，耗时={duration}，重试={retryCount}，错误类型={DescribeControllerError(exception)}。";
         _logBuffer.Add(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "warning", message));
     }
 
@@ -2093,8 +2102,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private static string? ResolveStartupExecutablePath(bool required)
     {
-        var path = Environment.ProcessPath;
-        var valid = !string.IsNullOrWhiteSpace(path)
+        string? path = Environment.ProcessPath;
+        bool valid = !string.IsNullOrWhiteSpace(path)
             && Path.IsPathFullyQualified(path)
             && File.Exists(path)
             && string.Equals(Path.GetExtension(path), ".exe", StringComparison.OrdinalIgnoreCase);

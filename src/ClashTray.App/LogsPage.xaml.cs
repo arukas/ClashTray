@@ -37,16 +37,16 @@ public sealed partial class LogsPage : UserControl
             return;
         }
 
-        var search = SearchBox.Text.Trim();
-        var level = (LevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
-        var source = (SourceBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
+        string search = SearchBox.Text.Trim();
+        string? level = (LevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
+        string? source = (SourceBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
         LogsListView.Items.Clear();
-        foreach (var log in _logs.Where(log =>
+        foreach (LogEntry log in _logs.Where(log =>
                      (string.IsNullOrWhiteSpace(search) || log.Message.Contains(search, StringComparison.OrdinalIgnoreCase))
                      && (level is "全部" or null || string.Equals(log.Level, level, StringComparison.OrdinalIgnoreCase))
                      && (source is "全部来源" or null || string.Equals(log.Source, source, StringComparison.OrdinalIgnoreCase))))
         {
-            var folded = log.RepeatCount > 1 ? $" ×{log.RepeatCount}" : string.Empty;
+            string folded = log.RepeatCount > 1 ? $" ×{log.RepeatCount}" : string.Empty;
             LogsListView.Items.Add(new ListViewItem { Content = $"{log.Timestamp:HH:mm:ss} [{log.Source}/{log.Level}] {log.Message}{folded}", Tag = log });
         }
         EmptyListText.Visibility = LogsListView.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -54,13 +54,13 @@ public sealed partial class LogsPage : UserControl
 
     private void CopyButton_Click(object sender, RoutedEventArgs e)
     {
-        var text = new StringBuilder();
-        foreach (var item in LogsListView.Items.OfType<ListViewItem>())
+        StringBuilder text = new StringBuilder();
+        foreach (ListViewItem item in LogsListView.Items.OfType<ListViewItem>())
         {
             text.AppendLine(item.Content?.ToString());
         }
 
-        var package = new DataPackage();
+        DataPackage package = new DataPackage();
         package.SetText(text.ToString());
         Clipboard.SetContent(package);
     }

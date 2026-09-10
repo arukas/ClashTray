@@ -16,6 +16,22 @@ public enum MihomoStreamFailureKind
 
 public sealed class MihomoStreamException : IOException
 {
+    public MihomoStreamException()
+        : this(string.Empty, MihomoStreamFailureKind.InvalidJson, string.Empty)
+    {
+    }
+
+    public MihomoStreamException(string message)
+        : this(string.Empty, MihomoStreamFailureKind.InvalidJson, message)
+    {
+    }
+
+    public MihomoStreamException(string message, Exception innerException)
+        : this(string.Empty, MihomoStreamFailureKind.InvalidJson, message, innerException)
+    {
+    }
+
+
     public MihomoStreamException(
         string path,
         MihomoStreamFailureKind kind,
@@ -76,47 +92,47 @@ public sealed class MihomoApiClient
 
     public async Task<JsonDocument> GetAsync(string path, CancellationToken cancellationToken = default)
     {
-        using var request = CreateRequest(HttpMethod.Get, path);
-        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using HttpRequestMessage request = CreateRequest(HttpMethod.Get, path);
+        using HttpResponseMessage response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await ReadJsonAsync(response.Content, cancellationToken);
     }
 
     public async Task<JsonDocument> PutAsync(string path, object payload, CancellationToken cancellationToken = default)
     {
-        using var request = CreateRequest(HttpMethod.Put, path);
+        using HttpRequestMessage request = CreateRequest(HttpMethod.Put, path);
         request.Content = JsonContent.Create(payload, options: JsonOptions);
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await ReadJsonAsync(response.Content, cancellationToken);
     }
 
     public async Task<JsonDocument> PostAsync(string path, object? payload = null, CancellationToken cancellationToken = default)
     {
-        using var request = CreateRequest(HttpMethod.Post, path);
+        using HttpRequestMessage request = CreateRequest(HttpMethod.Post, path);
         if (payload is not null)
         {
             request.Content = JsonContent.Create(payload, options: JsonOptions);
         }
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await ReadJsonAsync(response.Content, cancellationToken);
     }
 
     public async Task<JsonDocument> PatchAsync(string path, object payload, CancellationToken cancellationToken = default)
     {
-        using var request = CreateRequest(HttpMethod.Patch, path);
+        using HttpRequestMessage request = CreateRequest(HttpMethod.Patch, path);
         request.Content = JsonContent.Create(payload, options: JsonOptions);
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
         return await ReadJsonAsync(response.Content, cancellationToken);
     }
 
     public async Task DeleteAsync(string path, CancellationToken cancellationToken = default)
     {
-        using var request = CreateRequest(HttpMethod.Delete, path);
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        using HttpRequestMessage request = CreateRequest(HttpMethod.Delete, path);
+        using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
         await EnsureSuccessAsync(response, cancellationToken);
     }
 
@@ -167,7 +183,7 @@ public sealed class MihomoApiClient
         bool? ipv6,
         CancellationToken cancellationToken = default)
     {
-        var payload = new Dictionary<string, bool>();
+        Dictionary<string, bool> payload = new Dictionary<string, bool>();
         if (allowLan is bool allowLanValue)
         {
             payload["allow-lan"] = allowLanValue;
@@ -189,11 +205,19 @@ public sealed class MihomoApiClient
     public Task<JsonDocument> SelectProxyAsync(string group, string proxy, CancellationToken cancellationToken = default) =>
         PutAsync($"/proxies/{Uri.EscapeDataString(group)}", new { name = proxy }, cancellationToken);
 
-    public Task<JsonDocument> TestDelayAsync(string proxy, Uri url, int timeoutMilliseconds, CancellationToken cancellationToken = default) =>
-        GetAsync($"/proxies/{Uri.EscapeDataString(proxy)}/delay?url={Uri.EscapeDataString(url.ToString())}&timeout={timeoutMilliseconds}", cancellationToken);
+    public Task<JsonDocument> TestDelayAsync(string proxy, Uri url, int timeoutMilliseconds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(proxy);
+        ArgumentNullException.ThrowIfNull(url);
+        return GetAsync($"/proxies/{Uri.EscapeDataString(proxy)}/delay?url={Uri.EscapeDataString(url.ToString())}&timeout={timeoutMilliseconds}", cancellationToken);
+    }
 
-    public Task<JsonDocument> TestGroupDelayAsync(string group, Uri url, int timeoutMilliseconds, CancellationToken cancellationToken = default) =>
-        GetAsync($"/group/{Uri.EscapeDataString(group)}/delay?url={Uri.EscapeDataString(url.ToString())}&timeout={timeoutMilliseconds}", cancellationToken);
+    public Task<JsonDocument> TestGroupDelayAsync(string group, Uri url, int timeoutMilliseconds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        ArgumentNullException.ThrowIfNull(url);
+        return GetAsync($"/group/{Uri.EscapeDataString(group)}/delay?url={Uri.EscapeDataString(url.ToString())}&timeout={timeoutMilliseconds}", cancellationToken);
+    }
 
     public Task<JsonDocument> SetModeAsync(ProxyMode mode, CancellationToken cancellationToken = default) =>
         PatchAsync("/configs", new { mode = mode.ToString().ToLowerInvariant() }, cancellationToken);
@@ -212,7 +236,7 @@ public sealed class MihomoApiClient
 
     public ClientWebSocket CreateWebSocket()
     {
-        var socket = new ClientWebSocket();
+        ClientWebSocket socket = new ClientWebSocket();
         if (_secret.Length > 0)
         {
             socket.Options.SetRequestHeader("Authorization", $"Bearer {_secret}");
@@ -222,7 +246,7 @@ public sealed class MihomoApiClient
 
     public async Task<ClientWebSocket> ConnectWebSocketAsync(string path, CancellationToken cancellationToken = default)
     {
-        var socket = CreateWebSocket();
+        ClientWebSocket socket = CreateWebSocket();
         try
         {
             await socket.ConnectAsync(BuildWebSocketUri(path), cancellationToken);
@@ -237,8 +261,8 @@ public sealed class MihomoApiClient
 
     public Uri BuildWebSocketUri(string path)
     {
-        var requestUri = new Uri(_controllerUri, path);
-        var builder = new UriBuilder(requestUri)
+        Uri requestUri = new Uri(_controllerUri, path);
+        UriBuilder builder = new UriBuilder(requestUri)
         {
             Scheme = _controllerUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws",
         };
@@ -247,7 +271,7 @@ public sealed class MihomoApiClient
 
     private HttpRequestMessage CreateRequest(HttpMethod method, string path)
     {
-        var request = new HttpRequestMessage(method, new Uri(_controllerUri, path));
+        HttpRequestMessage request = new HttpRequestMessage(method, new Uri(_controllerUri, path));
         if (_secret.Length > 0)
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _secret);
@@ -271,7 +295,7 @@ public sealed class MihomoApiClient
 
     private static async Task<JsonDocument> ReadJsonAsync(HttpContent content, CancellationToken cancellationToken)
     {
-        var bytes = await ReadBytesAsync(content, MaxJsonResponseBytes, cancellationToken);
+        byte[] bytes = await ReadBytesAsync(content, MaxJsonResponseBytes, cancellationToken);
         return bytes.Length == 0 ? JsonDocument.Parse("{}") : JsonDocument.Parse(bytes);
     }
 
@@ -285,12 +309,12 @@ public sealed class MihomoApiClient
             throw new InvalidDataException("Mihomo controller response exceeded the maximum size.");
         }
 
-        await using var input = await content.ReadAsStreamAsync(cancellationToken);
-        using var buffer = new MemoryStream();
-        var chunk = new byte[64 * 1024];
+        await using Stream input = await content.ReadAsStreamAsync(cancellationToken);
+        using MemoryStream buffer = new MemoryStream();
+        byte[] chunk = new byte[64 * 1024];
         while (true)
         {
-            var count = await input.ReadAsync(chunk.AsMemory(), cancellationToken);
+            int count = await input.ReadAsync(chunk.AsMemory(), cancellationToken);
             if (count == 0)
             {
                 return buffer.ToArray();
@@ -307,13 +331,13 @@ public sealed class MihomoApiClient
 
     private async Task<JsonDocument> GetStreamingSnapshotAsync(string path, CancellationToken cancellationToken)
     {
-        using var request = CreateRequest(HttpMethod.Get, path);
-        using var firstRecordTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using HttpRequestMessage request = CreateRequest(HttpMethod.Get, path);
+        using CancellationTokenSource firstRecordTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         firstRecordTimeout.CancelAfter(_streamingFirstRecordTimeout);
 
         try
         {
-            using var response = await _httpClient.SendAsync(
+            using HttpResponseMessage response = await _httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 firstRecordTimeout.Token);
@@ -333,14 +357,14 @@ public sealed class MihomoApiClient
         string path,
         CancellationToken cancellationToken)
     {
-        await using var input = await content.ReadAsStreamAsync(cancellationToken);
-        var readBuffer = new byte[StreamingReadBufferBytes];
-        using var line = new MemoryStream(Math.Min(_maxStreamingRecordBytes, StreamingReadBufferBytes));
-        var receivedAnyBytes = false;
+        await using Stream input = await content.ReadAsStreamAsync(cancellationToken);
+        byte[] readBuffer = new byte[StreamingReadBufferBytes];
+        using MemoryStream line = new MemoryStream(Math.Min(_maxStreamingRecordBytes, StreamingReadBufferBytes));
+        bool receivedAnyBytes = false;
 
         while (true)
         {
-            var count = await input.ReadAsync(readBuffer.AsMemory(), cancellationToken);
+            int count = await input.ReadAsync(readBuffer.AsMemory(), cancellationToken);
             if (count == 0)
             {
                 throw new MihomoStreamException(
@@ -354,12 +378,12 @@ public sealed class MihomoApiClient
             }
 
             receivedAnyBytes = true;
-            for (var index = 0; index < count; index++)
+            for (int index = 0; index < count; index++)
             {
-                var value = readBuffer[index];
+                byte value = readBuffer[index];
                 if (value == (byte)'\n')
                 {
-                    var document = TryParseJsonLine(line, path);
+                    JsonDocument? document = TryParseJsonLine(line, path);
                     line.SetLength(0);
                     if (document is not null)
                     {
@@ -384,8 +408,8 @@ public sealed class MihomoApiClient
 
     private static JsonDocument? TryParseJsonLine(MemoryStream line, string path)
     {
-        var bytes = line.ToArray();
-        var length = bytes.Length;
+        byte[] bytes = line.ToArray();
+        int length = bytes.Length;
         if (length > 0 && bytes[length - 1] == (byte)'\r')
         {
             length--;
@@ -412,7 +436,7 @@ public sealed class MihomoApiClient
 
     private static bool IsWhitespace(ReadOnlySpan<byte> bytes)
     {
-        foreach (var value in bytes)
+        foreach (byte value in bytes)
         {
             if (value is not ((byte)' ' or (byte)'\t' or (byte)'\r'))
             {

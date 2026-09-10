@@ -9,6 +9,8 @@ using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage;
+using Windows.Storage.Streams;
+using ClashTray.Core;
 
 namespace ClashTray.App;
 
@@ -20,27 +22,49 @@ public sealed partial class MainWindow
     internal async Task CaptureSmokeTestAsync(string directory)
     {
         Directory.CreateDirectory(directory);
-        if (NativeMethods.IsWindowVisible(_windowHandle)) throw new InvalidOperationException("Startup window was not hidden.");
+        if (NativeMethods.IsWindowVisible(_windowHandle))
+        {
+            throw new InvalidOperationException("Startup window was not hidden.");
+        }
+
         TogglePanel();
-        if (!NativeMethods.IsWindowVisible(_windowHandle)) throw new InvalidOperationException("Tray selection did not show the panel.");
+        if (!NativeMethods.IsWindowVisible(_windowHandle))
+        {
+            throw new InvalidOperationException("Tray selection did not show the panel.");
+        }
+
         HandleDeactivation();
-        if (NativeMethods.IsWindowVisible(_windowHandle)) throw new InvalidOperationException("Deactivation did not hide the panel.");
+        if (NativeMethods.IsWindowVisible(_windowHandle))
+        {
+            throw new InvalidOperationException("Deactivation did not hide the panel.");
+        }
+
         TogglePanel();
         TogglePanel();
-        if (NativeMethods.IsWindowVisible(_windowHandle)) throw new InvalidOperationException("Repeated tray selection did not hide the panel.");
+        if (NativeMethods.IsWindowVisible(_windowHandle))
+        {
+            throw new InvalidOperationException("Repeated tray selection did not hide the panel.");
+        }
+
         ShowPanel();
         _isPinned = true; // Keep the diagnostic render stable if another app takes focus.
         await VerifyThemeUnlockAsync(directory);
-        var empty = _runtime!.Snapshot;
-        var sample = empty with
+        RuntimeSnapshot empty = _runtime!.Snapshot;
+        RuntimeSnapshot sample = empty with
         {
             Core = empty.Core with
             {
-                State = CoreState.Running, Version = "v1.19.30", ConfigurationName = "示例配置.yaml",
-                ConnectionCount = 103, MemoryBytes = 95 * 1024 * 1024,
-                UploadBytesPerSecond = 7168, DownloadBytesPerSecond = 156672,
-                UploadBytes = 7864320, DownloadBytes = 222402969,
-                TrafficAvailable = true, MemoryAvailable = true
+                State = CoreState.Running,
+                Version = "v1.19.30",
+                ConfigurationName = "示例配置.yaml",
+                ConnectionCount = 103,
+                MemoryBytes = 95 * 1024 * 1024,
+                UploadBytesPerSecond = 7168,
+                DownloadBytesPerSecond = 156672,
+                UploadBytes = 7864320,
+                DownloadBytes = 222402969,
+                TrafficAvailable = true,
+                MemoryAvailable = true
             },
             Tun = TunState.Off,
             Configurations = [new("sample", "示例配置.yaml", "sample.yaml", null, null, true)],
@@ -56,30 +80,33 @@ public sealed partial class MainWindow
                 new("流媒体", "Selector", "新加坡 · 03", ["新加坡 · 03", "日本 · 02"]),
                 new("国内服务", "Selector", "DIRECT", ["DIRECT", "香港 · 01"])
             ],
-            Providers = [new("示例订阅", "Proxy", "HTTP", new DateTimeOffset(2026,9,8,12,0,0,TimeSpan.Zero), null, 3)]
+            Providers = [new("示例订阅", "Proxy", "HTTP", new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero), null, 3)]
         };
-        foreach (var theme in new[] { "light", "dark" })
+        foreach (string theme in new[] { "light", "dark" })
         {
-            foreach (var populated in new[] { false, true })
+            foreach (bool populated in new[] { false, true })
             {
                 UpdateSnapshot(populated ? sample : empty);
                 ApplyTheme(theme);
                 if (populated)
                 {
                     _trafficHistory.Clear();
-                    for (var i = 0; i < 60; i++)
+                    for (int i = 0; i < 60; i++)
+                    {
                         _trafficHistory.Enqueue((2000 + 1000 * Math.Sin(i / 3d), 80000 + 60000 * Math.Sin(i / 4d)));
+                    }
+
                     DrawTraffic();
                 }
                 await Task.Delay(350);
                 RootGrid.UpdateLayout();
-                var renderer = new RenderTargetBitmap();
+                RenderTargetBitmap renderer = new RenderTargetBitmap();
                 await renderer.RenderAsync(RootGrid);
-                var pixels = await renderer.GetPixelsAsync();
-                var folder = await StorageFolder.GetFolderFromPathAsync(Path.GetFullPath(directory));
-                var file = await folder.CreateFileAsync($"{(populated ? "nodes" : "empty")}-{theme}.png", CreationCollisionOption.ReplaceExisting);
-                using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
-                var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+                IBuffer pixels = await renderer.GetPixelsAsync();
+                StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(Path.GetFullPath(directory));
+                StorageFile file = await folder.CreateFileAsync($"{(populated ? "nodes" : "empty")}-{theme}.png", CreationCollisionOption.ReplaceExisting);
+                using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+                BitmapEncoder encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
                 encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
                     (uint)renderer.PixelWidth, (uint)renderer.PixelHeight, 96, 96, pixels.ToArray());
                 await encoder.FlushAsync();
@@ -88,30 +115,44 @@ public sealed partial class MainWindow
         await VerifyNodeScrollingAsync(directory, sample);
         await VerifyProxyDelayDisplayAsync(directory, sample);
         await VerifySettingsDraftAsync(directory);
-        NativeMethods.GetWindowRect(_windowHandle, out var actual);
-        var anchor = GetTrayRect();
-        var monitor = NativeMethods.MonitorFromRect(ref anchor, NativeMethods.MONITOR_DEFAULTTONEAREST);
-        var info = new NativeMethods.MonitorInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfo>() };
-        if (!NativeMethods.GetMonitorInfo(monitor, ref info)) throw new InvalidOperationException("Monitor query failed.");
+        NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect actual);
+        NativeMethods.Rect anchor = GetTrayRect();
+        nint monitor = NativeMethods.MonitorFromRect(ref anchor, NativeMethods.MONITOR_DEFAULTTONEAREST);
+        NativeMethods.MonitorInfo info = new NativeMethods.MonitorInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfo>() };
+        if (!NativeMethods.GetMonitorInfo(monitor, ref info))
+        {
+            throw new InvalidOperationException("Monitor query failed.");
+        }
+
         if (actual.Right > info.Work.Right || actual.Bottom > info.Work.Bottom || actual.Left < info.Work.Left || actual.Top < info.Work.Top)
+        {
             throw new InvalidOperationException("Flyout escaped the work area.");
+        }
+
         await File.WriteAllTextAsync(Path.Combine(directory, "geometry.json"), JsonSerializer.Serialize(new
         {
             Window = new { actual.Left, actual.Top, actual.Right, actual.Bottom },
             WorkArea = new { info.Work.Left, info.Work.Top, info.Work.Right, info.Work.Bottom },
-            RootGrid.ActualWidth, RootGrid.ActualHeight, RightGap = info.Work.Right - actual.Right,
+            RootGrid.ActualWidth,
+            RootGrid.ActualHeight,
+            RightGap = info.Work.Right - actual.Right,
             BottomGap = info.Work.Bottom - actual.Bottom,
             NodesTop = ProxyPageContent.TransformToVisual(RootGrid).TransformPoint(new Windows.Foundation.Point()).Y,
             ScreenshotData = "synthetic; core and service operations disabled",
-            StartupHidden = true, TrayToggle = "passed", DeactivationDismissal = "passed"
+            StartupHidden = true,
+            TrayToggle = "passed",
+            DeactivationDismissal = "passed"
         }, DiagnosticJsonOptions));
-        foreach (var page in new[] { (_rulesPage as UIElement, "规则"), (_connectionsPage as UIElement, "连接"), (_logsPage as UIElement, "日志"), (_settingsPage as UIElement, "设置") })
+        foreach ((UIElement, string) page in new[] { (_rulesPage as UIElement, "规则"), (_connectionsPage as UIElement, "连接"), (_logsPage as UIElement, "日志"), (_settingsPage as UIElement, "设置") })
         {
             NavigateTo(page.Item1, page.Item2);
             await Task.Delay(100);
             RootGrid.UpdateLayout();
             if (!ReferenceEquals(PageContent.Content, page.Item1) || OtherPageScrollViewer.Visibility != Visibility.Visible)
+            {
                 throw new InvalidOperationException($"Navigation failed: {page.Item2}");
+            }
+
             await SaveDiagnosticFrameAsync(directory, $"page-{page.Item2}");
         }
         NavigateTo(_proxyPage, "代理");
@@ -119,9 +160,9 @@ public sealed partial class MainWindow
 
     private async Task VerifyNodeScrollingAsync(string directory, RuntimeSnapshot sample)
     {
-        var members = Enumerable.Range(1, 200).Select(i => $"香港 · {i:000}").ToArray();
+        string[] members = Enumerable.Range(1, 200).Select(i => $"香港 · {i:000}").ToArray();
         members[1] = "日本 · 超长节点名称用于检查截断与完整名称提示 · Tokyo Premium 02";
-        var crowded = sample with
+        RuntimeSnapshot crowded = sample with
         {
             ProxyNodes = members.Select((name, i) => new ProxyNode(name, "Shadowsocks", (30 + i).ToString(System.Globalization.CultureInfo.InvariantCulture), i == 0, [])).ToArray(),
             ProxyGroups = [
@@ -132,33 +173,46 @@ public sealed partial class MainWindow
         };
         UpdateSnapshot(crowded);
         RootGrid.UpdateLayout();
-        var groups = (StackPanel)_proxyPage!.FindName("GroupsPanel");
-        var search = (TextBox)_proxyPage.FindName("NodeSearchBox");
-        var listBeforeExpansion = VisualDescendants<ListView>(_proxyPage).ToArray();
+        StackPanel groups = (StackPanel)_proxyPage!.FindName("GroupsPanel");
+        TextBox search = (TextBox)_proxyPage.FindName("NodeSearchBox");
+        ListView[] listBeforeExpansion = VisualDescendants<ListView>(_proxyPage).ToArray();
         if (listBeforeExpansion.Any(list => list.Items.Count > 0))
+        {
             throw new InvalidOperationException("Collapsed groups eagerly created node items.");
+        }
 
         void InvokeGroup(int index)
         {
-            var card = (Border)groups.Children[index];
-            var button = (Button)((Grid)((StackPanel)card.Child).Children[0]).Children[0];
+            Border card = (Border)groups.Children[index];
+            Button button = (Button)((Grid)((StackPanel)card.Child).Children[0]).Children[0];
             ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
         }
         InvokeGroup(0);
         InvokeGroup(1);
         await Task.Delay(200);
         RootGrid.UpdateLayout();
-        var lists = VisualDescendants<ListView>(_proxyPage).Where(list => list.Items.Count > 0).ToArray();
+        ListView[] lists = VisualDescendants<ListView>(_proxyPage).Where(list => list.Items.Count > 0).ToArray();
         if (lists.Length != 2 || lists[0].Items.Count != 200 || lists[1].Items.Count != 5)
+        {
             throw new InvalidOperationException("Multiple expanded groups did not retain their nodes.");
-        if (lists.Any(list => ScrollViewer.GetVerticalScrollMode(list) != ScrollMode.Disabled))
-            throw new InvalidOperationException("Node list owns a nested scroll viewport.");
-        if (VisualDescendants<ScrollViewer>(_proxyPage).Any(scroll => scroll.ScrollableHeight > 1))
-            throw new InvalidOperationException("A nested node scrollbar has scrollable content.");
-        if (DashboardScrollViewer.ScrollableHeight <= 0)
-            throw new InvalidOperationException("Dashboard cannot scroll the expanded node content.");
+        }
 
-        foreach (var theme in new[] { "light", "dark" })
+        if (lists.Any(list => ScrollViewer.GetVerticalScrollMode(list) != ScrollMode.Disabled))
+        {
+            throw new InvalidOperationException("Node list owns a nested scroll viewport.");
+        }
+
+        if (VisualDescendants<ScrollViewer>(_proxyPage).Any(scroll => scroll.ScrollableHeight > 1))
+        {
+            throw new InvalidOperationException("A nested node scrollbar has scrollable content.");
+        }
+
+        if (DashboardScrollViewer.ScrollableHeight <= 0)
+        {
+            throw new InvalidOperationException("Dashboard cannot scroll the expanded node content.");
+        }
+
+        foreach (string theme in new[] { "light", "dark" })
         {
             ApplyTheme(theme);
             DashboardScrollViewer.ChangeView(null, 210, null, true);
@@ -167,41 +221,59 @@ public sealed partial class MainWindow
         DashboardScrollViewer.ChangeView(null, DashboardScrollViewer.ScrollableHeight, null, true);
         await Task.Delay(150);
         RootGrid.UpdateLayout();
-        var lastCard = (FrameworkElement)groups.Children.Last();
-        var bottom = lastCard.TransformToVisual(DashboardScrollViewer).TransformPoint(new Windows.Foundation.Point(0, lastCard.ActualHeight)).Y;
+        FrameworkElement lastCard = (FrameworkElement)groups.Children.Last();
+        double bottom = lastCard.TransformToVisual(DashboardScrollViewer).TransformPoint(new Windows.Foundation.Point(0, lastCard.ActualHeight)).Y;
         if (bottom > DashboardScrollViewer.ActualHeight + 1)
+        {
             throw new InvalidOperationException("Last group cannot be reached by the dashboard scrollbar.");
+        }
+
         await SaveDiagnosticFrameAsync(directory, "last-group");
 
         search.Text = "香港 · 200";
         await Task.Delay(300);
         RootGrid.UpdateLayout();
-        var filtered = VisualDescendants<ListView>(_proxyPage).Where(list => list.Items.Count > 0).ToArray();
+        ListView[] filtered = VisualDescendants<ListView>(_proxyPage).Where(list => list.Items.Count > 0).ToArray();
         if (groups.Children.Count != 1 || filtered.Length != 1 || filtered[0].Items.Count != 1)
+        {
             throw new InvalidOperationException("Node search did not isolate the last node.");
+        }
+
         DashboardScrollViewer.ChangeView(null, 100, null, true);
         await SaveDiagnosticFrameAsync(directory, "search-result");
         search.Text = "no-such-node";
         await Task.Delay(300);
         if (((TextBlock)_proxyPage.FindName("NoResultsText")).Visibility != Visibility.Visible || groups.Children.Count != 0)
+        {
             throw new InvalidOperationException("Missing search results did not show an empty state.");
+        }
+
         search.Text = "";
         await Task.Delay(300);
         RootGrid.UpdateLayout();
         if (VisualDescendants<ListView>(_proxyPage).Count(list => list.Items.Count > 0) != 2)
+        {
             throw new InvalidOperationException("Clearing search lost expansion state.");
+        }
 
         // A metrics-only snapshot must preserve the current node controls.
-        var firstCard = groups.Children[0];
+        UIElement firstCard = groups.Children[0];
         _proxyPage.UpdateSnapshot(crowded with { Core = crowded.Core with { ConnectionCount = 999 } });
         if (!ReferenceEquals(firstCard, groups.Children[0]))
+        {
             throw new InvalidOperationException("Metrics update rebuilt node controls.");
+        }
 
         await File.WriteAllTextAsync(Path.Combine(directory, "node-scroll-checks.json"), JsonSerializer.Serialize(new
         {
-            Nodes = 200, ExpandedGroups = 2, NestedScrollableViewports = 0,
-            LastGroupReachable = true, SearchLastNode = true, NoResults = true,
-            ExpansionRestored = true, MetricsPreserveControls = true,
+            Nodes = 200,
+            ExpandedGroups = 2,
+            NestedScrollableViewports = 0,
+            LastGroupReachable = true,
+            SearchLastNode = true,
+            NoResults = true,
+            ExpansionRestored = true,
+            MetricsPreserveControls = true,
             HighContrast = "Uses system resources; OS high-contrast mode not toggled by this test.",
             InputLimits = "Wheel, touch and physical keyboard require manual verification."
         }, DiagnosticJsonOptions));
@@ -210,70 +282,94 @@ public sealed partial class MainWindow
 
     private async Task VerifySettingsDraftAsync(string directory)
     {
-        var page = _settingsPage!;
+        SettingsPage page = _settingsPage!;
         NavigateTo(page, "设置");
         await Task.Delay(100);
-        var windows = (ToggleSwitch)page.FindName("StartWithWindowsSwitch");
-        var core = (ToggleSwitch)page.FindName("StartCoreSwitch");
-        var port = (NumberBox)page.FindName("HttpPortBox");
-        var bypass = (TextBox)page.FindName("BypassListBox");
-        var theme = (ComboBox)page.FindName("ThemeBox");
-        var save = (Button)page.FindName("SaveSettingsButton");
-        var status = (TextBlock)page.FindName("StatusText");
-        var windowsToggle = (IToggleProvider)new ToggleSwitchAutomationPeer(windows).GetPattern(PatternInterface.Toggle);
-        var coreToggle = (IToggleProvider)new ToggleSwitchAutomationPeer(core).GetPattern(PatternInterface.Toggle);
-        var invokeSave = (IInvokeProvider)new ButtonAutomationPeer(save).GetPattern(PatternInterface.Invoke);
+        ToggleSwitch windows = (ToggleSwitch)page.FindName("StartWithWindowsSwitch");
+        ToggleSwitch core = (ToggleSwitch)page.FindName("StartCoreSwitch");
+        NumberBox port = (NumberBox)page.FindName("HttpPortBox");
+        TextBox bypass = (TextBox)page.FindName("BypassListBox");
+        ComboBox theme = (ComboBox)page.FindName("ThemeBox");
+        Button save = (Button)page.FindName("SaveSettingsButton");
+        TextBlock status = (TextBlock)page.FindName("StatusText");
+        IToggleProvider windowsToggle = (IToggleProvider)new ToggleSwitchAutomationPeer(windows).GetPattern(PatternInterface.Toggle);
+        IToggleProvider coreToggle = (IToggleProvider)new ToggleSwitchAutomationPeer(core).GetPattern(PatternInterface.Toggle);
+        IInvokeProvider invokeSave = (IInvokeProvider)new ButtonAutomationPeer(save).GetPattern(PatternInterface.Invoke);
         windowsToggle.Toggle();
         coreToggle.Toggle();
-        var draftPort = _runtime!.Settings.HttpPort + 10;
+        int draftPort = _runtime!.Settings.HttpPort + 10;
         port.Value = draftPort;
         bypass.Text = "localhost;127.*;example.test";
-        for (var index = 0; index < 8; index++)
+        for (int index = 0; index < 8; index++)
         {
             UpdateSnapshot(_runtime.Snapshot);
             await Task.Delay(30);
         }
         if (!windows.IsOn || !core.IsOn || port.Value != draftPort || bypass.Text != "localhost;127.*;example.test")
+        {
             throw new InvalidOperationException("Live snapshots overwrote an unsaved settings field.");
+        }
+
         await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = "dark" });
         page.UpdateSnapshot(_runtime.Snapshot);
         if (!windows.IsOn || !core.IsOn || port.Value != draftPort
             || (theme.SelectedItem as ComboBoxItem)?.Tag?.ToString() != "dark")
+        {
             throw new InvalidOperationException("An external theme change lost drafts or failed to update the untouched theme.");
+        }
+
         port.Value = _runtime.Settings.MixedPort;
         invokeSave.Invoke();
         await Task.Delay(100);
         if (!windows.IsOn || !core.IsOn || _runtime.Settings.StartCoreAutomatically
             || !status.Text.Contains("不能重复", StringComparison.Ordinal))
+        {
             throw new InvalidOperationException("Validation failure lost the startup drafts or falsely saved them.");
+        }
+
         port.Value = draftPort;
         // Exercise both switches without ever changing the real Windows startup registry.
         windowsToggle.Toggle();
         invokeSave.Invoke();
-        for (var attempt = 0; attempt < 50; attempt++)
+        for (int attempt = 0; attempt < 50; attempt++)
         {
             await Task.Delay(30);
-            if (_runtime.Settings.StartCoreAutomatically && save.IsEnabled) break;
+            if (_runtime.Settings.StartCoreAutomatically && save.IsEnabled)
+            {
+                break;
+            }
         }
-        var store = new ClashTray.Core.SettingsStore(new ClashTray.Core.AppPaths(
+        SettingsStore store = new ClashTray.Core.SettingsStore(new ClashTray.Core.AppPaths(
             Path.Combine(directory, "user"), Path.Combine(directory, "service")));
-        var persisted = await store.LoadAsync();
+        AppSettings persisted = await store.LoadAsync();
         if (!persisted.StartCoreAutomatically || persisted.StartWithWindows || persisted.HttpPort != draftPort
             || persisted.BypassList != "localhost;127.*;example.test")
+        {
             throw new InvalidOperationException("Saved startup/core preferences and edited fields did not survive reload.");
+        }
+
         UpdateSnapshot(_runtime.Snapshot);
         if (!core.IsOn || windows.IsOn || port.Value != draftPort)
+        {
             throw new InvalidOperationException("Saved values reverted after another snapshot.");
-        var reopened = new SettingsPage(_runtime);
+        }
+
+        SettingsPage reopened = new SettingsPage(_runtime);
         if (!((ToggleSwitch)reopened.FindName("StartCoreSwitch")).IsOn)
+        {
             throw new InvalidOperationException("A recreated settings page lost the saved core startup preference.");
+        }
+
         OtherPageScrollViewer.ChangeView(null, 0, null, true);
         await SaveDiagnosticFrameAsync(directory, "settings-startup");
         await File.WriteAllTextAsync(Path.Combine(directory, "settings-draft-checks.json"), JsonSerializer.Serialize(new
         {
-            BothStartupSwitchesSurviveSnapshots = true, PortAndTextDraftsPreserved = true,
-            ExternalThemeMergesWithoutLosingDrafts = true, InvalidSavePreservesDrafts = true,
-            SavedCoreStartupSurvivesReload = true, RecreatedPageLoadsSavedValues = true,
+            BothStartupSwitchesSurviveSnapshots = true,
+            PortAndTextDraftsPreserved = true,
+            ExternalThemeMergesWithoutLosingDrafts = true,
+            InvalidSavePreservesDrafts = true,
+            SavedCoreStartupSurvivesReload = true,
+            RecreatedPageLoadsSavedValues = true,
             WindowsStartupRegistryChanged = false,
             ManualChecks = "Windows sign-in startup and automatic core launch after sign-in were not exercised."
         }, DiagnosticJsonOptions));
@@ -281,8 +377,8 @@ public sealed partial class MainWindow
     }
     private async Task VerifyProxyDelayDisplayAsync(string directory, RuntimeSnapshot sample)
     {
-        var proxyPage = _proxyPage!;
-        var state = sample with
+        ProxyPage proxyPage = _proxyPage!;
+        RuntimeSnapshot state = sample with
         {
             ProxyGroups = [new("自动选择", "URLTest", "A", ["A", "B", "C"]),
                 new("故障转移", "Fallback", "B", ["A", "B", "C"])],
@@ -290,46 +386,69 @@ public sealed partial class MainWindow
                 new("C", "Direct", null, false, [])]
         };
         UpdateSnapshot(state);
-        var groups = (StackPanel)proxyPage.FindName("GroupsPanel");
-        for (var index = 0; index < 2; index++)
+        StackPanel groups = (StackPanel)proxyPage.FindName("GroupsPanel");
+        for (int index = 0; index < 2; index++)
         {
-            var button = (Button)((Grid)((StackPanel)((Border)groups.Children[index]).Child).Children[0]).Children[0];
+            Button button = (Button)((Grid)((StackPanel)((Border)groups.Children[index]).Child).Children[0]).Children[0];
             ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
         }
         await Task.Delay(150);
         RootGrid.UpdateLayout();
         void AssertCurrent(ListView list, string name)
         {
-            var items = list.Items.OfType<ListViewItem>().ToArray();
+            ListViewItem[] items = list.Items.OfType<ListViewItem>().ToArray();
             if ((list.SelectedItem as ListViewItem)?.Tag?.ToString() != name)
-                throw new InvalidOperationException("Automatic group selected row does not match core now.");
-            foreach (var item in items)
             {
-                var current = item.Tag?.ToString() == name;
+                throw new InvalidOperationException("Automatic group selected row does not match core now.");
+            }
+
+            foreach (ListViewItem item in items)
+            {
+                bool current = item.Tag?.ToString() == name;
                 if (VisualDescendants<TextBlock>(item).Any(text => text.Text == "当前") != current)
+                {
                     throw new InvalidOperationException("Current badge is missing or stale.");
-                var mark = ((Grid)item.Content).Children.OfType<FontIcon>().Single();
+                }
+
+                FontIcon mark = ((Grid)item.Content).Children.OfType<FontIcon>().Single();
                 if ((mark.Opacity == 1) != current)
+                {
                     throw new InvalidOperationException("Current checkmark is missing or stale.");
+                }
             }
         }
-        var lists = VisualDescendants<ListView>(proxyPage).Where(list => list.Items.Count > 0).ToArray();
-        if (lists.Length != 2) throw new InvalidOperationException("Automatic groups did not expand.");
+        ListView[] lists = VisualDescendants<ListView>(proxyPage).Where(list => list.Items.Count > 0).ToArray();
+        if (lists.Length != 2)
+        {
+            throw new InvalidOperationException("Automatic groups did not expand.");
+        }
+
         AssertCurrent(lists[0], "A");
         AssertCurrent(lists[1], "B");
-        foreach (var expected in new[] { "42 ms", "超时", "未测速" })
+        foreach (string expected in new[] { "42 ms", "超时", "未测速" })
+        {
             if (!VisualDescendants<TextBlock>(lists[0]).Any(text => text.Text == expected))
+            {
                 throw new InvalidOperationException($"Latency state missing: {expected}");
+            }
+        }
+
         state = state with { ProxyGroups = state.ProxyGroups.Select(group => group with { Current = "C" }).ToArray() };
         proxyPage.UpdateSnapshot(state);
         await Task.Delay(150);
         RootGrid.UpdateLayout();
-        foreach (var list in VisualDescendants<ListView>(proxyPage).Where(list => list.Items.Count > 0)) AssertCurrent(list, "C");
+        foreach (ListView list in VisualDescendants<ListView>(proxyPage).Where(list => list.Items.Count > 0))
+        {
+            AssertCurrent(list, "C");
+        }
+
         DashboardScrollViewer.ChangeView(null, 190, null, true);
         await SaveDiagnosticFrameAsync(directory, "proxy-delay-states");
         await File.WriteAllTextAsync(Path.Combine(directory, "proxy-delay-checks.json"), JsonSerializer.Serialize(new
         {
-            UrlTestCurrentMarked = true, FallbackCurrentMarked = true, AutomaticSwitchMovesMarker = true,
+            UrlTestCurrentMarked = true,
+            FallbackCurrentMarked = true,
+            AutomaticSwitchMovesMarker = true,
             MillisecondsTimeoutAndUntestedDistinct = true
         }, DiagnosticJsonOptions));
         DashboardScrollViewer.ChangeView(null, 0, null, true);
@@ -337,44 +456,69 @@ public sealed partial class MainWindow
     private async Task VerifyThemeUnlockAsync(string directory)
     {
         if (NakhimovThemeOption.Visibility != Visibility.Collapsed)
+        {
             throw new InvalidOperationException("Locked theme is visible before the gesture.");
-        var invoke = (IInvokeProvider)new ButtonAutomationPeer(LogoButton).GetPattern(PatternInterface.Invoke);
-        for (var index = 0; index < 4; index++)
+        }
+
+        IInvokeProvider invoke = (IInvokeProvider)new ButtonAutomationPeer(LogoButton).GetPattern(PatternInterface.Invoke);
+        for (int index = 0; index < 4; index++)
         {
             invoke.Invoke();
             await Task.Delay(50);
         }
         if (_runtime!.Settings.NakhimovUnlocked || _themeName == "nakhimov")
+        {
             throw new InvalidOperationException("Theme unlocked before the fifth click.");
+        }
+
         invoke.Invoke();
-        for (var attempt = 0; attempt < 50; attempt++)
+        for (int attempt = 0; attempt < 50; attempt++)
         {
             await Task.Delay(50);
-            if (_runtime.Settings.NakhimovUnlocked && !_unlockInProgress) break;
+            if (_runtime.Settings.NakhimovUnlocked && !_unlockInProgress)
+            {
+                break;
+            }
         }
         if (!_runtime.Settings.NakhimovUnlocked || _themeName != "nakhimov"
             || NakhimovThemeOption.Visibility != Visibility.Visible
             || _logoAsset != "Nakhimov")
+        {
             throw new InvalidOperationException("Fifth Logo button invocation did not enable the theme.");
-        var store = new ClashTray.Core.SettingsStore(new ClashTray.Core.AppPaths(
+        }
+
+        SettingsStore store = new ClashTray.Core.SettingsStore(new ClashTray.Core.AppPaths(
             Path.Combine(directory, "user"), Path.Combine(directory, "service")));
-        var restored = await store.LoadAsync();
+        AppSettings restored = await store.LoadAsync();
         if (!restored.NakhimovUnlocked || restored.Theme != "nakhimov")
+        {
             throw new InvalidOperationException("Unlock state was not persisted.");
+        }
+
         await SaveDiagnosticFrameAsync(directory, "nakhimov-unlocked");
         EasterEggTip.IsOpen = false;
         await SaveDiagnosticFrameAsync(directory, "nakhimov-panel");
         await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = "light" });
         ApplyTheme(_runtime.Settings.Theme);
         if (NakhimovThemeOption.Visibility != Visibility.Visible || _logoAsset != "Light")
+        {
             throw new InvalidOperationException("Switching back lost unlock state or kept the wrong logo.");
+        }
+
         if (((SolidColorBrush)((ResourceDictionary)Application.Current.Resources.ThemeDictionaries["Default"])["ClashTrayCanvasBrush"]).Color
             != Windows.UI.Color.FromArgb(255, 25, 28, 34))
+        {
             throw new InvalidOperationException("Normal dark palette was not restored.");
+        }
+
         await File.WriteAllTextAsync(Path.Combine(directory, "theme-unlock-checks.json"), JsonSerializer.Serialize(new
         {
-            HiddenUntilUnlocked = true, FourClicksStayLocked = true, FifthButtonInvocationUnlocks = true,
-            NakhimovLogoSelected = true, SavedStateReloads = true, SwitchBackKeepsUnlock = true,
+            HiddenUntilUnlocked = true,
+            FourClicksStayLocked = true,
+            FifthButtonInvocationUnlocks = true,
+            NakhimovLogoSelected = true,
+            SavedStateReloads = true,
+            SwitchBackKeepsUnlock = true,
             OriginalPaletteRestored = true,
             ManualChecks = "Physical mouse double-click timing and OS high contrast require manual verification."
         }, DiagnosticJsonOptions));
@@ -384,13 +528,13 @@ public sealed partial class MainWindow
     {
         await Task.Delay(200);
         RootGrid.UpdateLayout();
-        var renderer = new RenderTargetBitmap();
+        RenderTargetBitmap renderer = new RenderTargetBitmap();
         await renderer.RenderAsync(RootGrid);
-        var pixels = await renderer.GetPixelsAsync();
-        var folder = await StorageFolder.GetFolderFromPathAsync(Path.GetFullPath(directory));
-        var file = await folder.CreateFileAsync($"{name}.png", CreationCollisionOption.ReplaceExisting);
-        using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
-        var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+        IBuffer pixels = await renderer.GetPixelsAsync();
+        StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(Path.GetFullPath(directory));
+        StorageFile file = await folder.CreateFileAsync($"{name}.png", CreationCollisionOption.ReplaceExisting);
+        using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+        BitmapEncoder encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
         encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
             (uint)renderer.PixelWidth, (uint)renderer.PixelHeight, 96, 96, pixels.ToArray());
         await encoder.FlushAsync();
@@ -398,10 +542,18 @@ public sealed partial class MainWindow
 
     private static IEnumerable<T> VisualDescendants<T>(DependencyObject root) where T : DependencyObject
     {
-        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
         {
-            var child = VisualTreeHelper.GetChild(root, i);
-            if (child is T match) yield return match;
-            foreach (var descendant in VisualDescendants<T>(child)) yield return descendant;
+            DependencyObject child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (T descendant in VisualDescendants<T>(child))
+            {
+                yield return descendant;
+            }
         }
-    }}
+    }
+}

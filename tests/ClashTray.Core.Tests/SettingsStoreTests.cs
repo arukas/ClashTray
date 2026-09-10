@@ -1,5 +1,4 @@
 using ClashTray.Contracts;
-using ClashTray.Core;
 
 namespace ClashTray.Core.Tests;
 
@@ -9,8 +8,8 @@ public sealed class SettingsStoreTests
     [TestMethod]
     public async Task LoadFallsBackToDefaultsForInvalidPersistedSettings()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         await File.WriteAllTextAsync(
             paths.SettingsFile,
@@ -18,7 +17,7 @@ public sealed class SettingsStoreTests
 
         try
         {
-            var settings = await new SettingsStore(paths).LoadAsync();
+            AppSettings settings = await new SettingsStore(paths).LoadAsync();
 
             Assert.AreEqual(new AppSettings(), settings);
         }
@@ -31,9 +30,9 @@ public sealed class SettingsStoreTests
     [TestMethod]
     public async Task SaveRejectsInvalidPersistedValues()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
-        var store = new SettingsStore(paths);
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        SettingsStore store = new SettingsStore(paths);
 
         try
         {
@@ -49,15 +48,15 @@ public sealed class SettingsStoreTests
     [TestMethod]
     public async Task OversizedSettingsFallBackToDefaults()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
 
         try
         {
             await File.WriteAllBytesAsync(paths.SettingsFile, new byte[256 * 1024 + 1]);
 
-            var settings = await new SettingsStore(paths).LoadAsync();
+            AppSettings settings = await new SettingsStore(paths).LoadAsync();
 
             Assert.AreEqual(new AppSettings(), settings);
         }
@@ -70,10 +69,10 @@ public sealed class SettingsStoreTests
     [TestMethod]
     public async Task ProgramPreferencesRoundTrip()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
-        var store = new SettingsStore(paths);
-        var expected = new AppSettings(
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        SettingsStore store = new SettingsStore(paths);
+        AppSettings expected = new AppSettings(
             AllowLan: true,
             Ipv6: false,
             SystemProxyEnabled: true,

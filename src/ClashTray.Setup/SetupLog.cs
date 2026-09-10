@@ -13,7 +13,7 @@ internal static class SetupLog
     {
         try
         {
-            var directory = Path.GetDirectoryName(FilePath);
+            string? directory = Path.GetDirectoryName(FilePath);
             if (string.IsNullOrWhiteSpace(directory))
             {
                 return;

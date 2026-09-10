@@ -21,7 +21,10 @@ public sealed partial class ProxyPage : UserControl
         _searchTimer.Tick += (_, _) =>
         {
             _searchTimer.Stop();
-            if (_snapshot is not null) RenderGroups(_snapshot);
+            if (_snapshot is not null)
+            {
+                RenderGroups(_snapshot);
+            }
         };
         Unloaded += (_, _) => _searchTimer.Stop();
     }
@@ -30,9 +33,13 @@ public sealed partial class ProxyPage : UserControl
     {
         _snapshot = snapshot;
         // Traffic updates should not recreate controls or disturb keyboard focus.
-        var signature = System.Text.Json.JsonSerializer.Serialize(new { snapshot.ProxyGroups, snapshot.ProxyNodes, snapshot.Providers });
+        string signature = System.Text.Json.JsonSerializer.Serialize(new { snapshot.ProxyGroups, snapshot.ProxyNodes, snapshot.Providers });
         EmptyTitle.Text = snapshot.Core.State == CoreState.Running ? "配置中没有代理组" : "还没有代理组";
-        if (_signature == signature) return;
+        if (_signature == signature)
+        {
+            return;
+        }
+
         _signature = signature;
         _expanded.IntersectWith(snapshot.ProxyGroups.Select(group => group.Name));
         RenderGroups(snapshot);
@@ -42,48 +49,60 @@ public sealed partial class ProxyPage : UserControl
     private void RenderGroups(RuntimeSnapshot snapshot)
     {
         GroupsPanel.Children.Clear();
-        var query = NodeSearchBox.Text.Trim();
-        var searching = query.Length > 0;
-        var delays = snapshot.ProxyNodes.GroupBy(node => node.Name, StringComparer.Ordinal)
+        string query = NodeSearchBox.Text.Trim();
+        bool searching = query.Length > 0;
+        Dictionary<string, string> delays = snapshot.ProxyNodes.GroupBy(node => node.Name, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First().Delay, StringComparer.Ordinal);
-        foreach (var proxyGroup in snapshot.ProxyGroups) delays[proxyGroup.Name] = proxyGroup.Delay;
+        foreach (ProxyGroup proxyGroup in snapshot.ProxyGroups)
+        {
+            delays[proxyGroup.Name] = proxyGroup.Delay;
+        }
+
         EmptyState.Visibility = snapshot.ProxyGroups.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         NodeSearchBox.Visibility = snapshot.ProxyGroups.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
 
-        foreach (var group in snapshot.ProxyGroups)
+        foreach (ProxyGroup group in snapshot.ProxyGroups)
         {
-            var groupMatches = group.Name.Contains(query, StringComparison.OrdinalIgnoreCase);
-            var members = group.Members.Where(member => !searching || groupMatches ||
+            bool groupMatches = group.Name.Contains(query, StringComparison.OrdinalIgnoreCase);
+            string[] members = group.Members.Where(member => !searching || groupMatches ||
                 member.Contains(query, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (searching && !groupMatches && members.Length == 0) continue;
+            if (searching && !groupMatches && members.Length == 0)
+            {
+                continue;
+            }
 
-            var header = new Grid { ColumnSpacing = 10 };
+            Grid header = new Grid { ColumnSpacing = 10 };
             header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var labels = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
+            StackPanel labels = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
             labels.Children.Add(new TextBlock
             {
-                Text = group.Name, FontSize = 14, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Text = group.Name,
+                FontSize = 14,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 TextTrimming = TextTrimming.CharacterEllipsis
             });
             labels.Children.Add(new TextBlock
             {
-                Text = group.Current ?? "尚未选择", FontSize = 12,
+                Text = group.Current ?? "尚未选择",
+                FontSize = 12,
                 Style = (Style)Application.Current.Resources["ClashTrayAccentTextStyle"],
                 TextTrimming = TextTrimming.CharacterEllipsis
             });
             header.Children.Add(labels);
-            var chevron = new FontIcon { FontSize = 10 };
+            FontIcon chevron = new FontIcon { FontSize = 10 };
             Grid.SetColumn(chevron, 1);
             header.Children.Add(chevron);
 
-            delays.TryGetValue(group.Current ?? "", out var latency);
-            var delayLabel = new TextBlock
+            delays.TryGetValue(group.Current ?? "", out string latency);
+            TextBlock delayLabel = new TextBlock
             {
-                Text = FormatDelay(latency), FontSize = 11,
-                VerticalAlignment = VerticalAlignment.Center, Style = SecondaryTextStyle
+                Text = FormatDelay(latency),
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                Style = SecondaryTextStyle
             };
-            var test = new Button
+            Button test = new Button
             {
                 Content = new FontIcon { Glyph = "\uE9D9", FontSize = 14 },
                 Style = (Style)Application.Current.Resources["ClashTrayIconButtonStyle"],
@@ -93,25 +112,32 @@ public sealed partial class ProxyPage : UserControl
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(test, $"测试 {group.Name} 整组节点延迟");
             test.Click += async (_, _) =>
             {
-                if (!_testingGroups.Add(group.Name)) return;
+                if (!_testingGroups.Add(group.Name))
+                {
+                    return;
+                }
+
                 test.IsEnabled = false;
                 DelayText.Text = $"{group.Name} · 正在测试整组节点…";
                 try
                 {
-                    var results = await _runtime.TestProxyGroupDelayAsync(group.Name);
-                    var available = results.Count(result => result.Value > 0);
+                    IReadOnlyDictionary<string, int?> results = await _runtime.TestProxyGroupDelayAsync(group.Name);
+                    int available = results.Count(result => result.Value > 0);
                     DelayText.Text = $"{group.Name} · 测速完成，{available} 个可用，{results.Count - available} 个未连通";
                 }
                 catch (Exception exception) { DelayText.Text = $"{group.Name} · 测速失败：{exception.Message}"; }
                 finally
                 {
                     _testingGroups.Remove(group.Name);
-                    if (_snapshot is not null) RenderGroups(_snapshot);
+                    if (_snapshot is not null)
+                    {
+                        RenderGroups(_snapshot);
+                    }
                 }
             };
 
-            var body = new StackPanel { Spacing = 4, Margin = new Thickness(4, 0, 4, 4) };
-            var list = new ListView
+            StackPanel body = new StackPanel { Spacing = 4, Margin = new Thickness(4, 0, 4, 4) };
+            ListView list = new ListView
             {
                 SelectionMode = ListViewSelectionMode.Single,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
@@ -127,42 +153,53 @@ public sealed partial class ProxyPage : UserControl
             body.Children.Add(new TextBlock
             {
                 Text = searching ? $"{members.Length} / {group.Members.Count} 个节点" : $"{group.Members.Count} 个节点",
-                FontSize = 11, Style = SecondaryTextStyle, Margin = new Thickness(10, 3, 10, 2)
+                FontSize = 11,
+                Style = SecondaryTextStyle,
+                Margin = new Thickness(10, 3, 10, 2)
             });
             body.Children.Add(list);
-            var populated = false;
-            var selectionPending = false;
+            bool populated = false;
+            bool selectionPending = false;
             void Populate()
             {
-                if (populated) return;
-                populated = true;
-                foreach (var member in members)
+                if (populated)
                 {
-                    var selected = member == group.Current;
-                    var content = new Grid { ColumnSpacing = 10 };
+                    return;
+                }
+
+                populated = true;
+                foreach (string member in members)
+                {
+                    bool selected = member == group.Current;
+                    Grid content = new Grid { ColumnSpacing = 10 };
                     content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) });
                     content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                     content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                     content.Children.Add(new FontIcon
                     {
-                        Glyph = "\uE73E", Opacity = selected ? 1 : 0,
+                        Glyph = "\uE73E",
+                        Opacity = selected ? 1 : 0,
                         Style = (Style)Application.Current.Resources["ClashTraySelectionIconStyle"]
                     });
-                    var label = new TextBlock
+                    TextBlock label = new TextBlock
                     {
-                        Text = member, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis,
+                        Text = member,
+                        FontSize = 13,
+                        TextTrimming = TextTrimming.CharacterEllipsis,
                         VerticalAlignment = VerticalAlignment.Center,
                         FontWeight = selected ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal
                     };
-                    var nameRow = new Grid { ColumnSpacing = 6 };
+                    Grid nameRow = new Grid { ColumnSpacing = 6 };
                     nameRow.ColumnDefinitions.Add(new ColumnDefinition());
                     nameRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                     nameRow.Children.Add(label);
                     if (selected)
                     {
-                        var currentLabel = new TextBlock
+                        TextBlock currentLabel = new TextBlock
                         {
-                            Text = "当前", FontSize = 11, VerticalAlignment = VerticalAlignment.Center,
+                            Text = "当前",
+                            FontSize = 11,
+                            VerticalAlignment = VerticalAlignment.Center,
                             Style = (Style)Application.Current.Resources["ClashTrayAccentTextStyle"]
                         };
                         Grid.SetColumn(currentLabel, 1);
@@ -170,19 +207,24 @@ public sealed partial class ProxyPage : UserControl
                     }
                     Grid.SetColumn(nameRow, 1);
                     content.Children.Add(nameRow);
-                    delays.TryGetValue(member, out var delay);
-                    var detail = new TextBlock
+                    delays.TryGetValue(member, out string delay);
+                    TextBlock detail = new TextBlock
                     {
-                        Text = FormatDelay(delay), FontSize = 11, Style = SecondaryTextStyle,
+                        Text = FormatDelay(delay),
+                        FontSize = 11,
+                        Style = SecondaryTextStyle,
                         VerticalAlignment = VerticalAlignment.Center
                     };
                     Grid.SetColumn(detail, 2);
                     content.Children.Add(detail);
-                    var item = new ListViewItem
+                    ListViewItem item = new ListViewItem
                     {
-                        Content = content, Tag = member, MinHeight = 38,
+                        Content = content,
+                        Tag = member,
+                        MinHeight = 38,
                         HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                        Padding = new Thickness(10, 6, 10, 6), CornerRadius = new CornerRadius(6)
+                        Padding = new Thickness(10, 6, 10, 6),
+                        CornerRadius = new CornerRadius(6)
                     };
                     ToolTipService.SetToolTip(item, member);
                     Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, $"{member}，{detail.Text}{(selected ? "，当前节点" : "")}");
@@ -192,7 +234,11 @@ public sealed partial class ProxyPage : UserControl
             }
             list.SelectionChanged += async (_, _) =>
             {
-                if (selectionPending || list.SelectedItem is not ListViewItem { Tag: string name } || name == group.Current) return;
+                if (selectionPending || list.SelectedItem is not ListViewItem { Tag: string name } || name == group.Current)
+                {
+                    return;
+                }
+
                 selectionPending = true;
                 // Keep the confirmed selection visible while the core applies the request.
                 list.SelectedItem = list.Items.OfType<ListViewItem>().FirstOrDefault(item => (string?)item.Tag == group.Current);
@@ -202,20 +248,26 @@ public sealed partial class ProxyPage : UserControl
                 finally { selectionPending = false; list.IsEnabled = true; }
             };
 
-            var container = new StackPanel();
-            var row = new Grid { ColumnSpacing = 4, Padding = new Thickness(2, 2, 6, 2) };
+            StackPanel container = new StackPanel();
+            Grid row = new Grid { ColumnSpacing = 4, Padding = new Thickness(2, 2, 6, 2) };
             row.ColumnDefinitions.Add(new ColumnDefinition());
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var expand = new Button
+            Button expand = new Button
             {
-                Content = header, Style = (Style)Application.Current.Resources["ClashTrayRowButtonStyle"],
-                MinHeight = 52, Padding = new Thickness(10, 6, 8, 6)
+                Content = header,
+                Style = (Style)Application.Current.Resources["ClashTrayRowButtonStyle"],
+                MinHeight = 52,
+                Padding = new Thickness(10, 6, 8, 6)
             };
             ToolTipService.SetToolTip(expand, $"{group.Name} · {group.Current ?? "尚未选择"}");
             void ShowExpanded(bool expanded)
             {
-                if (expanded) Populate();
+                if (expanded)
+                {
+                    Populate();
+                }
+
                 body.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
                 chevron.Glyph = expanded ? "\uE70E" : "\uE70D";
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(expand,
@@ -224,8 +276,16 @@ public sealed partial class ProxyPage : UserControl
             ShowExpanded(searching || _expanded.Contains(group.Name));
             expand.Click += (_, _) =>
             {
-                var expanded = body.Visibility != Visibility.Visible;
-                if (expanded) _expanded.Add(group.Name); else _expanded.Remove(group.Name);
+                bool expanded = body.Visibility != Visibility.Visible;
+                if (expanded)
+                {
+                    _expanded.Add(group.Name);
+                }
+                else
+                {
+                    _expanded.Remove(group.Name);
+                }
+
                 ShowExpanded(expanded);
             };
             row.Children.Add(expand);
@@ -251,16 +311,16 @@ public sealed partial class ProxyPage : UserControl
         ProvidersPanel.Children.Clear();
         ProviderSection.Visibility = snapshot.Providers.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         ProviderTitle.Text = $"代理提供者 · {snapshot.Providers.Count}";
-        foreach (var provider in snapshot.Providers)
+        foreach (ProviderStatus provider in snapshot.Providers)
         {
-            var row = new Grid { ColumnSpacing = 8 };
+            Grid row = new Grid { ColumnSpacing = 8 };
             row.ColumnDefinitions.Add(new ColumnDefinition());
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var labels = new StackPanel { Spacing = 2 };
+            StackPanel labels = new StackPanel { Spacing = 2 };
             labels.Children.Add(new TextBlock { Text = provider.Name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
             labels.Children.Add(new TextBlock { Text = provider.Error ?? $"{provider.Count} 项 · {provider.UpdatedAt:MM-dd HH:mm}", Style = SecondaryTextStyle, FontSize = 12, TextWrapping = TextWrapping.Wrap });
             row.Children.Add(labels);
-            var refresh = new Button { Content = new FontIcon { Glyph = "\uE72C", FontSize = 15 }, Style = (Style)Application.Current.Resources["ClashTrayIconButtonStyle"] };
+            Button refresh = new Button { Content = new FontIcon { Glyph = "\uE72C", FontSize = 15 }, Style = (Style)Application.Current.Resources["ClashTrayIconButtonStyle"] };
             ToolTipService.SetToolTip(refresh, $"刷新 {provider.Name}");
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(refresh, $"刷新代理提供者 {provider.Name}");
             refresh.Click += async (_, _) =>
@@ -278,7 +338,7 @@ public sealed partial class ProxyPage : UserControl
 
     private static string FormatDelay(string? delay) =>
         string.IsNullOrWhiteSpace(delay) || delay == "—" ? "未测速" :
-        int.TryParse(delay, out var value) ? value > 0 ? $"{value} ms" : "超时" : delay;
+        int.TryParse(delay, out int value) ? value > 0 ? $"{value} ms" : "超时" : delay;
 
     private Style SecondaryTextStyle => (Style)Resources["ProxySecondaryText"];
 

@@ -56,10 +56,10 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             return Success(request);
         }
 
-        using var timeout = CreateTimeout(StatusQueryTimeout, cancellationToken);
+        using CancellationTokenSource timeout = CreateTimeout(StatusQueryTimeout, cancellationToken);
         try
         {
-            var value = await ReadTunStateAsync(_api, timeout.Token);
+            bool? value = await ReadTunStateAsync(_api, timeout.Token);
             if (value is not bool enabled)
             {
                 _tunState = TunState.Unknown;
@@ -136,7 +136,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private async Task<ServiceResponse> StartCoreAsync(ServiceRequest request, CancellationToken cancellationToken)
     {
-        var payload = Deserialize<ServiceCorePayload>(request.Payload);
+        ServiceCorePayload payload = Deserialize<ServiceCorePayload>(request.Payload);
         ValidateCorePayload(payload);
         if (_processManager.State == CoreState.Running)
         {
@@ -177,7 +177,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private async Task<ServiceResponse> RestartCoreAsync(ServiceRequest request, CancellationToken cancellationToken)
     {
-        var payload = Deserialize<ServiceCorePayload>(request.Payload);
+        ServiceCorePayload payload = Deserialize<ServiceCorePayload>(request.Payload);
         ValidateCorePayload(payload);
         await StopCoreAsync(request, cancellationToken);
         return await StartCoreAsync(request with { Payload = JsonSerializer.Serialize(payload, _jsonOptions) }, cancellationToken);
@@ -185,14 +185,14 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private async Task<ServiceResponse> SetTunAsync(ServiceRequest request, bool enabled, CancellationToken cancellationToken)
     {
-        var payload = Deserialize<ServiceTunPayload>(request.Payload);
+        ServiceTunPayload payload = Deserialize<ServiceTunPayload>(request.Payload);
         if (payload.ControllerPort is < 1 or > 65535 || payload.ControllerSecret is null)
         {
             return Failure(request, "TUN 请求参数无效。", _processManager.State);
         }
 
-        var api = _api;
-        var activeCore = _activeCore;
+        MihomoApiClient? api = _api;
+        ServiceCorePayload? activeCore = _activeCore;
         if (_processManager.State != CoreState.Running || api is null || activeCore is null)
         {
             return Failure(request, "Mihomo 核心尚未运行。", _processManager.State);
@@ -225,7 +225,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             return Failure(request, "无法确认当前 TUN 状态，未执行变更。", _processManager.State);
         }
 
-        var previousValue = previous.Value;
+        bool previousValue = previous.Value;
         if (previousValue == enabled)
         {
             _tunState = enabled ? TunState.On : TunState.Off;
@@ -245,7 +245,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            var restored = await TryRestoreTunStateAsync(api, previousValue);
+            bool restored = await TryRestoreTunStateAsync(api, previousValue);
             _tunState = restored
                 ? previousValue ? TunState.On : TunState.Off
                 : TunState.Unknown;
@@ -253,11 +253,11 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            var restored = await TryRestoreTunStateAsync(api, previousValue);
+            bool restored = await TryRestoreTunStateAsync(api, previousValue);
             _tunState = restored
                 ? previousValue ? TunState.On : TunState.Off
                 : TunState.Unknown;
-            var message = restored
+            string message = restored
                 ? $"TUN 操作失败，已恢复原状态：{exception.Message}"
                 : $"TUN 操作失败，且无法确认原状态：{DescribeControllerError(exception)}";
             return Failure(request, message, _processManager.State);
@@ -268,10 +268,10 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         ServiceRequest request,
         CancellationToken cancellationToken)
     {
-        using var timeout = CreateTimeout(StatusQueryTimeout, cancellationToken);
+        using CancellationTokenSource timeout = CreateTimeout(StatusQueryTimeout, cancellationToken);
         try
         {
-            var value = await ReadTunStateAsync(_api!, timeout.Token);
+            bool? value = await ReadTunStateAsync(_api!, timeout.Token);
             if (value is bool enabled)
             {
                 _tunState = enabled ? TunState.On : TunState.Off;
@@ -299,7 +299,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private static CancellationTokenSource CreateTimeout(TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        CancellationTokenSource source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         source.CancelAfter(timeout);
         return source;
     }
@@ -314,16 +314,16 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private static async Task<bool?> ReadTunStateAsync(MihomoApiClient api, CancellationToken cancellationToken)
     {
-        using var document = await api.GetConfigurationAsync(force: false, cancellationToken);
+        using JsonDocument document = await api.GetConfigurationAsync(force: false, cancellationToken);
         return MihomoDataParser.ParseTunEnabled(document);
     }
 
     private static async Task<bool> ConfirmTunStateAsync(MihomoApiClient api, bool expected, CancellationToken cancellationToken)
     {
-        for (var attempt = 0; attempt < 5; attempt++)
+        for (int attempt = 0; attempt < 5; attempt++)
         {
-            using var document = await api.GetConfigurationAsync(force: false, cancellationToken);
-            var value = MihomoDataParser.ParseTunEnabled(document);
+            using JsonDocument document = await api.GetConfigurationAsync(force: false, cancellationToken);
+            bool? value = MihomoDataParser.ParseTunEnabled(document);
             if (value == expected)
             {
                 return true;
@@ -337,7 +337,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private static async Task<bool> TryRestoreTunStateAsync(MihomoApiClient api, bool expected)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        using CancellationTokenSource timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         try
         {
             await api.SetTunAsync(expected, timeout.Token);
@@ -366,8 +366,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private static bool IsAllowedCoreExecutable(string path)
     {
-        var fullPath = Path.GetFullPath(path);
-        var directory = Path.GetDirectoryName(fullPath);
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Path.GetDirectoryName(fullPath);
         return File.Exists(fullPath)
             && string.Equals(Path.GetFileName(fullPath), "mihomo.exe", StringComparison.OrdinalIgnoreCase)
             && directory is not null
@@ -376,8 +376,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private static bool IsAllowedRuntimePath(string path, bool allowYaml)
     {
-        var fullPath = Path.GetFullPath(path);
-        var directory = Directory.Exists(fullPath) ? fullPath : Path.GetDirectoryName(fullPath);
+        string fullPath = Path.GetFullPath(path);
+        string? directory = Directory.Exists(fullPath) ? fullPath : Path.GetDirectoryName(fullPath);
         if (directory is null || !IsAllowedRuntimeDirectory(directory))
         {
             return false;
@@ -388,8 +388,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private static bool IsAllowedCoreDirectory(string path)
     {
-        var fullPath = Path.GetFullPath(path);
-        var programDataCore = Path.Combine(
+        string fullPath = Path.GetFullPath(path);
+        string programDataCore = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "ClashTray",
             "core");
@@ -403,22 +403,22 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             return false;
         }
 
-        using var profiles = Registry.LocalMachine.OpenSubKey(ProfileListPath, writable: false);
+        using RegistryKey? profiles = Registry.LocalMachine.OpenSubKey(ProfileListPath, writable: false);
         if (profiles is null)
         {
             return false;
         }
 
-        foreach (var sid in profiles.GetSubKeyNames())
+        foreach (string sid in profiles.GetSubKeyNames())
         {
-            using var profile = profiles.OpenSubKey(sid, writable: false);
-            var profilePath = profile?.GetValue("ProfileImagePath") as string;
+            using RegistryKey? profile = profiles.OpenSubKey(sid, writable: false);
+            string? profilePath = profile?.GetValue("ProfileImagePath") as string;
             if (string.IsNullOrWhiteSpace(profilePath))
             {
                 continue;
             }
 
-            var localCore = Path.Combine(
+            string localCore = Path.Combine(
                 Environment.ExpandEnvironmentVariables(profilePath),
                 "AppData",
                 "Local",
@@ -435,7 +435,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private static bool IsAllowedRuntimeDirectory(string path)
     {
-        var expected = Path.Combine(
+        string expected = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
             "ClashTray",
             "runtime",

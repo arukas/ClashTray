@@ -21,33 +21,34 @@ public sealed class CoreUpdater
 
     public async Task<string> DownloadAndInstallAsync(CoreUpdateManifest manifest, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(manifest);
         ValidateManifest(manifest);
         _paths.EnsureDirectories();
-        var stagingRoot = Path.Combine(_paths.LocalRoot, "core-update", Guid.NewGuid().ToString("N"));
+        string stagingRoot = Path.Combine(_paths.LocalRoot, "core-update", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stagingRoot);
-        var archivePath = Path.Combine(stagingRoot, "mihomo.zip");
-        var extractedCorePath = Path.Combine(stagingRoot, "mihomo.exe");
-        var coreDirectory = Path.Combine(_paths.LocalRoot, "core");
-        var targetPath = Path.Combine(coreDirectory, "mihomo.exe");
-        var backupPath = targetPath + ".previous";
+        string archivePath = Path.Combine(stagingRoot, "mihomo.zip");
+        string extractedCorePath = Path.Combine(stagingRoot, "mihomo.exe");
+        string coreDirectory = Path.Combine(_paths.LocalRoot, "core");
+        string targetPath = Path.Combine(coreDirectory, "mihomo.exe");
+        string backupPath = targetPath + ".previous";
 
         try
         {
-            using var response = await _httpClient.GetAsync(manifest.DownloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            using HttpResponseMessage response = await _httpClient.GetAsync(manifest.DownloadUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             response.EnsureSuccessStatusCode();
             await DownloadToFileAsync(response.Content, archivePath, cancellationToken);
 
-            await using (var hashStream = File.OpenRead(archivePath))
+            await using (FileStream hashStream = File.OpenRead(archivePath))
             {
-                var archiveHash = Convert.ToHexString(await SHA256.HashDataAsync(hashStream, cancellationToken));
+                string archiveHash = Convert.ToHexString(await SHA256.HashDataAsync(hashStream, cancellationToken));
                 if (!archiveHash.Equals(manifest.Sha256, StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidDataException("Mihomo core checksum validation failed.");
                 }
             }
 
-            using var archive = ZipFile.OpenRead(archivePath);
-            var coreEntries = archive.Entries
+            using ZipArchive archive = await ZipFile.OpenReadAsync(archivePath, cancellationToken);
+            ZipArchiveEntry[] coreEntries = archive.Entries
                 .Where(entry => string.Equals(entry.Name, "mihomo.exe", StringComparison.OrdinalIgnoreCase))
                 .ToArray();
             if (coreEntries.Length != 1)
@@ -59,7 +60,7 @@ public sealed class CoreUpdater
             ValidateWindowsAmd64Executable(extractedCorePath);
 
             Directory.CreateDirectory(coreDirectory);
-            var candidatePath = targetPath + ".new";
+            string candidatePath = targetPath + ".new";
             File.Copy(extractedCorePath, candidatePath, overwrite: true);
             if (File.Exists(targetPath))
             {
@@ -74,7 +75,7 @@ public sealed class CoreUpdater
         }
         catch
         {
-            var candidatePath = targetPath + ".new";
+            string candidatePath = targetPath + ".new";
             if (File.Exists(candidatePath))
             {
                 File.Delete(candidatePath);
@@ -98,7 +99,7 @@ public sealed class CoreUpdater
 
     private static void ValidateManifest(CoreUpdateManifest manifest)
     {
-        var path = manifest.DownloadUri.AbsolutePath;
+        string path = manifest.DownloadUri.AbsolutePath;
         if (string.IsNullOrWhiteSpace(manifest.Version)
             || manifest.DownloadUri.Scheme != Uri.UriSchemeHttps
             || !manifest.DownloadUri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
@@ -113,7 +114,7 @@ public sealed class CoreUpdater
 
     private static void ValidateWindowsAmd64Executable(string path)
     {
-        using var stream = File.OpenRead(path);
+        using FileStream stream = File.OpenRead(path);
         if (stream.Length < 0x40)
         {
             throw new InvalidDataException("The Mihomo executable is too small to be a Windows PE file.");
@@ -131,7 +132,7 @@ public sealed class CoreUpdater
             throw new InvalidDataException("The Mihomo archive did not contain a Windows executable.");
         }
 
-        var peHeaderOffset = BinaryPrimitives.ReadInt32LittleEndian(dosHeader[0x3C..]);
+        int peHeaderOffset = BinaryPrimitives.ReadInt32LittleEndian(dosHeader[0x3C..]);
         if (peHeaderOffset < 0 || peHeaderOffset > stream.Length - 6)
         {
             throw new InvalidDataException("The Mihomo executable has an invalid PE header.");
@@ -160,19 +161,19 @@ public sealed class CoreUpdater
             throw new InvalidDataException("The Mihomo archive exceeds the maximum allowed size.");
         }
 
-        await using var input = await content.ReadAsStreamAsync(cancellationToken);
-        await using var output = new FileStream(
+        await using Stream input = await content.ReadAsStreamAsync(cancellationToken);
+        await using FileStream output = new FileStream(
             destinationPath,
             FileMode.CreateNew,
             FileAccess.Write,
             FileShare.None,
             64 * 1024,
             FileOptions.Asynchronous);
-        var buffer = new byte[64 * 1024];
+        byte[] buffer = new byte[64 * 1024];
         long totalBytes = 0;
         while (true)
         {
-            var count = await input.ReadAsync(buffer.AsMemory(), cancellationToken);
+            int count = await input.ReadAsync(buffer.AsMemory(), cancellationToken);
             if (count == 0)
             {
                 return;
@@ -198,19 +199,19 @@ public sealed class CoreUpdater
             throw new InvalidDataException("The Mihomo executable entry exceeds the maximum allowed size.");
         }
 
-        await using var input = entry.Open();
-        await using var output = new FileStream(
+        await using Stream input = await entry.OpenAsync(cancellationToken);
+        await using FileStream output = new FileStream(
             destinationPath,
             FileMode.CreateNew,
             FileAccess.Write,
             FileShare.None,
             64 * 1024,
             FileOptions.Asynchronous);
-        var buffer = new byte[64 * 1024];
+        byte[] buffer = new byte[64 * 1024];
         long totalBytes = 0;
         while (true)
         {
-            var count = await input.ReadAsync(buffer.AsMemory(), cancellationToken);
+            int count = await input.ReadAsync(buffer.AsMemory(), cancellationToken);
             if (count == 0)
             {
                 return;

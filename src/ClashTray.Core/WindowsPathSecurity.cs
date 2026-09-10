@@ -12,11 +12,11 @@ internal static class WindowsPathSecurity
             return;
         }
 
-        var currentUser = WindowsIdentity.GetCurrent().User
+        SecurityIdentifier currentUser = WindowsIdentity.GetCurrent().User
             ?? throw new InvalidOperationException("Unable to resolve the current Windows user SID.");
-        var administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
-        var localSystem = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
-        var security = new DirectorySecurity();
+        SecurityIdentifier administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+        SecurityIdentifier localSystem = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+        DirectorySecurity security = new DirectorySecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         AddFullControlRule(security, currentUser);
         AddFullControlRule(security, administrators);
@@ -31,11 +31,11 @@ internal static class WindowsPathSecurity
             return;
         }
 
-        var currentUser = WindowsIdentity.GetCurrent().User
+        SecurityIdentifier currentUser = WindowsIdentity.GetCurrent().User
             ?? throw new InvalidOperationException("Unable to resolve the current Windows user SID.");
-        var administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
-        var localSystem = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
-        var security = new FileSecurity();
+        SecurityIdentifier administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+        SecurityIdentifier localSystem = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+        FileSecurity security = new FileSecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         AddFullControlRule(security, currentUser);
         AddFullControlRule(security, administrators);
@@ -45,7 +45,7 @@ internal static class WindowsPathSecurity
 
     private static void AddFullControlRule(FileSystemSecurity security, SecurityIdentifier sid)
     {
-        var inheritance = security is DirectorySecurity
+        InheritanceFlags inheritance = security is DirectorySecurity
             ? InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit
             : InheritanceFlags.None;
         security.AddAccessRule(new FileSystemAccessRule(

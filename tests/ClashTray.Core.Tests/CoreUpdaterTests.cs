@@ -1,8 +1,6 @@
 using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
-using ClashTray.Contracts;
-using ClashTray.Core;
 
 namespace ClashTray.Core.Tests;
 
@@ -12,25 +10,26 @@ public sealed class CoreUpdaterTests
     [TestMethod]
     public async Task CoreUpdaterAcceptsVerifiedWindowsAmd64Executable()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
-        var archivePath = Path.Combine(root, "mihomo.zip");
+        string archivePath = Path.Combine(root, "mihomo.zip");
 
         try
         {
-            var executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
-            using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
+            string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
+            using (ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Create))
             {
-                archive.CreateEntryFromFile(executablePath, "mihomo.exe");
+                await archive.CreateEntryFromFileAsync(executablePath, "mihomo.exe");
             }
 
-            var archiveBytes = await File.ReadAllBytesAsync(archivePath);
-            using var httpClient = new HttpClient(new ArchiveHandler(archiveBytes));
-            var updater = new CoreUpdater(paths, httpClient);
-            var manifest = CreateManifest(archiveBytes);
+            byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
+            using ArchiveHandler handler = new ArchiveHandler(archiveBytes);
+            using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
+            CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            CoreUpdateManifest manifest = CreateManifest(archiveBytes);
 
-            var installedPath = await updater.DownloadAndInstallAsync(manifest);
+            string installedPath = await updater.DownloadAndInstallAsync(manifest);
 
             Assert.IsTrue(File.Exists(installedPath));
         }
@@ -43,23 +42,24 @@ public sealed class CoreUpdaterTests
     [TestMethod]
     public async Task CoreUpdaterRejectsArchiveWithoutWindowsExecutable()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
-        var archivePath = Path.Combine(root, "mihomo.zip");
+        string archivePath = Path.Combine(root, "mihomo.zip");
 
         try
         {
-            using (var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create))
+            using (ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Create))
             {
-                var entry = archive.CreateEntry("mihomo.exe");
-                await using var writer = new StreamWriter(entry.Open());
+                ZipArchiveEntry entry = archive.CreateEntry("mihomo.exe");
+                using StreamWriter writer = new StreamWriter(await entry.OpenAsync());
                 await writer.WriteAsync("not an executable");
             }
 
-            var archiveBytes = await File.ReadAllBytesAsync(archivePath);
-            using var httpClient = new HttpClient(new ArchiveHandler(archiveBytes));
-            var updater = new CoreUpdater(paths, httpClient);
+            byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
+            using ArchiveHandler handler = new ArchiveHandler(archiveBytes);
+            using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
+            CoreUpdater updater = new CoreUpdater(paths, httpClient);
 
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(CreateManifest(archiveBytes)));
             Assert.IsFalse(File.Exists(Path.Combine(paths.LocalRoot, "core", "mihomo.exe")));
@@ -73,14 +73,15 @@ public sealed class CoreUpdaterTests
     [TestMethod]
     public async Task CoreUpdaterRejectsOversizedArchiveBeforeDownloadingBody()
     {
-        var root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
-        var paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
 
         try
         {
-            using var httpClient = new HttpClient(new OversizedArchiveHandler());
-            var updater = new CoreUpdater(paths, httpClient);
+            using OversizedArchiveHandler handler = new OversizedArchiveHandler();
+            using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
+            CoreUpdater updater = new CoreUpdater(paths, httpClient);
 
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(
                 CreateManifest([])));
@@ -115,7 +116,7 @@ public sealed class CoreUpdaterTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            var content = new ByteArrayContent([0]);
+            ByteArrayContent content = new ByteArrayContent([0]);
             content.Headers.ContentLength = 128L * 1024 * 1024 + 1;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {

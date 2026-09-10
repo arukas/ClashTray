@@ -11,10 +11,13 @@ public static class RuntimeConfigBuilder
         AppSettings settings,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(sourcePath);
+        ArgumentNullException.ThrowIfNull(destinationPath);
+        ArgumentNullException.ThrowIfNull(settings);
         SettingsValidator.Validate(settings);
-        var source = await File.ReadAllLinesAsync(sourcePath, cancellationToken);
-        var withTunOverride = ApplyTunOverride(source, settings.TunEnabled);
-        var filtered = withTunOverride.Where(line => !IsManagedLine(line)).ToList();
+        string[] source = await File.ReadAllLinesAsync(sourcePath, cancellationToken);
+        List<string> withTunOverride = ApplyTunOverride(source, settings.TunEnabled);
+        List<string> filtered = withTunOverride.Where(line => !IsManagedLine(line)).ToList();
         filtered.Add(string.Empty);
         filtered.Add($"external-controller: 127.0.0.1:{settings.ControllerPort}");
         filtered.Add("secret: ''");
@@ -27,7 +30,7 @@ public static class RuntimeConfigBuilder
         filtered.Add($"socks-port: {settings.SocksPort}");
 
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-        var tempPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+        string tempPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
         try
         {
             await File.WriteAllLinesAsync(tempPath, filtered, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
@@ -47,15 +50,15 @@ public static class RuntimeConfigBuilder
 
     private static List<string> ApplyTunOverride(string[] source, bool enabled)
     {
-        var result = new List<string>(source.Length + 3);
-        var inTunBlock = false;
-        var tunIndent = -1;
-        var tunHasEnable = false;
-        var foundTunBlock = false;
+        List<string> result = new List<string>(source.Length + 3);
+        bool inTunBlock = false;
+        int tunIndent = -1;
+        bool tunHasEnable = false;
+        bool foundTunBlock = false;
 
-        foreach (var line in source)
+        foreach (string line in source)
         {
-            if (TryGetRootKey(line, out var key) && key.Equals("tun", StringComparison.OrdinalIgnoreCase))
+            if (TryGetRootKey(line, out string? key) && key.Equals("tun", StringComparison.OrdinalIgnoreCase))
             {
                 if (inTunBlock && !tunHasEnable)
                 {
@@ -65,7 +68,7 @@ public static class RuntimeConfigBuilder
                 foundTunBlock = true;
                 tunIndent = GetIndent(line);
                 tunHasEnable = false;
-                inTunBlock = !TryOverrideInlineTun(line, enabled, out var inlineLine, out tunHasEnable);
+                inTunBlock = !TryOverrideInlineTun(line, enabled, out string? inlineLine, out tunHasEnable);
                 result.Add(inlineLine);
                 continue;
             }
@@ -111,9 +114,9 @@ public static class RuntimeConfigBuilder
         out string result,
         out bool hasEnable)
     {
-        var keySeparator = line.IndexOf(':');
-        var valueStart = keySeparator < 0 ? -1 : line.IndexOf('{', keySeparator + 1);
-        var valueEnd = valueStart < 0 ? -1 : line.LastIndexOf('}');
+        int keySeparator = line.IndexOf(':', StringComparison.Ordinal);
+        int valueStart = keySeparator < 0 ? -1 : line.IndexOf('{', keySeparator + 1);
+        int valueEnd = valueStart < 0 ? -1 : line.LastIndexOf('}');
         if (valueStart < 0 || valueEnd <= valueStart)
         {
             result = line;
@@ -121,17 +124,17 @@ public static class RuntimeConfigBuilder
             return false;
         }
 
-        var inlineValue = line[valueStart..(valueEnd + 1)];
-        var enableSeparator = FindInlineKeySeparator(inlineValue, "enable");
+        string inlineValue = line[valueStart..(valueEnd + 1)];
+        int enableSeparator = FindInlineKeySeparator(inlineValue, "enable");
         if (enableSeparator >= 0)
         {
-            var valueIndex = enableSeparator + 1;
+            int valueIndex = enableSeparator + 1;
             while (valueIndex < inlineValue.Length && char.IsWhiteSpace(inlineValue[valueIndex]))
             {
                 valueIndex++;
             }
 
-            var valueEndIndex = valueIndex;
+            int valueEndIndex = valueIndex;
             while (valueEndIndex < inlineValue.Length
                 && inlineValue[valueEndIndex] is not (',' or '}'))
             {
@@ -155,7 +158,7 @@ public static class RuntimeConfigBuilder
 
     private static int FindInlineKeySeparator(string value, string expectedKey)
     {
-        var position = 1;
+        int position = 1;
         while (position < value.Length - 1)
         {
             while (position < value.Length && (char.IsWhiteSpace(value[position]) || value[position] == ','))
@@ -163,7 +166,7 @@ public static class RuntimeConfigBuilder
                 position++;
             }
 
-            var keyStart = position;
+            int keyStart = position;
             while (position < value.Length && value[position] is not (':' or ',' or '}'))
             {
                 position++;
@@ -174,7 +177,7 @@ public static class RuntimeConfigBuilder
                 break;
             }
 
-            var key = value[keyStart..position].Trim().Trim('\'', '"');
+            string key = value[keyStart..position].Trim().Trim('\'', '"');
             if (key.Equals(expectedKey, StringComparison.OrdinalIgnoreCase))
             {
                 return position;
@@ -192,26 +195,26 @@ public static class RuntimeConfigBuilder
 
     private static bool IsTunEnableLine(string line, int tunIndent)
     {
-        var indent = GetIndent(line);
+        int indent = GetIndent(line);
         if (indent <= tunIndent)
         {
             return false;
         }
 
-        var trimmed = line.TrimStart();
+        string trimmed = line.TrimStart();
         if (trimmed.Length == 0 || trimmed.StartsWith('#'))
         {
             return false;
         }
 
-        var separator = trimmed.IndexOf(':');
+        int separator = trimmed.IndexOf(':', StringComparison.Ordinal);
         return separator > 0
             && trimmed[..separator].Trim().Equals("enable", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsRootBoundary(string line, int tunIndent)
     {
-        var trimmed = line.TrimStart();
+        string trimmed = line.TrimStart();
         return trimmed.Length > 0
             && !trimmed.StartsWith('#')
             && GetIndent(line) <= tunIndent;
@@ -225,8 +228,8 @@ public static class RuntimeConfigBuilder
             return false;
         }
 
-        var trimmed = line.Trim();
-        var separator = trimmed.IndexOf(':');
+        string trimmed = line.Trim();
+        int separator = trimmed.IndexOf(':', StringComparison.Ordinal);
         if (separator <= 0 || trimmed.StartsWith('#') || trimmed is "---" or "...")
         {
             return false;
@@ -248,7 +251,7 @@ public static class RuntimeConfigBuilder
             return false;
         }
 
-        var trimmed = line.TrimStart();
+        string trimmed = line.TrimStart();
         return trimmed.StartsWith("external-controller:", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("secret:", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("allow-lan:", StringComparison.OrdinalIgnoreCase)

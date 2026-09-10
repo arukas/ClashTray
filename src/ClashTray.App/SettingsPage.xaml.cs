@@ -26,24 +26,28 @@ public sealed partial class SettingsPage : UserControl
 
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_saving) return;
-        if (!TryReadPort(HttpPortBox, "HTTP", out var httpPort)
-            || !TryReadPort(SocksPortBox, "SOCKS", out var socksPort)
-            || !TryReadPort(MixedPortBox, "Mixed", out var mixedPort)
-            || !TryReadPort(ControllerPortBox, "控制器", out var controllerPort))
+        if (_saving)
         {
             return;
         }
 
-        if (!TryReadSubscriptionRefreshHours(out var subscriptionRefreshHours))
+        if (!TryReadPort(HttpPortBox, "HTTP", out int httpPort)
+            || !TryReadPort(SocksPortBox, "SOCKS", out int socksPort)
+            || !TryReadPort(MixedPortBox, "Mixed", out int mixedPort)
+            || !TryReadPort(ControllerPortBox, "控制器", out int controllerPort))
+        {
+            return;
+        }
+
+        if (!TryReadSubscriptionRefreshHours(out int subscriptionRefreshHours))
         {
             StatusText.Text = "订阅刷新间隔必须是 1 到 168 之间的整数小时。";
             return;
         }
 
-        var current = _runtime.Settings;
-        var logLevel = (LogLevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? current.LogLevel;
-        var theme = (ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Theme;
+        AppSettings current = _runtime.Settings;
+        string logLevel = (LogLevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? current.LogLevel;
+        string theme = (ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Theme;
         _saving = true;
         SaveSettingsButton.IsEnabled = false;
         try
@@ -150,7 +154,7 @@ public sealed partial class SettingsPage : UserControl
 
     private async void InstallCoreButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!Uri.TryCreate(CoreDownloadUriBox.Text.Trim(), UriKind.Absolute, out var uri)
+        if (!Uri.TryCreate(CoreDownloadUriBox.Text.Trim(), UriKind.Absolute, out Uri uri)
             || !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
             || string.IsNullOrWhiteSpace(CoreVersionBox.Text)
             || CoreSha256Box.Text.Trim().Length != 64
@@ -173,10 +177,16 @@ public sealed partial class SettingsPage : UserControl
 
     private void LoadSettings(AppSettings settings)
     {
-        if (StartWithWindowsSwitch is null) return;
+        if (StartWithWindowsSwitch is null)
+        {
+            return;
+        }
 
         UpdateStartupStatus(settings);
-        if (settings == _loadedSettings) return;
+        if (settings == _loadedSettings)
+        {
+            return;
+        }
 
         // Merge external settings changes only into fields the user has not edited.
         // Do not reassign unchanged values: NumberBox may still contain uncommitted text.
@@ -186,37 +196,89 @@ public sealed partial class SettingsPage : UserControl
                 && EqualityComparer<T>.Default.Equals(displayed, select(_loadedSettings)));
 
         if (ShouldRefresh(StartWithWindowsSwitch.IsOn, value => value.StartWithWindows))
+        {
             StartWithWindowsSwitch.IsOn = settings.StartWithWindows;
+        }
+
         if (ShouldRefresh(StartCoreSwitch.IsOn, value => value.StartCoreAutomatically))
+        {
             StartCoreSwitch.IsOn = settings.StartCoreAutomatically;
-        if (ShouldRefresh(AllowLanSwitch.IsOn, value => value.AllowLan)) AllowLanSwitch.IsOn = settings.AllowLan;
-        if (ShouldRefresh(Ipv6Switch.IsOn, value => value.Ipv6)) Ipv6Switch.IsOn = settings.Ipv6;
-        if (ShouldRefresh(TcpConcurrentSwitch.IsOn, value => value.TcpConcurrent)) TcpConcurrentSwitch.IsOn = settings.TcpConcurrent;
+        }
+
+        if (ShouldRefresh(AllowLanSwitch.IsOn, value => value.AllowLan))
+        {
+            AllowLanSwitch.IsOn = settings.AllowLan;
+        }
+
+        if (ShouldRefresh(Ipv6Switch.IsOn, value => value.Ipv6))
+        {
+            Ipv6Switch.IsOn = settings.Ipv6;
+        }
+
+        if (ShouldRefresh(TcpConcurrentSwitch.IsOn, value => value.TcpConcurrent))
+        {
+            TcpConcurrentSwitch.IsOn = settings.TcpConcurrent;
+        }
+
         if (ShouldRefresh(SubscriptionRefreshHoursBox.Value, value => (double)value.SubscriptionRefreshHours))
+        {
             SubscriptionRefreshHoursBox.Value = settings.SubscriptionRefreshHours;
-        if (ShouldRefresh(HttpPortBox.Value, value => (double)value.HttpPort)) HttpPortBox.Value = settings.HttpPort;
-        if (ShouldRefresh(SocksPortBox.Value, value => (double)value.SocksPort)) SocksPortBox.Value = settings.SocksPort;
-        if (ShouldRefresh(MixedPortBox.Value, value => (double)value.MixedPort)) MixedPortBox.Value = settings.MixedPort;
-        if (ShouldRefresh(ControllerPortBox.Value, value => (double)value.ControllerPort)) ControllerPortBox.Value = settings.ControllerPort;
-        if (ShouldRefresh(BypassListBox.Text, value => value.BypassList)) BypassListBox.Text = settings.BypassList;
+        }
+
+        if (ShouldRefresh(HttpPortBox.Value, value => (double)value.HttpPort))
+        {
+            HttpPortBox.Value = settings.HttpPort;
+        }
+
+        if (ShouldRefresh(SocksPortBox.Value, value => (double)value.SocksPort))
+        {
+            SocksPortBox.Value = settings.SocksPort;
+        }
+
+        if (ShouldRefresh(MixedPortBox.Value, value => (double)value.MixedPort))
+        {
+            MixedPortBox.Value = settings.MixedPort;
+        }
+
+        if (ShouldRefresh(ControllerPortBox.Value, value => (double)value.ControllerPort))
+        {
+            ControllerPortBox.Value = settings.ControllerPort;
+        }
+
+        if (ShouldRefresh(BypassListBox.Text, value => value.BypassList))
+        {
+            BypassListBox.Text = settings.BypassList;
+        }
+
         if (ShouldRefresh((LogLevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString(), value => value.LogLevel))
+        {
             LogLevelBox.SelectedItem = LogLevelBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Content?.ToString() == settings.LogLevel)
                 ?? LogLevelBox.Items.FirstOrDefault();
-        var refreshTheme = ShouldRefresh((ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.Theme);
-        var hiddenTheme = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == "nakhimov");
+        }
+
+        bool refreshTheme = ShouldRefresh((ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.Theme);
+        ComboBoxItem? hiddenTheme = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == "nakhimov");
         if (settings.NakhimovUnlocked && hiddenTheme is null)
+        {
             ThemeBox.Items.Add(new ComboBoxItem { Content = "Nakhimov", Tag = "nakhimov" });
+        }
         else if (!settings.NakhimovUnlocked && hiddenTheme is not null)
+        {
             ThemeBox.Items.Remove(hiddenTheme);
+        }
+
         if (refreshTheme)
+        {
             ThemeBox.SelectedItem = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.Theme)
                 ?? ThemeBox.Items.FirstOrDefault();
+        }
+
         _loadedSettings = settings;
     }
 
     private void UpdateStartupStatus(AppSettings settings)
     {
-        var status = _runtime.GetStartupStatus();
+        StartupRegistrationStatus status = _runtime.GetStartupStatus();
         if (!string.IsNullOrWhiteSpace(status.Error))
         {
             StartupStatusText.Text = $"无法读取 Windows 启动状态：{status.Error}";
@@ -242,7 +304,7 @@ public sealed partial class SettingsPage : UserControl
 
     private bool TryReadSubscriptionRefreshHours(out int hours)
     {
-        var value = SubscriptionRefreshHoursBox.Value;
+        double value = SubscriptionRefreshHoursBox.Value;
         if (double.IsNaN(value)
             || double.IsInfinity(value)
             || value < 1
@@ -259,7 +321,7 @@ public sealed partial class SettingsPage : UserControl
 
     private bool TryReadPort(NumberBox box, string name, out int port)
     {
-        var value = box.Value;
+        double value = box.Value;
         if (double.IsNaN(value)
             || double.IsInfinity(value)
             || value < 1
@@ -282,21 +344,21 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
-        var selectedName = (ProvidersListView.SelectedItem as ListViewItem)?.Tag is ValueTuple<ProviderStatus, bool> selected
+        string selectedName = (ProvidersListView.SelectedItem as ListViewItem)?.Tag is ValueTuple<ProviderStatus, bool> selected
             ? selected.Item1.Name
             : null;
         ProvidersListView.Items.Clear();
-        foreach (var provider in snapshot.Providers)
+        foreach (ProviderStatus provider in snapshot.Providers)
         {
             ProvidersListView.Items.Add(CreateProviderItem(provider, rules: false));
         }
 
-        foreach (var provider in snapshot.RuleProviders)
+        foreach (ProviderStatus provider in snapshot.RuleProviders)
         {
             ProvidersListView.Items.Add(CreateProviderItem(provider, rules: true));
         }
 
-        var restored = ProvidersListView.Items.OfType<ListViewItem>().FirstOrDefault(item =>
+        ListViewItem? restored = ProvidersListView.Items.OfType<ListViewItem>().FirstOrDefault(item =>
             item.Tag is ValueTuple<ProviderStatus, bool> itemData && itemData.Item1.Name == selectedName);
         ProvidersListView.SelectedItem = restored;
     }

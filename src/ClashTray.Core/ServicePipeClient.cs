@@ -6,7 +6,7 @@ namespace ClashTray.Core;
 
 internal interface IServicePipeClient
 {
-    Task<ServiceResponse> SendAsync(ServiceCommand command, string? payload = null, CancellationToken cancellationToken = default);
+    public Task<ServiceResponse> SendAsync(ServiceCommand command, string? payload = null, CancellationToken cancellationToken = default);
 }
 
 public sealed class ServicePipeClient : IServicePipeClient
@@ -17,8 +17,8 @@ public sealed class ServicePipeClient : IServicePipeClient
 
     public async Task<ServiceResponse> SendAsync(ServiceCommand command, string? payload = null, CancellationToken cancellationToken = default)
     {
-        var request = new ServiceRequest(Guid.NewGuid(), command, payload);
-        await using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        ServiceRequest request = new ServiceRequest(Guid.NewGuid(), command, payload);
+        await using NamedPipeClientStream pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
         try
         {
             await pipe.ConnectAsync(2000, cancellationToken);
@@ -28,18 +28,18 @@ public sealed class ServicePipeClient : IServicePipeClient
             throw new ServiceUnavailableException("ClashTray service is unavailable.", exception);
         }
 
-        await using var writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
-        using var reader = new StreamReader(pipe, leaveOpen: true);
+        await using StreamWriter writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
+        using StreamReader reader = new StreamReader(pipe, leaveOpen: true);
         try
         {
             await writer.WriteLineAsync(JsonSerializer.Serialize(request, _options));
-            var line = await reader.ReadLineAsync(cancellationToken);
+            string? line = await reader.ReadLineAsync(cancellationToken);
             if (string.IsNullOrWhiteSpace(line))
             {
                 throw new InvalidDataException("ClashTray service returned no response.");
             }
 
-            var response = JsonSerializer.Deserialize<ServiceResponse>(line, _options)
+            ServiceResponse response = JsonSerializer.Deserialize<ServiceResponse>(line, _options)
                 ?? throw new InvalidDataException("ClashTray service returned an invalid response.");
             if (response.RequestId != request.RequestId)
             {
@@ -65,6 +65,16 @@ public sealed class ServicePipeClient : IServicePipeClient
 
 internal sealed class ServiceUnavailableException : IOException
 {
+    public ServiceUnavailableException()
+    {
+    }
+
+    public ServiceUnavailableException(string message)
+        : base(message)
+    {
+    }
+
+
     public ServiceUnavailableException(string message, Exception innerException)
         : base(message, innerException)
     {
@@ -73,6 +83,16 @@ internal sealed class ServiceUnavailableException : IOException
 
 internal sealed class ServiceRequestUnknownException : IOException
 {
+    public ServiceRequestUnknownException()
+    {
+    }
+
+    public ServiceRequestUnknownException(string message)
+        : base(message)
+    {
+    }
+
+
     public ServiceRequestUnknownException(string message, Exception innerException)
         : base(message, innerException)
     {

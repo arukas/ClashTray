@@ -25,22 +25,22 @@ internal sealed record StartupRegistrationChange(
 
 internal interface IStartupRegistration
 {
-    StartupRegistrationStatus GetStatus();
+    public StartupRegistrationStatus GetStatus();
 
-    StartupRegistrationChange Ensure(bool enabled, string? executablePath);
+    public StartupRegistrationChange Ensure(bool enabled, string? executablePath);
 
-    void Rollback(StartupRegistrationChange change);
+    public void Rollback(StartupRegistrationChange change);
 }
 
 internal interface IStartupRegistry
 {
-    RegistryValueSnapshot ReadRunValue();
+    public RegistryValueSnapshot ReadRunValue();
 
-    bool IsStartupApprovedDisabled();
+    public bool IsStartupApprovedDisabled();
 
-    void WriteRunValue(object value, RegistryValueKind kind);
+    public void WriteRunValue(object value, RegistryValueKind kind);
 
-    void DeleteRunValue();
+    public void DeleteRunValue();
 }
 
 internal sealed record RegistryValueSnapshot(object? Value, RegistryValueKind Kind, bool Exists)
@@ -76,11 +76,11 @@ public sealed class StartupManager : IStartupRegistration
     {
         try
         {
-            var runValue = _registry.ReadRunValue();
-            var command = runValue.Value as string;
-            var registered = command is not null && !string.IsNullOrWhiteSpace(command);
-            var expectedCommand = TryBuildCommand(Environment.ProcessPath);
-            var owned = registered
+            RegistryValueSnapshot runValue = _registry.ReadRunValue();
+            string? command = runValue.Value as string;
+            bool registered = command is not null && !string.IsNullOrWhiteSpace(command);
+            string? expectedCommand = TryBuildCommand(Environment.ProcessPath);
+            bool owned = registered
                 && expectedCommand is not null
                 && string.Equals(command, expectedCommand, StringComparison.Ordinal);
             return new StartupRegistrationStatus(
@@ -100,10 +100,10 @@ public sealed class StartupManager : IStartupRegistration
 
     internal StartupRegistrationChange Ensure(bool enabled, string? executablePath)
     {
-        var expectedCommand = enabled
+        string expectedCommand = enabled
             ? BuildCommand(executablePath)
             : string.IsNullOrWhiteSpace(executablePath) ? string.Empty : BuildCommand(executablePath);
-        var current = _registry.ReadRunValue();
+        RegistryValueSnapshot current = _registry.ReadRunValue();
 
         if (enabled)
         {
@@ -153,8 +153,8 @@ public sealed class StartupManager : IStartupRegistration
             return;
         }
 
-        var current = _registry.ReadRunValue();
-        var stillOwned = change.ExpectedAfterExists
+        RegistryValueSnapshot current = _registry.ReadRunValue();
+        bool stillOwned = change.ExpectedAfterExists
             ? current.Value is string command
                 && string.Equals(command, change.ExpectedCommand, StringComparison.Ordinal)
             : !current.Exists;
@@ -223,20 +223,20 @@ public sealed class StartupManager : IStartupRegistration
     {
         public RegistryValueSnapshot ReadRunValue()
         {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
             if (key is null || !key.GetValueNames().Contains(ValueName, StringComparer.OrdinalIgnoreCase))
             {
                 return RegistryValueSnapshot.Missing;
             }
 
-            var value = key.GetValue(ValueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+            object? value = key.GetValue(ValueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
             return new RegistryValueSnapshot(value, key.GetValueKind(ValueName), Exists: true);
         }
 
         public bool IsStartupApprovedDisabled()
         {
-            using var key = Registry.CurrentUser.OpenSubKey(StartupApprovedRunKeyPath, writable: false);
-            var value = key?.GetValue(ValueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(StartupApprovedRunKeyPath, writable: false);
+            object? value = key?.GetValue(ValueName, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
             return value is byte[] bytes
                 && bytes.Length > 0
                 && bytes[0] is 0x03 or 0x07;
@@ -244,14 +244,14 @@ public sealed class StartupManager : IStartupRegistration
 
         public void WriteRunValue(object value, RegistryValueKind kind)
         {
-            using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true)
+            using RegistryKey key = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true)
                 ?? throw new InvalidOperationException("Windows startup registry key is unavailable.");
             key.SetValue(ValueName, value, kind);
         }
 
         public void DeleteRunValue()
         {
-            using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true);
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true);
             key?.DeleteValue(ValueName, throwOnMissingValue: false);
         }
     }
