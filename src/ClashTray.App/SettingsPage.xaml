@@ -25,6 +25,8 @@
                 <ToggleSwitch x:Name="Ipv6Switch" Header="启用 IPv6" />
                 <ToggleSwitch x:Name="TcpConcurrentSwitch" Header="启用 TCP 并发" />
                 <TextBlock Text="面板中的系统代理、TUN、允许局域网连接和 IPv6 设置由 ClashTray 保存并优先控制；配置文件中的对应选项不会覆盖程序选择。" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0" />
+                <TextBlock x:Name="StartupStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <Button x:Name="SaveSettingsButton" Content="保存设置" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" HorizontalAlignment="Left" />
             </StackPanel>
         </Border>
 
@@ -73,7 +75,7 @@
                     </ComboBox>
                 </Grid>
                 <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Left">
-                    <Button x:Name="SaveSettingsButton" Content="保存设置" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" />
+
                     <Button Content="清理 DNS" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearDnsButton_Click" />
                     <Button Content="清理 FakeIP" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearFakeIpButton_Click" />
                     <Button Content="更新 Geo" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="UpdateGeoButton_Click" />
@@ -103,3 +105,4 @@
         <TextBlock x:Name="StatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" Padding="4,0" />
     </StackPanel>
 </UserControl>
+

@@ -3,7 +3,14 @@ using ClashTray.Contracts;
 
 namespace ClashTray.Core;
 
-public sealed class SettingsStore
+internal interface ISettingsStore
+{
+    Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default);
+
+    Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default);
+}
+
+public sealed class SettingsStore : ISettingsStore
 {
     private const int MaxSettingsBytes = 256 * 1024;
     private readonly AppPaths _paths;
@@ -59,3 +66,5 @@ public sealed class SettingsStore
         await AtomicFile.WriteJsonAsync(_paths.SettingsFile, settings, _options, cancellationToken);
     }
 }
+
+

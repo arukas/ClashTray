@@ -16,13 +16,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly BoundedLogBuffer _logBuffer = new(500);
     private readonly AppPaths _paths;
     private readonly ConfigurationStore _configurationStore;
-    private readonly SettingsStore _settingsStore;
+    private readonly ISettingsStore _settingsStore;
     private readonly CoreDiscovery _coreDiscovery;
     private readonly SystemProxyManager _systemProxy;
-    private readonly ServicePipeClient _servicePipeClient = new();
+    private readonly IServicePipeClient _servicePipeClient;
     private readonly CoreUpdater _coreUpdater;
     private readonly SubscriptionScheduler _subscriptionScheduler;
     private readonly MihomoProcessManager _processManager = new();
+    private readonly IStartupRegistration _startupRegistration;
     private readonly object _logStreamGate = new();
     private MihomoApiClient? _api;
     private Task? _pollingTask;
@@ -49,11 +50,25 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         IReadOnlyList<ConnectionInfo> Value);
 
     public ClashTrayRuntime(AppPaths? paths = null)
+        : this(paths, null, null, null)
     {
+    }
+
+    internal ClashTrayRuntime(
+        AppPaths? paths,
+        IStartupRegistration? startupRegistration,
+        IServicePipeClient? servicePipeClient,
+        ISettingsStore? settingsStore)
+    {
+        var useDefaultEnvironment = paths is null;
         _paths = paths ?? new AppPaths();
         _paths.EnsureDirectories();
         _configurationStore = new ConfigurationStore(_paths);
-        _settingsStore = new SettingsStore(_paths);
+        _settingsStore = settingsStore ?? new SettingsStore(_paths);
+        _startupRegistration = startupRegistration
+            ?? (useDefaultEnvironment ? new StartupManager() : new StartupManager(new InMemoryStartupRegistry()));
+        _servicePipeClient = servicePipeClient
+            ?? (useDefaultEnvironment ? new ServicePipeClient() : new IsolatedServicePipeClient());
         _coreDiscovery = new CoreDiscovery(_paths);
         _systemProxy = new SystemProxyManager(_paths);
         _coreUpdater = new CoreUpdater(_paths);
@@ -70,6 +85,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public RuntimeSnapshot Snapshot => _snapshot;
 
     public AppSettings Settings => _settings;
+
+    public StartupRegistrationStatus GetStartupStatus() => _startupRegistration.GetStatus();
+
+    internal static bool ShouldAutomaticallyStartCore(
+        AppSettings settings,
+        bool hasActiveConfiguration,
+        CoreState currentState) =>
+        settings.StartCoreAutomatically
+        && hasActiveConfiguration
+        && currentState is CoreState.Missing or CoreState.Stopped or CoreState.Failed;
 
     public event EventHandler<RuntimeSnapshot>? SnapshotChanged;
 
@@ -147,9 +172,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         Publish();
         _subscriptionScheduler.Start();
 
-        if (_settings.StartCoreAutomatically && configurations.Any(configuration => configuration.IsActive))
+        if (ShouldAutomaticallyStartCore(
+            _settings,
+            configurations.Any(configuration => configuration.IsActive),
+            _snapshot.Core.State))
         {
-            _ = StartCoreAsync(cancellationToken);
+            await StartCoreAsync(cancellationToken);
         }
     }
 
@@ -159,6 +187,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         var coreStarted = false;
         try
         {
+            if (_snapshot.Core.State == CoreState.Running)
+            {
+                return;
+            }
+
             var profile = GetActiveConfiguration();
             var executable = _coreDiscovery.FindExecutable();
             if (executable is null)
@@ -682,7 +715,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public async Task UpdateSettingsAsync(AppSettings settings, CancellationToken cancellationToken = default)
+    public async Task UpdateSettingsAsync(AppSettings settings, CancellationToken cancellationToken = default, bool reconcileStartup = false)
     {
         ValidateSettings(settings);
         await _operationLock.WaitAsync(cancellationToken);
@@ -690,12 +723,36 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             var networkSettingsChanged = settings.AllowLan != _settings.AllowLan
                 || settings.Ipv6 != _settings.Ipv6;
-            if (settings.StartWithWindows != _settings.StartWithWindows)
+            StartupRegistrationChange? startupChange = null;
+            if (reconcileStartup)
             {
-                StartupManager.SetEnabled(settings.StartWithWindows, Environment.ProcessPath ?? AppContext.BaseDirectory);
+                startupChange = _startupRegistration.Ensure(
+                    settings.StartWithWindows,
+                    ResolveStartupExecutablePath(settings.StartWithWindows));
             }
 
-            await _settingsStore.SaveAsync(settings, cancellationToken);
+            try
+            {
+                await _settingsStore.SaveAsync(settings, cancellationToken);
+            }
+            catch (Exception saveException)
+            {
+                if (startupChange is { Changed: true })
+                {
+                    try
+                    {
+                        _startupRegistration.Rollback(startupChange);
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        throw new InvalidOperationException(
+                            "设置保存失败，且 Windows 启动项回滚失败。",
+                            new AggregateException(saveException, rollbackException));
+                    }
+                }
+
+                throw;
+            }
             _settings = settings;
             if (networkSettingsChanged && _api is not null)
             {
@@ -2034,6 +2091,27 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private static void ValidateSettings(AppSettings settings)
         => SettingsValidator.Validate(settings);
 
+    private static string? ResolveStartupExecutablePath(bool required)
+    {
+        var path = Environment.ProcessPath;
+        var valid = !string.IsNullOrWhiteSpace(path)
+            && Path.IsPathFullyQualified(path)
+            && File.Exists(path)
+            && string.Equals(Path.GetExtension(path), ".exe", StringComparison.OrdinalIgnoreCase);
+        if (valid)
+        {
+            return Path.GetFullPath(path!);
+        }
+
+        if (required)
+        {
+            throw new InvalidOperationException(
+                "无法确定 ClashTray 的真实可执行文件路径，未修改 Windows 启动项。请从已安装目录启动应用。");
+        }
+
+        return null;
+    }
+
     private static RuntimeSnapshot CreateInitialSnapshot() => new(
         new CoreStatus(CoreState.Missing, null, null, ProxyMode.Rule, 0, 0, 0, 0, 0, 0, null),
         SystemProxyState.Off,
@@ -2049,3 +2127,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         [],
         null);
 }
+
+
+
+
+
+
+
+

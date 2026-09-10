@@ -4,7 +4,12 @@ using ClashTray.Contracts;
 
 namespace ClashTray.Core;
 
-public sealed class ServicePipeClient
+internal interface IServicePipeClient
+{
+    Task<ServiceResponse> SendAsync(ServiceCommand command, string? payload = null, CancellationToken cancellationToken = default);
+}
+
+public sealed class ServicePipeClient : IServicePipeClient
 {
     public const string PipeName = "ClashTray.Service";
 
@@ -73,3 +78,5 @@ internal sealed class ServiceRequestUnknownException : IOException
     {
     }
 }
+
+

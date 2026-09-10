@@ -63,7 +63,8 @@ public sealed partial class SettingsPage : UserControl
                 Theme = theme,
                 BypassList = BypassListBox.Text.Trim(),
                 SubscriptionRefreshHours = subscriptionRefreshHours
-            });
+            }, reconcileStartup: true);
+            UpdateStartupStatus(_runtime.Settings);
             StatusText.Text = "设置已保存；允许局域网连接和 IPv6 由程序优先控制，端口等配置在核心重启后生效。";
         }
         catch (ArgumentException exception)
@@ -172,7 +173,10 @@ public sealed partial class SettingsPage : UserControl
 
     private void LoadSettings(AppSettings settings)
     {
-        if (StartWithWindowsSwitch is null || settings == _loadedSettings) return;
+        if (StartWithWindowsSwitch is null) return;
+
+        UpdateStartupStatus(settings);
+        if (settings == _loadedSettings) return;
 
         // Merge external settings changes only into fields the user has not edited.
         // Do not reassign unchanged values: NumberBox may still contain uncommitted text.
@@ -208,6 +212,32 @@ public sealed partial class SettingsPage : UserControl
             ThemeBox.SelectedItem = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.Theme)
                 ?? ThemeBox.Items.FirstOrDefault();
         _loadedSettings = settings;
+    }
+
+    private void UpdateStartupStatus(AppSettings settings)
+    {
+        var status = _runtime.GetStartupStatus();
+        if (!string.IsNullOrWhiteSpace(status.Error))
+        {
+            StartupStatusText.Text = $"无法读取 Windows 启动状态：{status.Error}";
+            return;
+        }
+
+        if (settings.StartWithWindows)
+        {
+            StartupStatusText.Text = status.IsDisabledByOperatingSystem
+                ? "开机启动已注册，但 Windows 已禁用；请在任务管理器的“启动应用”中启用。"
+                : status.RequiresRepair
+                    ? "开机启动已打开，但启动项命令已变化；点击“保存设置”修复。"
+                    : status.IsRegistered
+                        ? "开机启动已注册。"
+                        : "开机启动已打开，但启动项缺失；点击“保存设置”修复。";
+            return;
+        }
+
+        StartupStatusText.Text = status.IsRegistered && !status.IsOwnedByClashTray
+            ? "开机启动已关闭；检测到同名启动项，保存时会保留其他程序的命令。"
+            : "开机启动已关闭。";
     }
 
     private bool TryReadSubscriptionRefreshHours(out int hours)
@@ -278,3 +308,6 @@ public sealed partial class SettingsPage : UserControl
             Tag = (provider, rules)
         };
 }
+
+
+
