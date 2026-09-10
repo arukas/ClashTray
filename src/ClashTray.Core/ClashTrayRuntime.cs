@@ -666,8 +666,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 StartupManager.SetEnabled(settings.StartWithWindows, Environment.ProcessPath ?? AppContext.BaseDirectory);
             }
 
-            _settings = settings;
             await _settingsStore.SaveAsync(settings, cancellationToken);
+            _settings = settings;
             if (networkSettingsChanged && _api is not null)
             {
                 try

@@ -37,6 +37,7 @@ public sealed partial class MainWindow : Window
     {
         _app = app;
         InitializeComponent();
+        InitializeThemeTracking();
         _windowHandle = WindowNative.GetWindowHandle(this);
     }
 
@@ -111,6 +112,7 @@ public sealed partial class MainWindow : Window
 
     public void HidePanel()
     {
+        ResetLogoClicks();
         if (_windowHandle != IntPtr.Zero)
         {
             NativeMethods.ShowWindow(_windowHandle, NativeMethods.SW_HIDE);
@@ -119,7 +121,11 @@ public sealed partial class MainWindow : Window
         _isVisible = false;
     }
 
-    public void AllowClose() => _allowClose = true;
+    public void AllowClose()
+    {
+        _allowClose = true;
+        StopThemeTracking();
+    }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
@@ -246,66 +252,6 @@ public sealed partial class MainWindow : Window
     {
         ErrorBanner.Message = message;
         ErrorBanner.IsOpen = true;
-    }
-
-    private void ApplyTheme(string theme)
-    {
-        var normalizedTheme = theme.Trim().ToLowerInvariant();
-        RootGrid.RequestedTheme = normalizedTheme switch
-        {
-            "light" => ElementTheme.Light,
-            "dark" => ElementTheme.Dark,
-            _ => ElementTheme.Default
-        };
-        if (ThemeButtonIcon is null)
-        {
-            return;
-        }
-
-        _updatingThemeControls = true;
-        try
-        {
-            SystemThemeOption.IsChecked = normalizedTheme is not ("light" or "dark");
-            LightThemeOption.IsChecked = normalizedTheme == "light";
-            DarkThemeOption.IsChecked = normalizedTheme == "dark";
-            ThemeButtonIcon.Glyph = normalizedTheme switch
-            {
-                "light" => "\uE706",
-                "dark" => "\uE708",
-                _ => "\uE790"
-            };
-            ToolTipService.SetToolTip(ThemeButton, normalizedTheme switch
-            {
-                "light" => "主题：浅色",
-                "dark" => "主题：深色",
-                _ => "主题：自动"
-            });
-        }
-        finally
-        {
-            _updatingThemeControls = false;
-        }
-    }
-
-    private async void ThemeOption_Click(object sender, RoutedEventArgs e)
-    {
-        if (_updatingThemeControls
-            || _runtime is null
-            || sender is not RadioButton { Tag: string theme })
-        {
-            return;
-        }
-
-        ThemeFlyout.Hide();
-        try
-        {
-            await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = theme });
-        }
-        catch (Exception exception)
-        {
-            ApplyTheme(_runtime.Settings.Theme);
-            ShowError($"主题切换失败：{exception.Message}");
-        }
     }
 
     internal async Task ImportLocalConfigurationAsync()

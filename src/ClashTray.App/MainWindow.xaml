@@ -8,9 +8,13 @@
         </Grid.RowDefinitions>
         <Grid Margin="0,0,0,8" ColumnSpacing="10">
             <Grid.ColumnDefinitions><ColumnDefinition Width="40"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <Border CornerRadius="10" Background="{ThemeResource ControlFillColorSecondaryBrush}" Width="40" Height="40">
-                <Image Source="ms-appx:///Assets/logo.png" Width="28" Height="28"/>
-            </Border>
+            <Button x:Name="LogoButton" CornerRadius="10" Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                    Width="40" Height="40" Padding="0" BorderThickness="0" Click="LogoButton_Click"
+                    AutomationProperties.Name="ClashTray Logo" ToolTipService.ToolTip="ClashTray">
+                <Image x:Name="ThemeLogo" Source="ms-appx:///Assets/Themes/Light/logo.png" Width="28" Height="28" Stretch="Uniform"/>
+            </Button>
+            <TeachingTip x:Name="EasterEggTip" Target="{x:Bind LogoButton}" PreferredPlacement="Bottom"
+                         IsLightDismissEnabled="True" ShouldConstrainToRootBounds="True"/>
             <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                 <TextBlock Text="ClashTray" FontSize="20" FontWeight="SemiBold"/>
                 <StackPanel Orientation="Horizontal" Spacing="6">
@@ -29,6 +33,7 @@
                                 <RadioButton x:Name="SystemThemeOption" Content="自动（跟随系统）" Tag="system" GroupName="ThemeMode" Click="ThemeOption_Click"/>
                                 <RadioButton x:Name="LightThemeOption" Content="浅色" Tag="light" GroupName="ThemeMode" Click="ThemeOption_Click"/>
                                 <RadioButton x:Name="DarkThemeOption" Content="深色" Tag="dark" GroupName="ThemeMode" Click="ThemeOption_Click"/>
+                                <RadioButton x:Name="NakhimovThemeOption" Content="Nakhimov" Tag="nakhimov" GroupName="ThemeMode" Click="ThemeOption_Click" Visibility="Collapsed"/>
                             </StackPanel>
                         </Flyout>
                     </Button.Flyout>

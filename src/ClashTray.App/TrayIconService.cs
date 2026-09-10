@@ -18,6 +18,7 @@ internal sealed class TrayIconService : IDisposable
     private bool _disposed;
     private bool _ownsIcon;
     private bool _version4;
+    private string _assetTheme = "Dark";
     private static readonly Guid IconIdentity = new("06eaac46-982f-4741-b490-6f8f2fe8bb21");
 
     public TrayIconService(
@@ -73,6 +74,17 @@ internal sealed class TrayIconService : IDisposable
             _version4 = NativeMethods.Shell_NotifyIcon(NativeMethods.NIM_SETVERSION, ref _data);
             SetState(TrayState.Stopped);
         }
+    }
+
+    public void SetTheme(string assetTheme)
+    {
+        if (assetTheme is not ("Light" or "Dark")) throw new ArgumentOutOfRangeException(nameof(assetTheme));
+        if (_assetTheme == assetTheme) return;
+        _assetTheme = assetTheme;
+        if (!_installed) return;
+        ReleaseIcon();
+        _data.IconHandle = LoadTrayIcon();
+        NativeMethods.Shell_NotifyIcon(NativeMethods.NIM_MODIFY, ref _data);
     }
 
     public void SetState(TrayState state)
@@ -206,7 +218,7 @@ internal sealed class TrayIconService : IDisposable
 
     private IntPtr LoadTrayIcon()
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "Assets", "logo.ico");
+        var path = Path.Combine(AppContext.BaseDirectory, "Assets", "Themes", _assetTheme, "logo.ico");
         var handle = NativeMethods.LoadImage(
             IntPtr.Zero,
             path,

@@ -30,6 +30,7 @@ public sealed partial class MainWindow
         if (NativeMethods.IsWindowVisible(_windowHandle)) throw new InvalidOperationException("Repeated tray selection did not hide the panel.");
         ShowPanel();
         _isPinned = true; // Keep the diagnostic render stable if another app takes focus.
+        await VerifyThemeUnlockAsync(directory);
         var empty = _runtime!.Snapshot;
         var sample = empty with
         {
@@ -205,6 +206,52 @@ public sealed partial class MainWindow
         DashboardScrollViewer.ChangeView(null, 0, null, true);
     }
 
+    private async Task VerifyThemeUnlockAsync(string directory)
+    {
+        if (NakhimovThemeOption.Visibility != Visibility.Collapsed)
+            throw new InvalidOperationException("Locked theme is visible before the gesture.");
+        var invoke = (IInvokeProvider)new ButtonAutomationPeer(LogoButton).GetPattern(PatternInterface.Invoke);
+        for (var index = 0; index < 4; index++)
+        {
+            invoke.Invoke();
+            await Task.Delay(50);
+        }
+        if (_runtime!.Settings.NakhimovUnlocked || _themeName == "nakhimov")
+            throw new InvalidOperationException("Theme unlocked before the fifth click.");
+        invoke.Invoke();
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            await Task.Delay(50);
+            if (_runtime.Settings.NakhimovUnlocked && !_unlockInProgress) break;
+        }
+        if (!_runtime.Settings.NakhimovUnlocked || _themeName != "nakhimov"
+            || NakhimovThemeOption.Visibility != Visibility.Visible
+            || _logoAsset != "Nakhimov")
+            throw new InvalidOperationException("Fifth Logo button invocation did not enable the theme.");
+        var store = new ClashTray.Core.SettingsStore(new ClashTray.Core.AppPaths(
+            Path.Combine(directory, "user"), Path.Combine(directory, "service")));
+        var restored = await store.LoadAsync();
+        if (!restored.NakhimovUnlocked || restored.Theme != "nakhimov")
+            throw new InvalidOperationException("Unlock state was not persisted.");
+        await SaveDiagnosticFrameAsync(directory, "nakhimov-unlocked");
+        EasterEggTip.IsOpen = false;
+        await SaveDiagnosticFrameAsync(directory, "nakhimov-panel");
+        await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = "light" });
+        ApplyTheme(_runtime.Settings.Theme);
+        if (NakhimovThemeOption.Visibility != Visibility.Visible || _logoAsset != "Light")
+            throw new InvalidOperationException("Switching back lost unlock state or kept the wrong logo.");
+        if (((SolidColorBrush)((ResourceDictionary)Application.Current.Resources.ThemeDictionaries["Default"])["ClashTrayCanvasBrush"]).Color
+            != Windows.UI.Color.FromArgb(255, 25, 28, 34))
+            throw new InvalidOperationException("Normal dark palette was not restored.");
+        await File.WriteAllTextAsync(Path.Combine(directory, "theme-unlock-checks.json"), JsonSerializer.Serialize(new
+        {
+            HiddenUntilUnlocked = true, FourClicksStayLocked = true, FifthButtonInvocationUnlocks = true,
+            NakhimovLogoSelected = true, SavedStateReloads = true, SwitchBackKeepsUnlock = true,
+            OriginalPaletteRestored = true,
+            ManualChecks = "Physical mouse double-click timing and OS high contrast require manual verification."
+        }, DiagnosticJsonOptions));
+        ResetLogoClicks();
+    }
     private async Task SaveDiagnosticFrameAsync(string directory, string name)
     {
         await Task.Delay(200);

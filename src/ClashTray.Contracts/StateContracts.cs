@@ -162,7 +162,8 @@ public sealed record AppSettings(
     int SubscriptionRefreshHours = 24,
     string Theme = "system",
     bool SystemProxyEnabled = false,
-    bool TunEnabled = false);
+    bool TunEnabled = false,
+    bool NakhimovUnlocked = false);
 
 public enum ServiceCommand
 {

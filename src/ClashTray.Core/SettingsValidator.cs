@@ -5,7 +5,7 @@ namespace ClashTray.Core;
 internal static class SettingsValidator
 {
     private static readonly string[] AllowedLogLevels = ["info", "warning", "error", "debug"];
-    private static readonly string[] AllowedThemes = ["system", "light", "dark"];
+    private static readonly string[] AllowedThemes = ["system", "light", "dark", "nakhimov"];
 
     public static void Validate(AppSettings settings)
     {
@@ -32,7 +32,13 @@ internal static class SettingsValidator
 
         if (!AllowedThemes.Contains(settings.Theme?.Trim(), StringComparer.OrdinalIgnoreCase))
         {
-            throw new ArgumentException("主题必须是 system、light 或 dark。", nameof(settings));
+            throw new ArgumentException("主题必须是 system、light、dark 或已解锁的 Nakhimov。", nameof(settings));
+        }
+
+        if (string.Equals(settings.Theme?.Trim(), "nakhimov", StringComparison.OrdinalIgnoreCase)
+            && !settings.NakhimovUnlocked)
+        {
+            throw new ArgumentException("请先通过 Logo 解锁 Nakhimov 主题。", nameof(settings));
         }
 
         if (settings.BypassList is null

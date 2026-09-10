@@ -180,6 +180,11 @@ public sealed partial class SettingsPage : UserControl
         BypassListBox.Text = settings.BypassList;
         LogLevelBox.SelectedItem = LogLevelBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Content?.ToString() == settings.LogLevel)
             ?? LogLevelBox.Items.FirstOrDefault();
+        var hiddenTheme = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == "nakhimov");
+        if (settings.NakhimovUnlocked && hiddenTheme is null)
+            ThemeBox.Items.Add(new ComboBoxItem { Content = "Nakhimov", Tag = "nakhimov" });
+        else if (!settings.NakhimovUnlocked && hiddenTheme is not null)
+            ThemeBox.Items.Remove(hiddenTheme);
         ThemeBox.SelectedItem = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.Theme)
             ?? ThemeBox.Items.FirstOrDefault();
     }
