@@ -20,7 +20,7 @@ ClashTray 是使用 C#、.NET 10 和 WinUI 3 独立实现的 Windows Mihomo 客�
 
 ## 体积与发布版本
 
-GitHub Actions 会在 Windows runner 上构建并发布四种 x64 产物。Full、NoCET 和 NoCore 使用压缩的自包含单文件发布；Framework 使用 framework-dependent 单文件宿主，payload 仍为压缩 ZIP，因此不会把 Mihomo 二进制塞进安装包。
+GitHub Actions 会在 Windows runner 上构建并发布四种 x64 产物。Full、NoCET 和 NoCore 使用 Inno Setup 7 的 LZMA2 solid 压缩安装器；App 与 Service 合并到同一个自包含发布目录，共用一套 .NET runtime。Framework 使用 framework-dependent 发布，因此不会把 Mihomo 二进制塞进安装包。
 
 | 版本 | 内容 | 适合谁 |
 | --- | --- | --- |
@@ -81,7 +81,7 @@ dotnet test ClashTray.sln --configuration Debug --property:Platform=x64 --no-bui
 .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant Framework
 ```
 
-详见 [docs/setup.md](docs/setup.md)、[docs/release.md](docs/release.md) 和 [docs/roadmap.md](docs/roadmap.md)。旧的 `Build-MSIX.ps1` 和 `packaging/ClashTray.Package` 保留作实验性 / 历史打包材料；当前发布路径是压缩的 EXE 安装器。
+详见 [docs/setup.md](docs/setup.md)、[docs/release.md](docs/release.md) 和 [docs/roadmap.md](docs/roadmap.md)。旧的 `Build-MSIX.ps1` 和 `packaging/ClashTray.Package` 保留作实验性 / 历史打包材料；当前发布路径是 Inno Setup LZMA2 solid 压缩的 EXE 安装器。
 
 ## 架构与数据
 

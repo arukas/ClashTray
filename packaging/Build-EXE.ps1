@@ -29,6 +29,29 @@ if ($includeCore) {
     }
 }
 $dotnet = (Get-Command dotnet.exe -ErrorAction Stop).Source
+$innoCandidates = @(
+    'C:\Program Files\Inno Setup 7\ISCC.exe',
+    'C:\Program Files (x86)\Inno Setup 7\ISCC.exe',
+    (Get-Command iscc.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1)
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) }
+$inno = $null
+$innoVersion = $null
+foreach ($candidate in ($innoCandidates | Select-Object -Unique)) {
+    $candidateVersion = (& $candidate --version 2>$null | Select-Object -First 1)
+    if ($null -eq $candidateVersion) {
+        continue
+    }
+    $candidateVersionText = $candidateVersion.ToString().Trim()
+    if ($candidateVersionText -match '^7\.') {
+        $inno = $candidate
+        $innoVersion = $candidateVersionText
+        break
+    }
+}
+if ([string]::IsNullOrWhiteSpace($inno)) {
+    throw 'Inno Setup 7 is required. Install the 7.x compiler so ISCC.exe is available at C:\Program Files\Inno Setup 7\ISCC.exe.'
+}
+Write-Host "Using Inno Setup compiler $innoVersion at $inno"
 $outputRoot = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     Join-Path $PSScriptRoot 'out'
 } else {
@@ -38,13 +61,10 @@ $outputRoot = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 $stageRoot = Join-Path $PSScriptRoot '.stage'
 $payloadRoot = Join-Path $stageRoot 'payload'
 $appPayload = Join-Path $payloadRoot 'App'
-$servicePayload = Join-Path $payloadRoot 'Service'
 $corePayload = Join-Path $payloadRoot 'Core'
 $appPublish = Join-Path $stageRoot 'app'
 $servicePublish = Join-Path $stageRoot 'service'
-$setupPublish = Join-Path $stageRoot 'setup'
 $appBuildOutput = Join-Path $repoRoot "src\ClashTray.App\bin\x64\$Configuration\net10.0-windows10.0.19041.0\win-x64"
-$payloadZip = Join-Path $stageRoot 'ClashTray-Payload.zip'
 $mihomoBinaryArchivePath = if ($mihomoVersion) { Join-Path $stageRoot "mihomo-windows-amd64-$mihomoVersion.zip" } else { $null }
 $coreExtract = Join-Path $stageRoot 'mihomo-extract'
 
@@ -56,7 +76,7 @@ $mihomoLicenseUri = if ($mihomoVersion) { "https://raw.githubusercontent.com/Met
 
 $appProject = Join-Path $repoRoot 'src\ClashTray.App\ClashTray.App.csproj'
 $serviceProject = Join-Path $repoRoot 'src\ClashTray.Service\ClashTray.Service.csproj'
-$setupProject = Join-Path $repoRoot 'src\ClashTray.Setup\ClashTray.Setup.csproj'
+$innoScript = Join-Path $PSScriptRoot 'ClashTray.iss'
 
 function Invoke-Dotnet {
     param([Parameter(Mandatory)][string[]]$Arguments)
@@ -183,20 +203,52 @@ function Prepare-MihomoPayload {
     }
 }
 
+function Merge-PublishTree {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination
+    )
+
+    if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
+        throw "Publish directory was not found: $Source"
+    }
+
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    foreach ($item in Get-ChildItem -LiteralPath $Source -Force) {
+        $target = Join-Path $Destination $item.Name
+        if ($item.PSIsContainer) {
+            Merge-PublishTree -Source $item.FullName -Destination $target
+            continue
+        }
+
+        if (Test-Path -LiteralPath $target -PathType Leaf) {
+            $sourceHash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
+            $targetHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+            if ($sourceHash -ne $targetHash) {
+                throw "App and Service publish outputs contain different files with the same name: $($item.Name)"
+            }
+
+            continue
+        }
+
+        Copy-Item -LiteralPath $item.FullName -Destination $target -Force
+    }
+}
+
 if (-not (Test-Path -LiteralPath $appProject -PathType Leaf)) {
     throw "App project was not found: $appProject"
 }
 if (-not (Test-Path -LiteralPath $serviceProject -PathType Leaf)) {
     throw "Service project was not found: $serviceProject"
 }
-if (-not (Test-Path -LiteralPath $setupProject -PathType Leaf)) {
-    throw "Setup project was not found: $setupProject"
+if (-not (Test-Path -LiteralPath $innoScript -PathType Leaf)) {
+    throw "Inno Setup script was not found: $innoScript"
 }
 if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'LICENSE') -PathType Leaf)) {
     throw 'The ClashTray MIT license file was not found.'
 }
 
-Write-Host "Publishing ClashTray EXE installer ($Configuration, win-x64, version $PackageVersion)..."
+Write-Host "Publishing ClashTray Inno Setup installer ($Configuration, win-x64, version $PackageVersion)..."
 Write-Host "Variant: $Variant (core bundled: $includeCore; self-contained: $selfContained)"
 
 # This is a generated staging directory owned by this script.
@@ -242,7 +294,7 @@ if ($disableCet) {
 Invoke-Dotnet -Arguments $servicePublishArguments
 
 Copy-PublishTree -Source $appPublish -Destination $appPayload
-Copy-PublishTree -Source $servicePublish -Destination $servicePayload
+Merge-PublishTree -Source $servicePublish -Destination $appPayload
 $projectLicense = Join-Path $repoRoot 'LICENSE'
 if (Test-Path -LiteralPath $projectLicense -PathType Leaf) {
     Copy-Item -LiteralPath $projectLicense -Destination (Join-Path $appPayload 'ClashTray-LICENSE.txt') -Force
@@ -251,7 +303,7 @@ Prepare-MihomoPayload
 
 $requiredPayloadFiles = @(
     (Join-Path $appPayload 'ClashTray.App.exe'),
-    (Join-Path $servicePayload 'ClashTray.Service.exe'),
+    (Join-Path $appPayload 'ClashTray.Service.exe'),
     (Join-Path $appPayload 'ClashTray-LICENSE.txt')
 )
 if ($includeCore) {
@@ -267,36 +319,6 @@ foreach ($requiredFile in $requiredPayloadFiles) {
     }
 }
 
-Compress-Archive -Path (Join-Path $payloadRoot '*') -DestinationPath $payloadZip -CompressionLevel Optimal -Force
-if (-not (Test-Path -LiteralPath $payloadZip -PathType Leaf)) {
-    throw "Payload archive was not created: $payloadZip"
-}
-
-$setupPublishArguments = @(
-    'publish', $setupProject,
-    '--configuration', $Configuration,
-    '--framework', 'net10.0-windows10.0.19041.0',
-    '--runtime', 'win-x64',
-    '--self-contained', $selfContained.ToString().ToLowerInvariant(),
-    '--output', $setupPublish,
-    '--property:Platform=x64',
-    "--property:Version=$PackageVersion",
-    "--property:FileVersion=$PackageVersion",
-    "--property:AssemblyVersion=$PackageVersion",
-    '--property:PublishSingleFile=true',
-    '--property:IncludeNativeLibrariesForSelfExtract=true',
-    "--property:EnableCompressionInSingleFile=$($selfContained.ToString().ToLowerInvariant())"
-)
-if ($disableCet) {
-    $setupPublishArguments += '--property:CETCompat=false'
-}
-Invoke-Dotnet -Arguments $setupPublishArguments
-
-$publishedSetup = Join-Path $setupPublish 'ClashTray.Setup.exe'
-if (-not (Test-Path -LiteralPath $publishedSetup -PathType Leaf)) {
-    throw "Published setup executable was not created: $publishedSetup"
-}
-
 $artifactStem = "ClashTray-Setup-$Variant"
 $installerPath = Join-Path $outputRoot "$artifactStem.exe"
 $hashPath = Join-Path $outputRoot "$artifactStem.sha256"
@@ -306,14 +328,32 @@ if (Test-Path -LiteralPath $installerPath) {
 if (Test-Path -LiteralPath $hashPath) {
     Remove-Item -LiteralPath $hashPath -Force
 }
-Copy-Item -LiteralPath $publishedSetup -Destination $installerPath -Force
+$includeCoreDefine = if ($includeCore) { '1' } else { '0' }
+$innoArguments = @(
+    "/DPackageVersion=$PackageVersion",
+    "/DVariant=$Variant",
+    "/DPayloadRoot=$payloadRoot",
+    "/DOutputDirectory=$outputRoot",
+    "/DRepoRoot=$repoRoot",
+    "/DIncludeCore=$includeCoreDefine",
+    $innoScript
+)
+& $inno @innoArguments
+if ($LASTEXITCODE -ne 0) {
+    throw "Inno Setup compilation failed with exit code $LASTEXITCODE."
+}
+
+if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
+    throw "Inno Setup did not create the expected installer: $installerPath"
+}
 
 $hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath $hashPath -Value "$hash *$artifactStem.exe" -Encoding ascii
 
 $installer = Get-Item -LiteralPath $installerPath
-$archive = Get-Item -LiteralPath $payloadZip
+$payloadBytes = (Get-ChildItem -LiteralPath $payloadRoot -Recurse -File | Measure-Object -Property Length -Sum).Sum
 Write-Host "Installer: $($installer.FullName)"
 Write-Host "Installer size: $([math]::Round($installer.Length / 1MB, 2)) MiB"
 Write-Host "Installer SHA-256: $hash"
-Write-Host "Embedded payload archive: $($archive.Length) bytes"
+Write-Host "Uncompressed payload size: $([math]::Round($payloadBytes / 1MB, 2)) MiB"
+Write-Host "App and Service publish outputs share one runtime directory."

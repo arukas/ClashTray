@@ -5,6 +5,7 @@
 - Windows 10 22H2 or Windows 11
 - .NET SDK 10.0.400 or later
 - Visual Studio 2026 with the Windows App SDK/WinUI tooling
+- Inno Setup 7.1.0 x64 (`ISCC.exe`) for the EXE installer
 
 The repository pins Windows App SDK 2.4.0 and test packages in `Directory.Packages.props`.
 
@@ -31,7 +32,7 @@ The Settings page keeps changes as an editable draft until **保存设置** is p
 The isolated WinUI smoke flow verifies both startup switches, port/text drafts, repeated snapshots, external theme changes, validation failure and saved-core-startup reload without modifying the real Windows startup registry. Actual sign-in startup still requires manual Windows verification.
 ## EXE installer (current distribution path)
 
-The current release path is a set of x64 EXE installers; Full is the recommended self-contained variant and NoCET is the compatibility variant for older-patched Windows 10 22H2 systems. It does not use MSIX, AppX signing, or the Windows Store. Build it from the repository root:
+The current release path is a set of x64 EXE installers built by Inno Setup 7; Full is the recommended self-contained variant and NoCET is the compatibility variant for older-patched Windows 10 22H2 systems. App and Service are staged into one shared self-contained directory so the installed package contains one .NET runtime. It does not use MSIX, AppX signing, or the Windows Store. Build it from the repository root:
 
 ```powershell
 & .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant Full
@@ -40,12 +41,12 @@ The current release path is a set of x64 EXE installers; Full is the recommended
 
 The output is:
 
-- `packaging\out\ClashTray-Setup-Full.exe`: one self-contained installer containing the desktop app, Windows Service, official Mihomo v1.19.30 x64 core, and its license notice.
+- `packaging\out\ClashTray-Setup-Full.exe`: one Inno Setup installer containing the shared self-contained App/Service payload, official Mihomo v1.19.30 x64 core, and its license notice.
 - `packaging\out\ClashTray-Setup-Full.sha256`: SHA-256 sidecar file.
 - `packaging\out\ClashTray-Setup-NoCET.exe`: a self-contained Full-equivalent installer built with `CETCompat=false` for older-patched Windows 10 22H2.
 - `packaging\out\ClashTray-Setup-NoCET.sha256`: SHA-256 sidecar file for the compatibility installer.
 
-The installer requests administrator approval through its manifest. Double-clicking it should show the UAC prompt; the installed desktop app subsequently runs with ordinary user permissions. If Explorer does not show a “Run as administrator” context-menu item, launch it from any PowerShell window with:
+The Inno Setup installer requests administrator approval. Double-clicking it should show the UAC prompt; the installed desktop app subsequently runs with ordinary user permissions. If Explorer does not show a “Run as administrator” context-menu item, launch it from any PowerShell window with:
 
 ```powershell
 Start-Process -FilePath 'D:\ClashTray\packaging\out\ClashTray-Setup-Full.exe' -Verb RunAs
@@ -66,7 +67,7 @@ For a first manual verification:
 Get-Service -Name ClashTrayService
 ```
 
-To upgrade, quit ClashTray and run the new installer from a location outside `C:\Program Files\ClashTray`. The installer swaps the application directory atomically and preserves user data. To uninstall, use **Settings > Apps > Installed apps > ClashTray > Uninstall**; the prompt lets you keep or delete configuration, subscription, and log data. Uninstall stops the service and restores ClashTray-owned System Proxy state before removing the program files.
+To upgrade, quit ClashTray and run the new installer from a location outside `C:\Program Files\ClashTray`. Inno Setup stops and removes the existing ClashTray service, replaces the shared App payload, removes the legacy separate Service directory, and preserves user data. To uninstall, use **Settings > Apps > Installed apps > ClashTray > Uninstall**; the prompt lets you keep or delete configuration, subscription, and log data. Uninstall stops the service and restores ClashTray-owned System Proxy state before removing the program files.
 
 Unsigned EXE builds do not need an MSIX certificate, but Windows may show an unknown-publisher/SmartScreen warning. A trusted Authenticode certificate can be added later as a distribution step; no certificate is required for local installation.
 
@@ -80,7 +81,7 @@ Test invalid YAML, unavailable subscriptions, controller/port conflicts, Mihomo 
 
 ## Build variants and compressed release packages
 
-The recommended release path is `packaging/Build-EXE.ps1`. It creates a compressed single-file installer with an embedded ZIP payload (Framework uses a framework-dependent host, while its payload remains compressed):
+The recommended release path is `packaging/Build-EXE.ps1`. It publishes App and Service, merges them into one shared payload directory, and calls Inno Setup with `Compression=lzma2/max` and `SolidCompression=yes` to create the installer:
 
 ```powershell
 .\packaging\Build-EXE.ps1 -Variant Full -PackageVersion 1.0.0

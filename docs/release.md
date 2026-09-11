@@ -1,6 +1,6 @@
 # 发布与体积策略
 
-ClashTray 的当前发布入口是 `packaging/Build-EXE.ps1`。脚本先发布 App 和 Service，再把 payload 压缩成 ZIP，最后将 ZIP 嵌入压缩的单文件安装器。这样安装器只有一个下载入口，安装过程中不会依赖临时网络下载；Full 版本仍会在构建阶段从官方 Mihomo release 下载并校验核心。
+ClashTray 的当前发布入口是 `packaging/Build-EXE.ps1`。脚本先发布 App 和 Service，再把两者合并到同一个共享 `App` payload 目录，最后交给 Inno Setup 7 使用 LZMA2 solid compression 生成单个安装器。这样安装器只有一个下载入口，安装过程中不会依赖临时网络下载；Full 版本仍会在构建阶段从官方 Mihomo release 下载并校验核心。
 
 ## 版本矩阵
 
@@ -11,9 +11,9 @@ ClashTray 的当前发布入口是 `packaging/Build-EXE.ps1`。脚本先发布 A
 | `NoCore` | self-contained | 不内置；可在应用内验证更新 | Windows 10/11 x64 | `ClashTray-Setup-NoCore.exe` |
 | `Framework` | framework-dependent，Windows App SDK 也不自包含 | 不内置 | .NET 10 Desktop Runtime + Windows App SDK runtime | `ClashTray-Setup-Framework.exe` |
 
-`Full` 是默认和推荐版本。`NoCET` 是为补丁较旧、无法启动 .NET 10 的 Windows 10 22H2 准备的自包含兼容包；它通过 `CETCompat=false` 关闭 .NET 进程的 CET 兼容标志，因此会减少一层硬件控制流防护。`NoCore` 用于降低下载体积或复用已安装的核心；`Framework` 只适合明确管理运行时的机器。无核心安装器不会清空已有 `%PROGRAMDATA%\ClashTray\core`，因此可以用 NoCore/Framework 做应用升级而保留核心。WinUI 3 仍是桌面 UI 的必要依赖，Framework 只把 .NET / Windows App SDK runtime 改为外置，不会删除客户端 UI。
+`Full` 是默认和推荐版本。`NoCET` 是为补丁较旧、无法启动 .NET 10 的 Windows 10 22H2 准备的自包含兼容包；它通过 `CETCompat=false` 关闭 .NET 进程的 CET 兼容标志，因此会减少一层硬件控制流防护。`NoCore` 用于降低下载体积或复用已安装的核心；`Framework` 只适合明确管理运行时的机器。无核心安装器不会清空已有 `%PROGRAMDATA%\ClashTray\core`，因此可以用 NoCore/Framework 做应用升级而保留核心。WinUI 3 仍是桌面 UI 的必要依赖，Framework 只把 .NET / Windows App SDK runtime 改为外置，不会删除客户端 UI。所有变体的安装器由 Inno Setup 7 使用 LZMA2 solid compression 生成。
 
-Full、NoCET 和 NoCore 构建使用 `EnableCompressionInSingleFile=true`，Framework 构建使用 framework-dependent 单文件宿主（.NET 不允许压缩 framework-dependent native self-extract），四种变体都会在安装器内部使用 `Compress-Archive -CompressionLevel Optimal` 压缩 App 和 Service；Full/NoCET 另外压缩 Core payload。安装器旁生成 SHA-256 sidecar：
+Full、NoCET 和 NoCore 的 App 与 Service 共用同一个 self-contained runtime 目录；Framework 使用 framework-dependent 发布。Inno Setup 配置 `Compression=lzma2/max` 与 `SolidCompression=yes`，对合并后的 App payload 和可选 Core payload 做整体压缩。安装器旁生成 SHA-256 sidecar：
 
 ```powershell
 .\packaging\Build-EXE.ps1 -Variant Full -PackageVersion 1.0.0 -OutputDirectory .\packaging\out\1.0.0\full

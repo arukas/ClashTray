@@ -64,12 +64,6 @@ dotnet_diagnostic.CA1031.severity = none
 [src/ClashTray.Service/ServiceCommandHost.cs]
 dotnet_diagnostic.CA1031.severity = none
 
-[src/ClashTray.Setup/Program.cs]
-dotnet_diagnostic.CA1031.severity = none
-
-[src/ClashTray.Setup/SetupLog.cs]
-dotnet_diagnostic.CA1031.severity = none
-
 # Test classes must remain public for MSTest discovery; native interop declarations are
 # public because the App test-linking surface consumes them directly.
 [tests/**/*.cs]
