@@ -9,24 +9,17 @@ internal static class Program
     public static void Main(string[] args)
     {
         string? smokeDirectory = args.FirstOrDefault(arg => arg.StartsWith("--ui-smoke-test=", StringComparison.Ordinal))?["--ui-smoke-test=".Length..];
-        if (!SingleInstanceCoordinator.TryAcquire(out SingleInstanceCoordinator? coordinator, smokeDirectory is not null))
+        using SingleInstanceCoordinator? coordinator = SingleInstanceCoordinator.TryAcquire(smokeDirectory is not null);
+        if (coordinator is null)
         {
             return;
         }
 
-        try
+        Application.Start(_ =>
         {
-            Application.Start(_ =>
-            {
-                DispatcherQueueSynchronizationContext synchronizationContext = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
-                SynchronizationContext.SetSynchronizationContext(synchronizationContext);
-                App app = new App(coordinator!, smokeDirectory);
-                coordinator = null;
-            });
-        }
-        finally
-        {
-            coordinator?.Dispose();
-        }
+            DispatcherQueueSynchronizationContext synchronizationContext = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
+            SynchronizationContext.SetSynchronizationContext(synchronizationContext);
+            App app = new App(coordinator, smokeDirectory);
+        });
     }
 }

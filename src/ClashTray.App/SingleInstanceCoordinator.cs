@@ -19,9 +19,9 @@ internal sealed class SingleInstanceCoordinator : IDisposable
 
     public event Action? ActivationRequested;
 
-    public static bool TryAcquire(out SingleInstanceCoordinator? coordinator, bool diagnostic = false)
+    public static SingleInstanceCoordinator? TryAcquire(bool diagnostic = false)
     {
-        coordinator = null;
+
         string suffix = diagnostic ? ".Diagnostic" : string.Empty;
         Mutex mutex = new Mutex(initiallyOwned: true, MutexName + suffix, out bool createdNew);
         if (!createdNew)
@@ -36,12 +36,12 @@ internal sealed class SingleInstanceCoordinator : IDisposable
             {
             }
 
-            return false;
+            return null;
         }
 
         EventWaitHandle activation = new EventWaitHandle(false, EventResetMode.AutoReset, ActivationEventName + suffix);
-        coordinator = new SingleInstanceCoordinator(mutex, activation);
-        return true;
+        return new SingleInstanceCoordinator(mutex, activation);
+
     }
 
     public void Dispose()
