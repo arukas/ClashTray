@@ -14,13 +14,13 @@
 
 - 用 Windows 原生 README 说明日常路径、体积、运行时和故障边界。
 - 保持 ClashTray MIT，补齐 Mihomo、WinUI 和 ClashBar 的致谢与第三方说明。
-- 把发布拆成 Full、NoCET、NoCore、Framework 四种 x64 变体，所有安装器生成 SHA-256 sidecar，并随 Full/NoCET 提供 Mihomo GPLv3 来源元数据。
+- 把发布拆成 Full、NoCET、Mini 三种 x64 变体，所有安装器生成 SHA-256 sidecar，并随 Full/NoCET 提供 Mihomo GPLv3 来源元数据；Mini 安装前检查 .NET 10 Desktop Runtime 和 Windows App Runtime 2.4+。
 - 增加 CI 与 tag / 手动发布 workflow，发布前自动运行完整构建和测试。
 - 收紧 `.gitignore`，忽略核心二进制、构建输出、订阅/日志、压缩包、签名材料和运行数据。
 
 ## 下一轮验证顺序
 
-1. 在干净 Windows 10 22H2 和 Windows 11 x64 上安装 Full、NoCET、NoCore、Framework。
+1. 在干净 Windows 10 22H2 和 Windows 11 x64 上安装 Full、NoCET、Mini；为 Mini 分别验证运行时已安装和缺失的提示。
 2. 验证缺失核心、核心崩溃、控制器端口冲突、无效 YAML 和订阅失败的恢复提示。
 3. 验证 System Proxy 竞争写入、TUN 失败回滚、睡眠/恢复、网络适配器变化和服务重启。
 4. 验证多显示器、四边任务栏、高 DPI、深浅色、高对比度、Explorer 重启和托盘重建。

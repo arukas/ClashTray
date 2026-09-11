@@ -10,12 +10,11 @@ ClashTray 的当前发布入口是 `packaging/Build-EXE.ps1`。脚本先发布 A
 | --- | --- | --- | --- | --- |
 | `Full` | self-contained | 内置，固定版本 + SHA-256 | Windows 10/11 x64 | `ClashTray-Setup-Full.exe` |
 | `NoCET` | self-contained，CETCompat=false | 内置，固定版本 + SHA-256 | 补丁较旧的 Windows 10 22H2 x64 | `ClashTray-Setup-NoCET.exe` |
-| `NoCore` | self-contained | 不内置；可在应用内验证更新 | Windows 10/11 x64 | `ClashTray-Setup-NoCore.exe` |
-| `Framework` | framework-dependent，Windows App SDK 也不自包含 | 不内置 | .NET 10 Desktop Runtime + Windows App SDK runtime | `ClashTray-Setup-Framework.exe` |
+| `Mini` | framework-dependent，Windows App SDK runtime 外置 | 不内置；可在应用内验证更新 | .NET 10 Desktop Runtime + Windows App Runtime 2.4+（安装器会检查） | `ClashTray-Setup-Mini.exe` |
 
-`Full` 是默认和推荐版本。`NoCET` 是为补丁较旧、无法启动 .NET 10 的 Windows 10 22H2 准备的自包含兼容包；它通过 `CETCompat=false` 关闭 .NET 进程的 CET 兼容标志，因此会减少一层硬件控制流防护。`NoCore` 用于降低下载体积或复用已安装的核心；`Framework` 只适合明确管理运行时的机器。无核心安装器不会清空已有 `%PROGRAMDATA%\ClashTray\core`，因此可以用 NoCore/Framework 做应用升级而保留核心。WinUI 3 仍是桌面 UI 的必要依赖，Framework 只把 .NET / Windows App SDK runtime 改为外置，不会删除客户端 UI。所有变体的安装器由 Inno Setup 7 使用 LZMA2 solid compression 生成。
+`Full` 是默认和推荐版本。`NoCET` 是为补丁较旧、无法启动 .NET 10 的 Windows 10 22H2 准备的自包含兼容包；它通过 `CETCompat=false` 关闭 .NET 进程的 CET 兼容标志，因此会减少一层硬件控制流防护。`Mini` 用于降低下载体积，安装时要求 x64 .NET 10 Desktop Runtime 和 Windows App Runtime 2.4+，缺少时会提示并退出。Mini 不内置核心，但不会清空已有 `%PROGRAMDATA%\ClashTray\core`，可以在应用内通过经过验证的核心更新流程补齐。WinUI 3 仍是桌面 UI 的必要依赖；Mini 只把 .NET / Windows App SDK runtime 改为外置，不会删除客户端 UI。所有变体的安装器由 Inno Setup 7 使用 LZMA2 solid compression 生成。
 
-Full、NoCET 和 NoCore 的 App 与 Service 共用同一个 self-contained runtime 目录；Framework 使用 framework-dependent 发布。Inno Setup 配置 `Compression=lzma2/max` 与 `SolidCompression=yes`，对合并后的 App payload 和可选 Core payload 做整体压缩。安装器旁生成 SHA-256 sidecar：
+Full 和 NoCET 的 App 与 Service 共用同一个 self-contained runtime 目录；Mini 使用 framework-dependent 发布。Inno Setup 配置 `Compression=lzma2/max` 与 `SolidCompression=yes`，对合并后的 App payload 和可选 Core payload 做整体压缩。安装器旁生成 SHA-256 sidecar：
 
 ```powershell
 .\packaging\Build-EXE.ps1 -Variant Full -PackageVersion 1.0.0 -OutputDirectory .\packaging\out\1.0.0\full
@@ -25,17 +24,16 @@ Get-FileHash .\packaging\out\1.0.0\full\ClashTray-Setup-Full.exe -Algorithm SHA2
 ## 发布前检查
 
 1. 在干净 Windows x64 环境运行 `dotnet restore`、`dotnet build` 和 `dotnet test`。
-2. 构建四种变体，检查文件存在、SHA-256 sidecar 和体积报告。
+2. 构建三种变体，检查文件存在、SHA-256 sidecar 和体积报告。
 3. Full 包验证官方 Mihomo archive 的版本、架构、PE 头和 SHA-256；同时保留 `Mihomo-LICENSE.txt` 与 `Mihomo-Release.txt`。
-4. NoCore 包在无核心的全新目录完成安装，确认应用能提示核心缺失并进入更新流程；在已有核心的安装上升级，确认核心不被覆盖或删除。
-5. Framework 包在有和没有运行时的环境分别检查，缺少依赖时必须给出可理解的错误。
-6. 验证首次安装、升级、卸载保留/删除数据、代理状态恢复、TUN 失败回滚和服务重启。
-7. 只有通过上述检查后，才让 `release.yml` 创建 GitHub Release。
+4. Mini 包在具备和缺少 .NET 10 Desktop Runtime / Windows App Runtime 2.4+ 的环境分别检查；缺少依赖时必须在复制文件前给出可理解的错误并退出。
+5. 验证首次安装、升级、卸载保留/删除数据、代理状态恢复、TUN 失败回滚和服务重启。
+6. 只有通过上述检查后，才让 `release.yml` 创建 GitHub Release。
 
 ## GitHub Actions
 
 - `ci.yml` 在 push、Pull Request 和手动触发时运行 restore、build、test。
-- `release.yml` 在 `v*.*.*` tag 或手动输入版本时运行 CI 检查，随后构建 Full / NoCET / NoCore / Framework，下载同一 Mihomo tag 的 source archive，将其加入 `SHA256SUMS.txt`，并用仓库的 `GITHUB_TOKEN` 创建 Release。
+- `release.yml` 在 `v*.*.*` tag 或手动输入版本时运行 CI 检查，随后构建 Full / NoCET / Mini，下载同一 Mihomo tag 的 source archive，将其加入 `SHA256SUMS.txt`，并用仓库的 `GITHUB_TOKEN` 创建 Release。
 - Actions 不读取订阅、密钥或签名证书。签名证书若以后启用，应通过 GitHub Actions secret 注入，不能放进仓库。
 
 当前 workflow 只发布 x64；ARM64、MSIX 和带企业签名的渠道保留在后续计划中。

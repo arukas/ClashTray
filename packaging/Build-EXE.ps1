@@ -6,7 +6,7 @@ param(
     [ValidatePattern('^\d+\.\d+\.\d+(\.\d+)?$')]
     [string]$PackageVersion = '0.1.0',
 
-    [ValidateSet('Full', 'NoCET', 'NoCore', 'Framework')]
+    [ValidateSet('Full', 'NoCET', 'Mini')]
     [string]$Variant = 'Full',
 
     [string]$OutputDirectory
@@ -17,7 +17,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $includeCore = $Variant -in @('Full', 'NoCET')
-$selfContained = $Variant -ne 'Framework'
+$selfContained = $Variant -ne 'Mini'
 $disableCet = $Variant -eq 'NoCET'
 $mihomoRelease = $null
 $mihomoVersion = $null

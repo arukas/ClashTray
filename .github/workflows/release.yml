@@ -94,7 +94,7 @@ jobs:
 
           $packageVersion = ($version -split '-', 2)[0]
 
-          foreach ($variant in @('Full', 'NoCET', 'NoCore', 'Framework')) {
+          foreach ($variant in @('Full', 'NoCET', 'Mini')) {
             & .\packaging\Build-EXE.ps1 `
               -Configuration Release `
               -PackageVersion $packageVersion `
@@ -128,8 +128,8 @@ jobs:
 
           $files = Get-ChildItem -LiteralPath $outputRoot -Recurse -File -Include '*.exe', '*.sha256'
 
-          if ($files.Count -ne 8) {
-            throw "Expected four installers and four checksum files, found $($files.Count)."
+          if ($files.Count -ne 6) {
+            throw "Expected three installers and three checksum files, found $($files.Count)."
           }
 
           $checksumFiles = Get-ChildItem -LiteralPath $outputRoot -Recurse -File |
@@ -196,8 +196,7 @@ jobs:
             '| --- | --- | --- |',
             "| **Full** | 内置 Mihomo，开箱即用（推荐） | [下载 EXE]($downloadBase/ClashTray-Setup-Full.exe) · [SHA-256]($downloadBase/ClashTray-Setup-Full.sha256) |",
             "| **NoCET** | 为补丁较旧的 Windows 10 22H2 提供的兼容包（关闭 CET，内置 Mihomo） | [下载 EXE]($downloadBase/ClashTray-Setup-NoCET.exe) · [SHA-256]($downloadBase/ClashTray-Setup-NoCET.sha256) |",
-            "| **NoCore** | 不带核心，适合已有核心或希望减小体积 | [下载 EXE]($downloadBase/ClashTray-Setup-NoCore.exe) · [SHA-256]($downloadBase/ClashTray-Setup-NoCore.sha256) |",
-            "| **Framework** | 不带核心，依赖 .NET 10 Desktop Runtime 和 Windows App SDK | [下载 EXE]($downloadBase/ClashTray-Setup-Framework.exe) · [SHA-256]($downloadBase/ClashTray-Setup-Framework.sha256) |",
+            "| **Mini** | 不带核心，依赖 .NET 10 Desktop Runtime 和 Windows App Runtime 2.4+；安装器会预先检查 | [下载 EXE]($downloadBase/ClashTray-Setup-Mini.exe) · [SHA-256]($downloadBase/ClashTray-Setup-Mini.sha256) |",
             '',
             "[下载完整校验清单]($downloadBase/SHA256SUMS.txt)",
             '',

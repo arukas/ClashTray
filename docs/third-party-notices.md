@@ -16,7 +16,7 @@ The ClashTray Full and NoCET installers redistribute an official, unmodified Mih
 - a Corresponding Source link for that exact version;
 - a downloadable source archive where provided by the release process.
 
-The installed `Mihomo-Release.txt` records the binary archive URL, binary checksum, exact Corresponding Source URL, source archive URL, upstream project, architecture, and the independent license boundary. NoCore and Framework installers intentionally omit the binary; the app can obtain it through the verified updater.
+The installed `Mihomo-Release.txt` records the binary archive URL, binary checksum, exact Corresponding Source URL, source archive URL, upstream project, architecture, and the independent license boundary. The Mini installer intentionally omits the binary; the app can obtain it through the verified updater.
 
 Mihomo remains governed by the GNU GPL v3.0. ClashTray remains governed by the MIT License.
 

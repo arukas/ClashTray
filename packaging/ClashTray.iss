@@ -76,6 +76,7 @@ Filename: "{app}\App\ClashTray.App.exe"; WorkingDir: "{app}\App"; Description: "
 
 [Code]
 const
+  InstallerVariant = '{#Variant}';
   ServiceName = 'ClashTrayService';
   ServiceKey = 'SYSTEM\CurrentControlSet\Services\ClashTrayService';
   ServiceExecutableName = 'ClashTray.Service.exe';
@@ -232,6 +233,100 @@ begin
   end;
 end;
 
+function HasDotNet10DesktopRuntime(): Boolean;
+var
+  DotNetPath: string;
+  ResultCode: Integer;
+  Output: TExecOutput;
+  I: Integer;
+begin
+  Result := False;
+  DotNetPath := ExpandConstant('{autopf}\dotnet\dotnet.exe');
+  if not FileExists(DotNetPath) then
+    exit;
+  if not ExecAndCaptureOutput(
+    DotNetPath,
+    '--list-runtimes',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode,
+    Output) then
+    exit;
+  if ResultCode <> 0 then
+    exit;
+
+  for I := 0 to GetArrayLength(Output.StdOut) - 1 do
+    if Pos('MICROSOFT.WINDOWSDESKTOP.APP 10.', Uppercase(Trim(Output.StdOut[I]))) = 1 then
+    begin
+      Result := True;
+      exit;
+    end;
+end;
+
+function HasWindowsAppRuntime(): Boolean;
+var
+  PowerShellPath: string;
+  Params: string;
+  UserSid: string;
+  ResultCode: Integer;
+  Output: TExecOutput;
+  I: Integer;
+begin
+  Result := False;
+  UserSid := GetCurrentUserSid();
+  if UserSid = '' then
+    exit;
+
+  PowerShellPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  if not FileExists(PowerShellPath) then
+    exit;
+
+  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "'
+    + '$package = Get-AppxPackage -User ''' + UserSid + ''' -Name ''Microsoft.WindowsAppRuntime.2'' '
+    + '| Where-Object { $_.Architecture -eq ''X64'' -and $_.Version -ge [version]''2.4.0.0'' } '
+    + '| Select-Object -First 1 -ExpandProperty Version; if ($null -ne $package) { $package }"';
+  if not ExecAndCaptureOutput(
+    PowerShellPath,
+    Params,
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode,
+    Output) then
+    exit;
+  if ResultCode <> 0 then
+    exit;
+
+  for I := 0 to GetArrayLength(Output.StdOut) - 1 do
+    if Trim(Output.StdOut[I]) <> '' then
+    begin
+      Result := True;
+      exit;
+    end;
+end;
+
+function CheckMiniPrerequisites(): Boolean;
+var
+  Missing: string;
+begin
+  Missing := '';
+  if not HasDotNet10DesktopRuntime() then
+    Missing := Missing + #13#10 + '- .NET 10 Desktop Runtime (x64)';
+  if not HasWindowsAppRuntime() then
+    Missing := Missing + #13#10 + '- Windows App Runtime 2.4 或更高版本 (x64)';
+
+  if Missing = '' then
+  begin
+    Result := True;
+    exit;
+  end;
+
+  LastInstallerError := 'Mini 版本需要以下运行时，当前系统未满足：' + Missing
+    + #13#10#13#10 + '请先安装对应的 x64 运行时后重新运行安装程序。安装已取消。';
+  Result := False;
+end;
+
 function ServiceIsRunning(): Boolean;
 var
   ResultCode: Integer;
@@ -378,6 +473,15 @@ begin
   begin
     Result := '请先从托盘退出正在运行的 ClashTray，然后重新运行安装程序。';
     exit;
+  end;
+
+  if CompareText(InstallerVariant, 'Mini') = 0 then
+  begin
+    if not CheckMiniPrerequisites() then
+    begin
+      Result := LastInstallerError;
+      exit;
+    end;
   end;
 
   if not StopAndRemoveOwnedService() then
