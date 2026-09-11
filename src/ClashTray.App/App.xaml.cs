@@ -288,15 +288,22 @@ public partial class App : Application, IAsyncDisposable
 
     private void UpdateTrayState(RuntimeSnapshot snapshot)
     {
-        TrayState state = snapshot.Tun is TunState.On
-            ? TrayState.Tun
-            : snapshot.SystemProxy is SystemProxyState.On
-                ? TrayState.SystemProxy
-                : snapshot.Core.State is CoreState.Running
-                    ? TrayState.Running
-                    : snapshot.Core.State is CoreState.Failed
-                        ? TrayState.Error
-                    : TrayState.Stopped;
+        TrayState state = snapshot.Core.State is CoreState.Failed
+            ? TrayState.Error
+            : snapshot.Core.State is CoreState.Validating
+                or CoreState.Starting
+                or CoreState.Stopping
+                or CoreState.Restarting
+                ? TrayState.Connecting
+                : snapshot.Tun is TunState.On
+                    ? TrayState.Tun
+                    : snapshot.SystemProxy is SystemProxyState.On
+                        ? TrayState.SystemProxy
+                        : snapshot.Core.State is CoreState.Running
+                            ? TrayState.Running
+                            : snapshot.Core.State is CoreState.Stopped
+                                ? TrayState.Paused
+                                : TrayState.Stopped;
         _trayIcon?.SetState(state);
     }
 }

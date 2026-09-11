@@ -53,9 +53,11 @@ public enum ProxyMode
 public enum TrayState
 {
     Stopped,
+    Connecting,
     Running,
     SystemProxy,
     Tun,
+    Paused,
     Error
 }
 

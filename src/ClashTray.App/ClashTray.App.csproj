@@ -13,7 +13,7 @@
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <PublishReadyToRun>false</PublishReadyToRun>
-    <ApplicationIcon>Assets\running.ico</ApplicationIcon>
+    <ApplicationIcon>Assets\App\ClashTray.ico</ApplicationIcon>
     <!-- WinUI pages/Application are public XAML entry points; UI handlers preserve the existing visible-error behavior. -->
     <!-- Theme names and App type naming are persisted/framework contracts; CA5392 is emitted by SDK-generated P/Invoke code. -->
     <NoWarn>$(NoWarn);CA1031;CA1308;CA1515;CA1724;CA5392</NoWarn>
@@ -26,9 +26,11 @@
     <ProjectReference Include="..\ClashTray.Contracts\ClashTray.Contracts.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="Assets\*.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\App\ClashTray.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\App\png\*.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Branding\*.*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Assets\Themes\*\logo.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="Assets\Themes\*\logo.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="Assets\logo.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Themes\*\Tray\ico\*.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Assets\Themes\*\Tray\png\*.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

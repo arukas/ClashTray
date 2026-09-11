@@ -6,7 +6,7 @@
 - Clicks three and four show a remaining-click hint. Click five saves `NakhimovUnlocked = true` and `Theme = "nakhimov"`, then activates the portrait Logo and a muted green dark palette. High-contrast brushes are unchanged.
 - After unlocking, Nakhimov remains available in the header theme menu and Settings across restarts, even after choosing another theme. Five further clicks can activate it again.
 - Theme changes do not restart Mihomo or change System Proxy or TUN settings. Failed settings writes do not commit the new in-memory theme.
-- Original images and size-reference sheets are source material only. Build/publish includes only each theme's `logo.png` and `logo.ico`; source originals and preview images are excluded.
+- Original images and size-reference sheets are source material only. Build/publish includes the themed panel marks plus the light/dark taskbar tray icon families under `Assets/Themes/{Light,Dark}/Tray/`; source originals and preview images are excluded.
 
 ## Verification
 

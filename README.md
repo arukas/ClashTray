@@ -1,5 +1,7 @@
 # ClashTray
 
+![ClashTray](.github/assets/ClashTray-README-Banner-1600x500.png)
+
 轻量、原生、Windows 优先的 Mihomo 托盘客户端。ClashTray 把配置、节点、规则、连接、日志和系统代理控制收进一个靠近任务栏的紧凑面板，让日常切换代理不需要打开浏览器仪表盘。
 
 当前发布目标仅为 Windows x64；不提供 x86、ARM64、macOS 或 Linux 版本。
