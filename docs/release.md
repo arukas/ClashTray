@@ -2,6 +2,8 @@
 
 ClashTray 的当前发布入口是 `packaging/Build-EXE.ps1`。脚本先发布 App 和 Service，再把两者合并到同一个共享 `App` payload 目录，最后交给 Inno Setup 7 使用 LZMA2 solid compression 生成单个安装器。这样安装器只有一个下载入口，安装过程中不会依赖临时网络下载；Full 版本仍会在构建阶段从官方 Mihomo release 下载并校验核心。
 
+当前只发布 Windows x64 安装包；不提供 x86、ARM64、macOS 或 Linux 版本。App、Service 和 Inno Setup 安装器均按 x64 目标构建。
+
 ## 版本矩阵
 
 | `-Variant` | App / Service | Mihomo | 运行时要求 | 产物 |

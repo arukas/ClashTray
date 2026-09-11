@@ -2,6 +2,8 @@
 
 轻量、原生、Windows 优先的 Mihomo 托盘客户端。ClashTray 把配置、节点、规则、连接、日志和系统代理控制收进一个靠近任务栏的紧凑面板，让日常切换代理不需要打开浏览器仪表盘。
 
+当前发布目标仅为 Windows x64；不提供 x86、ARM64、macOS 或 Linux 版本。
+
 [![CI](https://github.com/arukas/ClashTray/actions/workflows/ci.yml/badge.svg)](https://github.com/arukas/ClashTray/actions/workflows/ci.yml) [![Release](https://github.com/arukas/ClashTray/actions/workflows/release.yml/badge.svg)](https://github.com/arukas/ClashTray/actions/workflows/release.yml)
 
 ClashTray 是使用 C#、.NET 10 和 WinUI 3 独立实现的 Windows Mihomo 客户端。产品流程参考了 [Sitoi/ClashBar](https://github.com/Sitoi/clashbar) 对紧凑、托盘优先代理客户端交互的探索；ClashBar 的源代码和资源不属于 ClashTray，也不随 ClashTray 分发。
@@ -20,7 +22,7 @@ ClashTray 是使用 C#、.NET 10 和 WinUI 3 独立实现的 Windows Mihomo 客�
 
 ## 体积与发布版本
 
-GitHub Actions 会在 Windows runner 上构建并发布四种 x64 产物。Full、NoCET 和 NoCore 使用 Inno Setup 7 的 LZMA2 solid 压缩安装器；App 与 Service 合并到同一个自包含发布目录，共用一套 .NET runtime。Framework 使用 framework-dependent 发布，因此不会把 Mihomo 二进制塞进安装包。
+GitHub Actions 会在 Windows runner 上构建并发布四种 Windows x64 产物。Full、NoCET 和 NoCore 使用 Inno Setup 7 的 LZMA2 solid 压缩安装器；App、Service 和 Setup 都是 x64，App 与 Service 合并到同一个自包含发布目录，共用一套 .NET runtime。Framework 使用 framework-dependent 发布，因此不会把 Mihomo 二进制塞进安装包。
 
 | 版本 | 内容 | 适合谁 |
 | --- | --- | --- |
@@ -35,7 +37,7 @@ Full 和 NoCET 使用 `packaging/mihomo-release.json` 中固定的官方版本�
 
 ## 安装与快速上手
 
-系统要求：Windows 11，或受支持的 Windows 10 22H2；x64；Full 和 NoCET 版本自带 .NET 运行时。补丁较旧的 Windows 10 22H2 可优先尝试 NoCET；正常情况下请使用 Full 并安装所有可用的 Windows 更新。首次安装会请求一次 UAC 权限，用于安装受限的 `ClashTrayService`；日常使用以普通用户权限运行。
+系统要求：Windows 11 x64，或受支持的 Windows 10 22H2 x64；当前不提供 x86 或 ARM64 版本。Full 和 NoCET 版本自带 .NET 运行时。补丁较旧的 Windows 10 22H2 可优先尝试 NoCET；正常情况下请使用 Full 并安装所有可用的 Windows 更新。首次安装会请求一次 UAC 权限，用于安装受限的 `ClashTrayService`；日常使用以普通用户权限运行。
 
 1. 从 [Releases](https://github.com/arukas/ClashTray/releases) 下载合适版本并核对 SHA-256。
 2. 运行安装器，完成服务注册后从托盘打开 ClashTray。

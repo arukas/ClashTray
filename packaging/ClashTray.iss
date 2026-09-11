@@ -27,6 +27,7 @@ AppId={{F2E7EAF2-2F87-4A0D-9C2B-6A6B5E40B6A4}
 AppName=ClashTray
 AppVersion={#PackageVersion}
 AppVerName=ClashTray {#PackageVersion}
+SetupArchitecture=x64
 AppPublisher=ClashTray Project
 AppPublisherURL=https://github.com/arukas/ClashTray
 AppSupportURL=https://github.com/arukas/ClashTray

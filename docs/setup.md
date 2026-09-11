@@ -32,7 +32,7 @@ The Settings page keeps changes as an editable draft until **保存设置** is p
 The isolated WinUI smoke flow verifies both startup switches, port/text drafts, repeated snapshots, external theme changes, validation failure and saved-core-startup reload without modifying the real Windows startup registry. Actual sign-in startup still requires manual Windows verification.
 ## EXE installer (current distribution path)
 
-The current release path is a set of x64 EXE installers built by Inno Setup 7; Full is the recommended self-contained variant and NoCET is the compatibility variant for older-patched Windows 10 22H2 systems. App and Service are staged into one shared self-contained directory so the installed package contains one .NET runtime. It does not use MSIX, AppX signing, or the Windows Store. Build it from the repository root:
+The current release path is a set of Windows x64 EXE installers built by Inno Setup 7; Full is the recommended self-contained variant and NoCET is the compatibility variant for older-patched Windows 10 22H2 systems. x86 and ARM64 packages are not provided. App, Service, and Setup all target x64; App and Service are staged into one shared self-contained directory so the installed package contains one .NET runtime. It does not use MSIX, AppX signing, or the Windows Store. Build it from the repository root:
 
 ```powershell
 & .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant Full
