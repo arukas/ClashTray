@@ -26,6 +26,7 @@ jobs:
     name: Build and publish x64 installers
     runs-on: windows-latest
     timeout-minutes: 60
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -49,34 +50,75 @@ jobs:
           RELEASE_VERSION_INPUT: ${{ inputs.version }}
           RELEASE_REF: ${{ github.ref_name }}
         run: |
-          $version = if ([string]::IsNullOrWhiteSpace($env:RELEASE_VERSION_INPUT)) { $env:RELEASE_REF.TrimStart('v') } else { $env:RELEASE_VERSION_INPUT.TrimStart('v') }
-          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw "Release version must look like 1.2.3 or 1.2.3-alpha.1; received '$version'." }
+          $version = if ([string]::IsNullOrWhiteSpace($env:RELEASE_VERSION_INPUT)) {
+            $env:RELEASE_REF.TrimStart('v')
+          } else {
+            $env:RELEASE_VERSION_INPUT.TrimStart('v')
+          }
+
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Release version must look like 1.2.3 or 1.2.3-alpha.1; received '$version'."
+          }
+
           $outputRoot = Join-Path $env:GITHUB_WORKSPACE 'release-output'
           New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
+
           $packageVersion = ($version -split '-', 2)[0]
+
           foreach ($variant in @('Full', 'NoCET', 'NoCore', 'Framework')) {
-            & .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion $packageVersion -Variant $variant -OutputDirectory (Join-Path $outputRoot $variant)
-            if ($LASTEXITCODE -ne 0) { throw "Build-EXE.ps1 failed for $variant." }
+            & .\packaging\Build-EXE.ps1 `
+              -Configuration Release `
+              -PackageVersion $packageVersion `
+              -Variant $variant `
+              -OutputDirectory (Join-Path $outputRoot $variant)
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Build-EXE.ps1 failed for $variant."
+            }
           }
+
           $mihomoRelease = Get-Content -LiteralPath '.\packaging\mihomo-release.json' -Raw | ConvertFrom-Json
-          if ($mihomoRelease.version -notmatch '^v\d+\.\d+\.\d+$') { throw "Invalid pinned Mihomo version: $($mihomoRelease.version)" }
+
+          if ($mihomoRelease.version -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Invalid pinned Mihomo version: $($mihomoRelease.version)"
+          }
+
           $mihomoVersion = $mihomoRelease.version
           $mihomoSourceArchiveName = "mihomo-$mihomoVersion-source.tar.gz"
           $mihomoSourceArchiveUri = "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/$mihomoVersion"
           $mihomoSourceArchivePath = Join-Path $outputRoot $mihomoSourceArchiveName
+
           Invoke-WebRequest -Uri $mihomoSourceArchiveUri -OutFile $mihomoSourceArchivePath
-          if (-not (Test-Path -LiteralPath $mihomoSourceArchivePath -PathType Leaf) -or (Get-Item -LiteralPath $mihomoSourceArchivePath).Length -eq 0) {
+
+          if (
+            -not (Test-Path -LiteralPath $mihomoSourceArchivePath -PathType Leaf) -or
+            (Get-Item -LiteralPath $mihomoSourceArchivePath).Length -eq 0
+          ) {
             throw "Mihomo source archive was not downloaded: $mihomoSourceArchiveUri"
           }
+
           $files = Get-ChildItem -LiteralPath $outputRoot -Recurse -File -Include '*.exe', '*.sha256'
-          if ($files.Count -ne 8) { throw "Expected four installers and four checksum files, found $($files.Count)." }
-          $checksumFiles = Get-ChildItem -LiteralPath $outputRoot -Recurse -File | Where-Object { $_.Extension -eq '.exe' -or $_.Name -eq $mihomoSourceArchiveName } | Sort-Object FullName
+
+          if ($files.Count -ne 8) {
+            throw "Expected four installers and four checksum files, found $($files.Count)."
+          }
+
+          $checksumFiles = Get-ChildItem -LiteralPath $outputRoot -Recurse -File |
+            Where-Object {
+              $_.Extension -eq '.exe' -or
+              $_.Name -eq $mihomoSourceArchiveName
+            } |
+            Sort-Object FullName
+
           $checksumLines = foreach ($file in $checksumFiles) {
             $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($file.Name)"
           }
+
           Set-Content -LiteralPath (Join-Path $outputRoot 'SHA256SUMS.txt') -Value $checksumLines -Encoding ascii
-          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          "RELEASE_VERSION=$version" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Upload release bundle
         uses: actions/upload-artifact@v4
@@ -91,13 +133,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REF: ${{ github.ref_name }}
         run: |
-          $tag = if ($env:RELEASE_REF -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { $env:RELEASE_REF } else { "v$env:RELEASE_VERSION" }
-          $assets = Get-ChildItem -LiteralPath 'release-output' -Recurse -File -Include '*.exe', '*.sha256', '*.tar.gz', 'SHA256SUMS.txt' | Select-Object -ExpandProperty FullName
+          $tag = if (
+            $env:RELEASE_REF -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
+          ) {
+            $env:RELEASE_REF
+          } else {
+            "v$env:RELEASE_VERSION"
+          }
+
+          $assets = Get-ChildItem `
+            -LiteralPath 'release-output' `
+            -Recurse `
+            -File `
+            -Include '*.exe', '*.sha256', '*.tar.gz', 'SHA256SUMS.txt' |
+            Select-Object -ExpandProperty FullName
+
           $downloadBase = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag"
-          $mihomoRelease = Get-Content -LiteralPath '.\packaging\mihomo-release.json' -Raw | ConvertFrom-Json
+
+          $mihomoRelease = Get-Content `
+            -LiteralPath '.\packaging\mihomo-release.json' `
+            -Raw | ConvertFrom-Json
+
           $mihomoVersion = $mihomoRelease.version
           $mihomoSourceUri = "https://github.com/MetaCubeX/mihomo/tree/$mihomoVersion"
           $mihomoSourceArchiveName = "mihomo-$mihomoVersion-source.tar.gz"
+
           $notesLines = @(
             '## 下载',
             '',
@@ -122,7 +182,79 @@ jobs:
             '',
             '> 安装器适用于 Windows 10/11 x64。'
           )
-          $releaseArgs = @($tag, '--target', $env:GITHUB_SHA, '--title', "ClashTray $env:RELEASE_VERSION", '--generate-notes', '--notes', ($notesLines -join [Environment]::NewLine))
-          if ($env:RELEASE_VERSION -match '-') { $releaseArgs += '--prerelease' }
+
+          $releaseArgs = @(
+            $tag,
+            '--target',
+            $env:GITHUB_SHA,
+            '--title',
+            "ClashTray $env:RELEASE_VERSION",
+            '--generate-notes',
+            '--notes',
+            ($notesLines -join [Environment]::NewLine)
+          )
+
+          if ($env:RELEASE_VERSION -match '-') {
+            $releaseArgs += '--prerelease'
+          }
+
           $releaseArgs += $assets
+
           gh release create @releaseArgs
+
+      - name: Notify Telegram
+        if: success()
+        continue-on-error: true
+        shell: pwsh
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RELEASE_REF: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:TELEGRAM_BOT_TOKEN)) {
+            throw 'TELEGRAM_BOT_TOKEN secret is not configured.'
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:TELEGRAM_CHAT_ID)) {
+            throw 'TELEGRAM_CHAT_ID secret is not configured.'
+          }
+
+          $tag = if (
+            $env:RELEASE_REF -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
+          ) {
+            $env:RELEASE_REF
+          } else {
+            "v$env:RELEASE_VERSION"
+          }
+
+          $releaseUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$tag"
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+
+          $message = @"
+          ✅ ClashTray $env:RELEASE_VERSION 发布成功
+
+          Version: $tag
+          Commit: $shortSha
+
+          下载地址：
+          $releaseUrl
+          "@
+
+          $body = @{
+            chat_id                  = $env:TELEGRAM_CHAT_ID
+            text                     = $message
+            disable_web_page_preview = 'true'
+          }
+
+          $response = Invoke-RestMethod `
+            -Uri "https://api.telegram.org/bot$env:TELEGRAM_BOT_TOKEN/sendMessage" `
+            -Method Post `
+            -Body $body
+
+          if (-not $response.ok) {
+            throw 'Telegram notification failed.'
+          }
+
+          Write-Host "Telegram notification sent successfully."
