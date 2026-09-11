@@ -51,7 +51,7 @@ public sealed partial class ProxyPage : UserControl
         GroupsPanel.Children.Clear();
         string query = NodeSearchBox.Text.Trim();
         bool searching = query.Length > 0;
-        Dictionary<string, string> delays = snapshot.ProxyNodes.GroupBy(node => node.Name, StringComparer.Ordinal)
+        Dictionary<string, string?> delays = snapshot.ProxyNodes.GroupBy(node => node.Name, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.First().Delay, StringComparer.Ordinal);
         foreach (ProxyGroup proxyGroup in snapshot.ProxyGroups)
         {
@@ -94,7 +94,7 @@ public sealed partial class ProxyPage : UserControl
             Grid.SetColumn(chevron, 1);
             header.Children.Add(chevron);
 
-            delays.TryGetValue(group.Current ?? "", out string latency);
+            delays.TryGetValue(group.Current ?? "", out string? latency);
             TextBlock delayLabel = new TextBlock
             {
                 Text = FormatDelay(latency),
@@ -207,7 +207,7 @@ public sealed partial class ProxyPage : UserControl
                     }
                     Grid.SetColumn(nameRow, 1);
                     content.Children.Add(nameRow);
-                    delays.TryGetValue(member, out string delay);
+                    delays.TryGetValue(member, out string? delay);
                     TextBlock detail = new TextBlock
                     {
                         Text = FormatDelay(delay),

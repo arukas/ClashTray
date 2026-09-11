@@ -8,8 +8,8 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        string smokeDirectory = args.FirstOrDefault(arg => arg.StartsWith("--ui-smoke-test=", StringComparison.Ordinal))?["--ui-smoke-test=".Length..];
-        if (!SingleInstanceCoordinator.TryAcquire(out SingleInstanceCoordinator coordinator, smokeDirectory is not null))
+        string? smokeDirectory = args.FirstOrDefault(arg => arg.StartsWith("--ui-smoke-test=", StringComparison.Ordinal))?["--ui-smoke-test=".Length..];
+        if (!SingleInstanceCoordinator.TryAcquire(out SingleInstanceCoordinator? coordinator, smokeDirectory is not null))
         {
             return;
         }

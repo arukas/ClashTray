@@ -154,7 +154,8 @@ public sealed partial class SettingsPage : UserControl
 
     private async void InstallCoreButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!Uri.TryCreate(CoreDownloadUriBox.Text.Trim(), UriKind.Absolute, out Uri uri)
+        if (!Uri.TryCreate(CoreDownloadUriBox.Text.Trim(), UriKind.Absolute, out Uri? uri)
+            || uri is null
             || !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
             || string.IsNullOrWhiteSpace(CoreVersionBox.Text)
             || CoreSha256Box.Text.Trim().Length != 64
@@ -344,7 +345,7 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
-        string selectedName = (ProvidersListView.SelectedItem as ListViewItem)?.Tag is ValueTuple<ProviderStatus, bool> selected
+        string? selectedName = (ProvidersListView.SelectedItem as ListViewItem)?.Tag is ValueTuple<ProviderStatus, bool> selected
             ? selected.Item1.Name
             : null;
         ProvidersListView.Items.Clear();

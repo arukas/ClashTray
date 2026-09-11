@@ -125,7 +125,7 @@ public sealed partial class MainWindow
         bool darkTaskbar = true;
         try
         {
-            using RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
             darkTaskbar = key?.GetValue("SystemUsesLightTheme") is not int light || light == 0;
         }
         catch (Exception exception) when (exception is System.Security.SecurityException or UnauthorizedAccessException or IOException)

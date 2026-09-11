@@ -224,7 +224,7 @@ public sealed partial class MainWindow : Window
             DrawTraffic();
         }
 
-        AppSettings settings = _runtime?.Settings;
+        AppSettings? settings = _runtime?.Settings;
         if (settings is not null)
         {
             HttpEndpointButton.Content = $"HTTP {settings.HttpPort}";
@@ -308,7 +308,8 @@ public sealed partial class MainWindow : Window
             XamlRoot = RootGrid.XamlRoot
         };
         if (await dialog.ShowAsync() != ContentDialogResult.Primary
-            || !Uri.TryCreate(urlBox.Text.Trim(), UriKind.Absolute, out Uri uri)
+            || !Uri.TryCreate(urlBox.Text.Trim(), UriKind.Absolute, out Uri? uri)
+            || uri is null
             || uri.Scheme is not ("http" or "https"))
         {
             return;
@@ -449,7 +450,7 @@ public sealed partial class MainWindow : Window
 
     private async void RefreshConfigurationButton_Click(object sender, RoutedEventArgs e)
     {
-        ConfigurationProfile selected = GetSelectedConfiguration();
+        ConfigurationProfile? selected = GetSelectedConfiguration();
         if (selected is not null && _runtime is not null)
         {
             try
@@ -465,7 +466,7 @@ public sealed partial class MainWindow : Window
 
     private async void DeleteConfigurationButton_Click(object sender, RoutedEventArgs e)
     {
-        ConfigurationProfile selected = GetSelectedConfiguration();
+        ConfigurationProfile? selected = GetSelectedConfiguration();
         if (selected is not null && _runtime is not null)
         {
             ContentDialog dialog = new ContentDialog
@@ -513,7 +514,7 @@ public sealed partial class MainWindow : Window
 
     private ConfigurationProfile? GetSelectedConfiguration()
     {
-        string id = (ConfigurationsComboBox.SelectedItem as ComboBoxItem)?.Tag as string;
+        string? id = (ConfigurationsComboBox.SelectedItem as ComboBoxItem)?.Tag as string;
         return _runtime?.Snapshot.Configurations.FirstOrDefault(configuration => configuration.Id == id);
     }
 

@@ -10,13 +10,13 @@ internal static class Program
 
         if (!Environment.UserInteractive && !args.Contains("--console", StringComparer.OrdinalIgnoreCase))
         {
-            using WindowsServiceHost host = new WindowsServiceHost(userSid);
-            System.ServiceProcess.ServiceBase.Run(host);
+            using WindowsServiceHost serviceHost = new WindowsServiceHost(userSid);
+            System.ServiceProcess.ServiceBase.Run(serviceHost);
             return;
         }
 
-        await using ServiceCommandHost host = new ServiceCommandHost(userSid);
-        host.Start();
+        await using ServiceCommandHost commandHost = new ServiceCommandHost(userSid);
+        commandHost.Start();
         await Task.Delay(Timeout.InfiniteTimeSpan);
     }
 }

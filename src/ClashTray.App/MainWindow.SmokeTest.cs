@@ -143,7 +143,7 @@ public sealed partial class MainWindow
             TrayToggle = "passed",
             DeactivationDismissal = "passed"
         }, DiagnosticJsonOptions));
-        foreach ((UIElement, string) page in new[] { (_rulesPage as UIElement, "规则"), (_connectionsPage as UIElement, "连接"), (_logsPage as UIElement, "日志"), (_settingsPage as UIElement, "设置") })
+        foreach ((UIElement, string) page in new[] { ((UIElement)_rulesPage!, "规则"), ((UIElement)_connectionsPage!, "连接"), ((UIElement)_logsPage!, "日志"), ((UIElement)_settingsPage!, "设置") })
         {
             NavigateTo(page.Item1, page.Item2);
             await Task.Delay(100);
