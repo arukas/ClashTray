@@ -16,6 +16,7 @@ public sealed partial class ProxyPage : UserControl
 
     public ProxyPage(ClashTrayRuntime runtime)
     {
+        ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
         InitializeComponent();
         _searchTimer.Tick += (_, _) =>
@@ -31,6 +32,7 @@ public sealed partial class ProxyPage : UserControl
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
+        ArgumentNullException.ThrowIfNull(snapshot);
         _snapshot = snapshot;
         // Traffic updates should not recreate controls or disturb keyboard focus.
         string signature = System.Text.Json.JsonSerializer.Serialize(new { snapshot.ProxyGroups, snapshot.ProxyNodes, snapshot.Providers });

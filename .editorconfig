@@ -77,3 +77,17 @@ dotnet_diagnostic.CA1515.severity = none
 
 [src/ClashTray.App/NativeMethods.cs]
 dotnet_diagnostic.CA1515.severity = none
+
+# WinUI XAML pages and the Application object are public runtime entry points;
+# UI event handlers translate external failures into visible, bounded errors.
+[src/ClashTray.App/**/*.cs]
+dotnet_diagnostic.CA1031.severity = none
+dotnet_diagnostic.CA1515.severity = none
+
+# The App type name is required by the WinUI application model and XAML contract.
+[src/ClashTray.App/App.xaml.cs]
+dotnet_diagnostic.CA1724.severity = none
+
+# Theme names are persisted and consumed as lowercase values by the UI contract.
+[src/ClashTray.App/MainWindow.Themes.cs]
+dotnet_diagnostic.CA1308.severity = none

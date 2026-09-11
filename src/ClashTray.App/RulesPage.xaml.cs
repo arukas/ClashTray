@@ -11,11 +11,13 @@ public sealed partial class RulesPage : UserControl
 
     public RulesPage(ClashTrayRuntime runtime)
     {
+        ArgumentNullException.ThrowIfNull(runtime);
         InitializeComponent();
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
+        ArgumentNullException.ThrowIfNull(snapshot);
         _rules = snapshot.Rules;
         ApplyFilter();
     }

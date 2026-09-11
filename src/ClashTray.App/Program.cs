@@ -14,13 +14,19 @@ internal static class Program
             return;
         }
 
-        Application.Start(_ =>
+        try
         {
-            DispatcherQueueSynchronizationContext synchronizationContext = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
-            SynchronizationContext.SetSynchronizationContext(synchronizationContext);
-            App app = new App(coordinator!, smokeDirectory);
-        });
-
-        coordinator!.Dispose();
+            Application.Start(_ =>
+            {
+                DispatcherQueueSynchronizationContext synchronizationContext = new DispatcherQueueSynchronizationContext(DispatcherQueue.GetForCurrentThread());
+                SynchronizationContext.SetSynchronizationContext(synchronizationContext);
+                App app = new App(coordinator!, smokeDirectory);
+                coordinator = null;
+            });
+        }
+        finally
+        {
+            coordinator?.Dispose();
+        }
     }
 }

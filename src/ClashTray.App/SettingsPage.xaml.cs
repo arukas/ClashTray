@@ -13,6 +13,7 @@ public sealed partial class SettingsPage : UserControl
 
     public SettingsPage(ClashTrayRuntime runtime)
     {
+        ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
         InitializeComponent();
         LoadSettings(runtime.Settings);
@@ -20,6 +21,7 @@ public sealed partial class SettingsPage : UserControl
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
+        ArgumentNullException.ThrowIfNull(snapshot);
         LoadSettings(_runtime.Settings);
         UpdateProviders(snapshot);
     }
@@ -340,6 +342,7 @@ public sealed partial class SettingsPage : UserControl
 
     public void UpdateProviders(RuntimeSnapshot snapshot)
     {
+        ArgumentNullException.ThrowIfNull(snapshot);
         if (ProvidersListView is null)
         {
             return;

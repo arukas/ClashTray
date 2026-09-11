@@ -12,12 +12,14 @@ public sealed partial class ConnectionsPage : UserControl
 
     public ConnectionsPage(ClashTrayRuntime runtime)
     {
+        ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
         InitializeComponent();
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
+        ArgumentNullException.ThrowIfNull(snapshot);
         _connections = snapshot.Connections;
         ApplyFilter();
     }

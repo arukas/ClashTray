@@ -133,6 +133,7 @@ public sealed partial class MainWindow : Window
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
+        ArgumentNullException.ThrowIfNull(snapshot);
         ApplyTheme(_runtime?.Settings.Theme ?? "system");
         CoreStatus core = snapshot.Core;
         _updatingSnapshot = true;

@@ -14,12 +14,14 @@ public sealed partial class LogsPage : UserControl
 
     public LogsPage(ClashTrayRuntime runtime)
     {
+        ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
         InitializeComponent();
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
+        ArgumentNullException.ThrowIfNull(snapshot);
         _logs = snapshot.Logs;
         ApplyFilter();
     }
