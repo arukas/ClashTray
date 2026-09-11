@@ -86,6 +86,7 @@ const
   ErrorServiceAlreadyRunning = 1056;
   ErrorServiceNotActive = 1062;
   ErrorServiceMarkedForDelete = 1072;
+  ErrorServiceRequestTimeout = 1053;
 
 var
   LastInstallerError: string;
@@ -233,16 +234,30 @@ begin
   end;
 end;
 
-function HasDotNet10DesktopRuntime(): Boolean;
+function GetX64DotNetHostPath(): string;
+begin
+  Result := '';
+  if not IsWin64 then
+    exit;
+
+  Result := ExpandConstant('{autopf}\dotnet\dotnet.exe');
+  if not FileExists(Result) then
+    Result := '';
+end;
+
+function HasDotNetRuntime(const RuntimeName: string; var DetectedLine: string): Boolean;
 var
   DotNetPath: string;
   ResultCode: Integer;
   Output: TExecOutput;
+  Prefix: string;
+  Line: string;
   I: Integer;
 begin
   Result := False;
-  DotNetPath := ExpandConstant('{autopf}\dotnet\dotnet.exe');
-  if not FileExists(DotNetPath) then
+  DetectedLine := '';
+  DotNetPath := GetX64DotNetHostPath();
+  if DotNetPath = '' then
     exit;
   if not ExecAndCaptureOutput(
     DotNetPath,
@@ -256,15 +271,20 @@ begin
   if ResultCode <> 0 then
     exit;
 
+  Prefix := Uppercase(RuntimeName + ' 10.');
   for I := 0 to GetArrayLength(Output.StdOut) - 1 do
-    if Pos('MICROSOFT.WINDOWSDESKTOP.APP 10.', Uppercase(Trim(Output.StdOut[I]))) = 1 then
+  begin
+    Line := Trim(Output.StdOut[I]);
+    if Pos(Prefix, Uppercase(Line)) = 1 then
     begin
+      DetectedLine := Line;
       Result := True;
       exit;
     end;
+  end;
 end;
 
-function HasWindowsAppRuntime(): Boolean;
+function HasWindowsAppRuntime(var DetectedVersion: string): Boolean;
 var
   PowerShellPath: string;
   Params: string;
@@ -274,6 +294,7 @@ var
   I: Integer;
 begin
   Result := False;
+  DetectedVersion := '';
   UserSid := GetCurrentUserSid();
   if UserSid = '' then
     exit;
@@ -283,9 +304,14 @@ begin
     exit;
 
   Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "'
-    + '$package = Get-AppxPackage -User ''' + UserSid + ''' -Name ''Microsoft.WindowsAppRuntime.2'' '
-    + '| Where-Object { $_.Architecture -eq ''X64'' -and $_.Version -ge [version]''2.4.0.0'' } '
-    + '| Select-Object -First 1 -ExpandProperty Version; if ($null -ne $package) { $package }"';
+    + '$ErrorActionPreference = ''Stop''; '
+    + '$packages = @(Get-AppxPackage -User ''' + UserSid + ''' -Name ''Microsoft.WindowsAppRuntime.2'' -PackageTypeFilter Framework '
+    + '| Where-Object { $_.Architecture.ToString() -eq ''X64'' -and $_.IsFramework '
+    + '-and $_.Version -ge [version]''2.4.0.0'' '
+    + '-and (Test-Path -LiteralPath $_.InstallLocation) } '
+    + '| Sort-Object Version -Descending); '
+    + 'if ($packages.Count -lt 1) { exit 1 }; '
+    + 'Write-Output ($packages[0].Version.ToString())"';
   if not ExecAndCaptureOutput(
     PowerShellPath,
     Params,
@@ -301,6 +327,7 @@ begin
   for I := 0 to GetArrayLength(Output.StdOut) - 1 do
     if Trim(Output.StdOut[I]) <> '' then
     begin
+      DetectedVersion := Trim(Output.StdOut[I]);
       Result := True;
       exit;
     end;
@@ -309,22 +336,45 @@ end;
 function CheckMiniPrerequisites(): Boolean;
 var
   Missing: string;
+  DotNetPath: string;
+  CoreRuntimeLine: string;
+  DesktopRuntimeLine: string;
+  WindowsAppRuntimeVersion: string;
 begin
   Missing := '';
-  if not HasDotNet10DesktopRuntime() then
-    Missing := Missing + #13#10 + '- .NET 10 Desktop Runtime (x64)';
-  if not HasWindowsAppRuntime() then
-    Missing := Missing + #13#10 + '- Windows App Runtime 2.4 或更高版本 (x64)';
+  DotNetPath := GetX64DotNetHostPath();
+  if DotNetPath = '' then
+    Missing := Missing + #13#10 + '- x64 .NET host（C:\Program Files\dotnet\dotnet.exe）';
+  if not HasDotNetRuntime('Microsoft.NETCore.App', CoreRuntimeLine) then
+    Missing := Missing + #13#10 + '- Microsoft.NETCore.App 10.x（x64）';
+  if not HasDotNetRuntime('Microsoft.WindowsDesktop.App', DesktopRuntimeLine) then
+    Missing := Missing + #13#10 + '- Microsoft.WindowsDesktop.App 10.x（x64）';
+  if not HasWindowsAppRuntime(WindowsAppRuntimeVersion) then
+    Missing := Missing + #13#10 + '- 当前用户已注册且可访问的 Windows App Runtime 2.4+ framework（x64）';
 
   if Missing = '' then
   begin
+    Log('Mini prerequisite check passed.');
     Result := True;
     exit;
   end;
 
-  LastInstallerError := 'Mini 版本需要以下运行时，当前系统未满足：' + Missing
-    + #13#10#13#10 + '请先安装对应的 x64 运行时后重新运行安装程序。安装已取消。';
+  Log('Mini prerequisite check failed: ' + Missing);
+  LastInstallerError := 'Mini 版本安装前检查未通过：' + Missing
+    + #13#10#13#10 + '请先安装对应的 x64 运行时，并使用同一个 Windows 用户重新运行安装程序。'
+    + #13#10 + '安装器会停止，不会创建或启动不兼容的服务。';
   Result := False;
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  Result := True;
+  if CompareText(InstallerVariant, 'Mini') = 0 then
+  begin
+    Result := CheckMiniPrerequisites();
+    if not Result then
+      MsgBox(LastInstallerError, mbError, MB_OK);
+  end;
 end;
 
 function ServiceIsRunning(): Boolean;
@@ -408,7 +458,10 @@ begin
   end;
   if (ResultCode <> 0) and (ResultCode <> ErrorServiceAlreadyRunning) then
   begin
-    LastInstallerError := Format('启动 ClashTrayService 失败（错误代码 %d）。', [ResultCode]);
+    if ResultCode = ErrorServiceRequestTimeout then
+      LastInstallerError := '启动 ClashTrayService 失败（错误代码 1053）。Mini 的框架依赖可能未能被服务进程加载；请安装 x64 .NET 10 运行时和 Windows App Runtime 2.4+，或改用 Full 版本。'
+    else
+      LastInstallerError := Format('启动 ClashTrayService 失败（错误代码 %d）。', [ResultCode]);
     exit;
   end;
 
@@ -492,6 +545,13 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    if CompareText(InstallerVariant, 'Mini') = 0 then
+      if not CheckMiniPrerequisites() then
+      begin
+        MsgBox(LastInstallerError, mbError, MB_OK);
+        Abort;
+      end;
+
     if not InstallService() then
     begin
       MsgBox(LastInstallerError, mbError, MB_OK);

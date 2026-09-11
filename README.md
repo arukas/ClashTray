@@ -32,7 +32,7 @@ GitHub Actions 会在 Windows runner 上构建并发布三种 Windows x64 产物
 | `ClashTray-Setup-NoCET.exe` | 自包含 App + Service + 已验证的 Mihomo 核心，关闭 CET 兼容标志 | 补丁较旧、无法启动 .NET 10 的 Windows 10 22H2 |
 | `ClashTray-Setup-Mini.exe` | Framework-dependent App + Service，不内置核心 | 已安装 .NET 10 Desktop Runtime 和 Windows App Runtime 2.4+，追求最小下载体积 |
 
-Full 和 NoCET 使用 `packaging/mihomo-release.json` 中固定的官方版本和校验值。NoCET 只作为旧补丁 Windows 10 的兼容包，关闭 .NET 进程的 CET 兼容标志，会减少一层硬件控制流防护；普通用户优先选择 Full。Mini 安装时不会删除已有的 `%PROGRAMDATA%\ClashTray\core`，但它不内置核心，首次运行后可通过经过验证的核心更新流程补齐。Mini 版本需要目标机器已具备 .NET 10 Desktop Runtime 和 Windows App Runtime 2.4+；安装器会在复制文件前检查这两项，缺少时提示并退出。WinUI 3 是桌面 UI 所需的组件，Mini 只是把 .NET / Windows App SDK runtime 外置，因此体积更小但安装前提更多。
+Full 和 NoCET 使用 `packaging/mihomo-release.json` 中固定的官方版本和校验值。NoCET 只作为旧补丁 Windows 10 的兼容包，关闭 .NET 进程的 CET 兼容标志，会减少一层硬件控制流防护；普通用户优先选择 Full。Mini 安装时不会删除已有的 `%PROGRAMDATA%\ClashTray\core`，但它不内置核心，首次运行后可通过经过验证的核心更新流程补齐。Mini 版本需要目标机器已具备 x64 .NET 10 host、`Microsoft.NETCore.App` 10.x、.NET 10 Desktop Runtime（`Microsoft.WindowsDesktop.App` 10.x）和当前用户已注册的 x64 Windows App Runtime 2.4+ framework；安装器会在启动时及复制文件前精确检查这些条件，任一项缺失或无法读取都会提示并退出，不会创建服务。WinUI 3 是桌面 UI 所需的组件，Mini 只是把 .NET / Windows App SDK runtime 外置，因此体积更小但安装前提更多。
 
 每个 EXE 旁边都会生成同名 `.sha256` 校验文件。发布页还会提供 `SHA256SUMS.txt`，不要从不明镜像下载核心或安装器。
 
