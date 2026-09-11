@@ -86,7 +86,7 @@
         <Border Style="{StaticResource ClashTrayCardStyle}">
             <StackPanel Spacing="8">
                 <TextBlock Text="Provider" FontWeight="SemiBold" />
-                <ListView x:Name="ProvidersListView" MaxHeight="180" SelectionChanged="ProvidersListView_SelectionChanged" AutomationProperties.Name="Provider 状态列表" />
+                <ListView x:Name="ProvidersListView" SelectionChanged="ProvidersListView_SelectionChanged" AutomationProperties.Name="Provider 状态列表" ScrollViewer.VerticalScrollMode="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
                 <Button Content="刷新选中的 Provider" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="RefreshProviderButton_Click" HorizontalAlignment="Left" />
             </StackPanel>
         </Border>
