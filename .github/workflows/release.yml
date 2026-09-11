@@ -203,6 +203,8 @@ jobs:
             '## 本版更新',
             '',
             '- 使用新版 ClashTray 品牌资源，统一应用图标、面板标志和浅色/深色任务栏状态图标。',
+            '- 修复旧补丁 Windows 10 22H2 上 .NET 10/CET 导致安装器和应用无法启动的问题；NoCET 兼容安装器对应 Issue #6。',
+            '- 强化 Mini 安装前置检查：缺少 x64 .NET 10 Desktop Runtime 或 Windows App Runtime 2.4+ 时，会在复制文件前提示并退出。',
             '- 所有发布产物仍仅支持 Windows x64。',
             '',
             '## Third-party component',
