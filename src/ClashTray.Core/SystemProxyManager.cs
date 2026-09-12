@@ -4,7 +4,7 @@ using Microsoft.Win32;
 
 namespace ClashTray.Core;
 
-public sealed class SystemProxyManager
+public sealed class SystemProxyManager : ISystemProxyController
 {
     private const string InternetSettingsPath = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
     private readonly AppPaths _paths;

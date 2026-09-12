@@ -102,6 +102,60 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task EnablingSystemProxyBeforeCoreHealthOnlyStoresPreference()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        FakeSystemProxyController proxy = new FakeSystemProxyController(SystemProxyState.Off);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, null, proxy);
+
+        try
+        {
+            await runtime.SetSystemProxyAsync(true);
+
+            Assert.IsTrue(runtime.Settings.SystemProxyEnabled);
+            Assert.AreEqual(0, proxy.EnableCount);
+            Assert.AreEqual(SystemProxyState.Off, runtime.Snapshot.SystemProxy);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task CoreUnavailableRestoresActualProxyButPreservesPreference()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        TestSettingsStore settings = new TestSettingsStore(new AppSettings(SystemProxyEnabled: true));
+        FakeSystemProxyController proxy = new FakeSystemProxyController(SystemProxyState.On);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, settings, proxy);
+
+        try
+        {
+            await runtime.InitializeAsync();
+            proxy.SetState(SystemProxyState.On);
+            await runtime.RevokeSystemProxyForTestingAsync();
+
+            Assert.IsTrue(runtime.Settings.SystemProxyEnabled);
+            Assert.AreEqual(SystemProxyState.Off, proxy.State);
+            Assert.AreEqual(SystemProxyState.Off, runtime.Snapshot.SystemProxy);
+            Assert.IsGreaterThanOrEqualTo(2, proxy.DisableCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public void MihomoDataParserPreservesZeroTrafficTotals()
     {
         using JsonDocument document = JsonDocument.Parse(
@@ -442,6 +496,57 @@ public sealed class RuntimeStateTests
         await File.WriteAllTextAsync(
             Path.Combine(paths.ConfigurationsRoot, $"{profile.Id}.json"),
             System.Text.Json.JsonSerializer.Serialize(profile));
+    }
+
+    private sealed class FakeSystemProxyController : ISystemProxyController
+    {
+        public FakeSystemProxyController(SystemProxyState initialState)
+        {
+            State = initialState;
+        }
+
+        public SystemProxyState State { get; private set; }
+
+        public int EnableCount { get; private set; }
+
+        public int DisableCount { get; private set; }
+
+        public SystemProxyState DetectState() => State;
+
+        public Task EnableAsync(int port, string bypassList, CancellationToken cancellationToken = default)
+        {
+            EnableCount++;
+            State = SystemProxyState.On;
+            return Task.CompletedTask;
+        }
+
+        public Task DisableAsync(CancellationToken cancellationToken = default)
+        {
+            DisableCount++;
+            State = SystemProxyState.Off;
+            return Task.CompletedTask;
+        }
+
+        public void SetState(SystemProxyState state) => State = state;
+    }
+
+    private sealed class TestSettingsStore : ISettingsStore
+    {
+        public TestSettingsStore(AppSettings settings)
+        {
+            Settings = settings;
+        }
+
+        public AppSettings Settings { get; private set; }
+
+        public Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(Settings);
+
+        public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
+        {
+            Settings = settings;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RuntimeControllerHandler : HttpMessageHandler
