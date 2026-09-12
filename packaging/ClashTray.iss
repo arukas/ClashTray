@@ -59,17 +59,20 @@ MinVersion=10.0.17763
 
 [Files]
 Source: "{#PayloadRoot}\App\*"; DestDir: "{app}\App"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PayloadRoot}\Dashboard\*"; DestDir: "{commonappdata}\ClashTray\ui"; Flags: ignoreversion recursesubdirs createallsubdirs
 #if IncludeCore == "1"
 Source: "{#PayloadRoot}\Core\*"; DestDir: "{commonappdata}\ClashTray\core"; Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist
 #endif
 
 [Dirs]
 Name: "{commonappdata}\ClashTray\core"; Permissions: users-readexec admins-full system-full
+Name: "{commonappdata}\ClashTray\ui"; Permissions: users-readexec admins-full system-full
 
 [InstallDelete]
 ; Remove the legacy C# installer layout when upgrading an existing install.
 Type: filesandordirs; Name: "{app}\Service"
 Type: files; Name: "{app}\ClashTray.Setup.exe"
+Type: filesandordirs; Name: "{commonappdata}\ClashTray\ui"
 
 [Icons]
 Name: "{autoprograms}\ClashTray\ClashTray.lnk"; Filename: "{app}\App\ClashTray.App.exe"; WorkingDir: "{app}\App"; Comment: "ClashTray Mihomo control center"; IconFilename: "{app}\App\ClashTray.App.exe"

@@ -67,12 +67,28 @@ $servicePublish = Join-Path $stageRoot 'service'
 $appBuildOutput = Join-Path $repoRoot "src\ClashTray.App\bin\x64\$Configuration\net10.0-windows10.0.19041.0\win-x64"
 $mihomoBinaryArchivePath = if ($mihomoVersion) { Join-Path $stageRoot "mihomo-windows-amd64-$mihomoVersion.zip" } else { $null }
 $coreExtract = Join-Path $stageRoot 'mihomo-extract'
+$dashboardExtract = Join-Path $stageRoot 'metacubexd-extract'
+$dashboardPayload = Join-Path $payloadRoot 'Dashboard'
 
 $mihomoBinaryArchiveUri = if ($mihomoVersion) { "https://github.com/MetaCubeX/mihomo/releases/download/$mihomoVersion/mihomo-windows-amd64-$mihomoVersion.zip" } else { $null }
 $mihomoBinaryArchiveSha256 = if ($mihomoRelease) { $mihomoRelease.windowsAmd64Sha256 } else { $null }
 $mihomoSourceUri = if ($mihomoVersion) { "https://github.com/MetaCubeX/mihomo/tree/$mihomoVersion" } else { $null }
 $mihomoSourceArchiveUri = if ($mihomoVersion) { "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/$mihomoVersion" } else { $null }
 $mihomoLicenseUri = if ($mihomoVersion) { "https://raw.githubusercontent.com/MetaCubeX/mihomo/$mihomoVersion/LICENSE" } else { $null }
+
+$dashboardRelease = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'metacubexd-release.json') -Raw | ConvertFrom-Json
+$dashboardVersion = $dashboardRelease.version
+$dashboardArchiveUri = $dashboardRelease.archiveUri
+$dashboardArchiveSha256 = $dashboardRelease.archiveSha256
+$dashboardLicenseUri = $dashboardRelease.licenseUri
+$dashboardSourceUri = $dashboardRelease.sourceUri
+$expectedDashboardArchiveUri = "https://github.com/MetaCubeX/metacubexd/releases/download/$dashboardVersion/compressed-dist.tgz"
+$expectedDashboardLicenseUri = "https://raw.githubusercontent.com/MetaCubeX/metacubexd/$dashboardVersion/LICENSE"
+$expectedDashboardSourceUri = "https://github.com/MetaCubeX/metacubexd/tree/$dashboardVersion"
+if (($dashboardVersion -notmatch '^v\d+\.\d+\.\d+$') -or ($dashboardArchiveUri -ne $expectedDashboardArchiveUri) -or ($dashboardLicenseUri -ne $expectedDashboardLicenseUri) -or ($dashboardSourceUri -ne $expectedDashboardSourceUri) -or ($dashboardArchiveSha256 -notmatch '^[a-fA-F0-9]{64}$')) {
+    throw 'Invalid pinned MetaCubeXD release metadata.'
+}
+$dashboardArchivePath = Join-Path $stageRoot "metacubexd-$dashboardVersion-compressed-dist.tgz"
 
 $appProject = Join-Path $repoRoot 'src\ClashTray.App\ClashTray.App.csproj'
 $serviceProject = Join-Path $repoRoot 'src\ClashTray.Service\ClashTray.Service.csproj'
@@ -247,6 +263,91 @@ function Merge-PublishTree {
     }
 }
 
+function Prepare-MetaCubeXdPayload {
+    New-Item -ItemType Directory -Path $dashboardPayload, $dashboardExtract -Force | Out-Null
+    Write-Host "Downloading official MetaCubeXD $dashboardVersion dashboard..."
+    Invoke-WebRequest -Uri $dashboardArchiveUri -OutFile $dashboardArchivePath
+
+    $actualHash = (Get-FileHash -LiteralPath $dashboardArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $dashboardArchiveSha256.ToLowerInvariant()) {
+        throw "MetaCubeXD archive SHA-256 mismatch. Expected $dashboardArchiveSha256, received $actualHash."
+    }
+
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($null -eq $tar) {
+        throw 'tar.exe is required to extract the pinned MetaCubeXD dashboard archive.'
+    }
+
+    & $tar.Source '-xzf' $dashboardArchivePath '-C' $dashboardExtract
+    if ($LASTEXITCODE -ne 0) {
+        throw "MetaCubeXD archive extraction failed with exit code $LASTEXITCODE."
+    }
+
+    $indexPath = Join-Path $dashboardExtract 'index.html'
+    $dashboardSourceRoot = $dashboardExtract
+    if (-not (Test-Path -LiteralPath $indexPath -PathType Leaf)) {
+        $indexCandidates = @(Get-ChildItem -LiteralPath $dashboardExtract -Recurse -File -Filter 'index.html')
+        if ($indexCandidates.Count -ne 1) {
+            throw 'The MetaCubeXD archive did not contain exactly one index.html entry.'
+        }
+
+        $dashboardSourceRoot = $indexCandidates[0].Directory.FullName
+    }
+
+    $dashboardFiles = @(Get-ChildItem -LiteralPath $dashboardSourceRoot -Recurse -File -Force)
+    if ($dashboardFiles.Count -eq 0 -or $dashboardFiles.Count -gt 4096) {
+        throw "MetaCubeXD dashboard file count is outside the allowed range: $($dashboardFiles.Count)."
+    }
+
+    $dashboardBytes = ($dashboardFiles | Measure-Object -Property Length -Sum).Sum
+    if ($dashboardBytes -gt 64MB) {
+        throw "MetaCubeXD dashboard payload is too large: $dashboardBytes bytes."
+    }
+
+    foreach ($file in $dashboardFiles) {
+        if ($file.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+            throw "MetaCubeXD dashboard contains an unsupported reparse point: $($file.FullName)"
+        }
+    }
+
+    Copy-PublishTree -Source $dashboardSourceRoot -Destination $dashboardPayload
+    Invoke-WebRequest -Uri $dashboardLicenseUri -OutFile (Join-Path $dashboardPayload 'MetaCubeXD-LICENSE.txt')
+    if (-not (Test-Path -LiteralPath (Join-Path $dashboardPayload 'MetaCubeXD-LICENSE.txt') -PathType Leaf)) {
+        throw 'The MetaCubeXD license file was not downloaded.'
+    }
+
+    $releaseMetadataPath = Join-Path $dashboardPayload 'MetaCubeXD-Release.txt'
+    @(
+        "MetaCubeXD version: $dashboardVersion"
+        'License: MIT'
+        ''
+        "Dashboard archive: $dashboardArchiveUri"
+        "Dashboard SHA-256: $dashboardArchiveSha256"
+        "Source: $dashboardSourceUri"
+        "License source: $dashboardLicenseUri"
+        ''
+        'Upstream project: MetaCubeX/metacubexd'
+        'This dashboard is distributed as an unmodified static release payload by ClashTray.'
+        'MetaCubeXD is licensed separately under the MIT License.'
+        'ClashTray itself is licensed under the MIT License.'
+    ) | Set-Content -LiteralPath $releaseMetadataPath -Encoding ascii
+
+    $metadata = Get-Content -LiteralPath $releaseMetadataPath -Raw
+    foreach ($requiredLine in @(
+        'MetaCubeXD version:'
+        'License: MIT'
+        'Dashboard archive:'
+        'Dashboard SHA-256:'
+        'Source:'
+        'License source:'
+        'Upstream project:'
+    )) {
+        if ($metadata -notmatch [regex]::Escape($requiredLine)) {
+            throw "MetaCubeXD release metadata is missing required entry: $requiredLine"
+        }
+    }
+}
+
 if (-not (Test-Path -LiteralPath $appProject -PathType Leaf)) {
     throw "App project was not found: $appProject"
 }
@@ -268,6 +369,7 @@ if (Test-Path -LiteralPath $stageRoot) {
     Remove-Item -LiteralPath $stageRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Path $stageRoot, $outputRoot -Force | Out-Null
+Prepare-MetaCubeXdPayload
 
 $appPublishArguments = @(
     'publish', $appProject,
@@ -316,7 +418,10 @@ Prepare-MihomoPayload
 $requiredPayloadFiles = @(
     (Join-Path $appPayload 'ClashTray.App.exe'),
     (Join-Path $appPayload 'ClashTray.Service.exe'),
-    (Join-Path $appPayload 'ClashTray-LICENSE.txt')
+    (Join-Path $appPayload 'ClashTray-LICENSE.txt'),
+    (Join-Path $dashboardPayload 'index.html'),
+    (Join-Path $dashboardPayload 'MetaCubeXD-LICENSE.txt'),
+    (Join-Path $dashboardPayload 'MetaCubeXD-Release.txt')
 )
 if ($includeCore) {
     $requiredPayloadFiles += @(

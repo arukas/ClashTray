@@ -20,6 +20,14 @@ The installed `Mihomo-Release.txt` records the binary archive URL, binary checks
 
 Mihomo remains governed by the GNU GPL v3.0. ClashTray remains governed by the MIT License.
 
+## MetaCubeXD
+
+ClashTray includes an unmodified, pinned static release of [MetaCubeXD](https://github.com/MetaCubeX/metacubexd) and serves it only through Mihomo's loopback External Controller.
+
+The current release payload is MetaCubeXD `v1.273.1`, downloaded from the official release asset `compressed-dist.tgz` and verified with the SHA-256 recorded in `packaging/metacubexd-release.json`. The installer includes the MetaCubeXD MIT license text and exact source/download metadata under the installed ProgramData UI directory.
+
+ClashTray does not load a remote dashboard at runtime and does not enable LAN access or add the controller secret to the dashboard URL. MetaCubeXD remains governed by its upstream MIT license.
+
 ## Microsoft Windows App SDK and WinUI 3
 
 The desktop UI uses Microsoft Windows App SDK and WinUI 3 through NuGet. The package's license and notice files remain governed by the corresponding Microsoft package distribution and should be included in release artifacts when required by the selected distribution channel.
@@ -34,4 +42,4 @@ This acknowledgment does not alter the MIT license of independently implemented 
 
 ## Project policy
 
-ClashTray itself does not add telemetry, analytics, account services, advertisements, or remote dashboard code. See [development-policy.md](development-policy.md) for the source-authorship and integration rules used by the project.
+ClashTray itself does not add telemetry, analytics, account services, or advertisements. The local MetaCubeXD dashboard is a separately licensed, pinned third-party release payload; ClashTray does not fetch dashboard code at runtime. See [development-policy.md](development-policy.md) for the source-authorship and integration rules used by the project.

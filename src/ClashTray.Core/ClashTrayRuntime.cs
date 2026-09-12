@@ -95,6 +95,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public AppSettings Settings => _settings;
 
+    public bool DashboardAvailable => File.Exists(_paths.ExternalUiEntryPoint);
+
     public StartupRegistrationStatus GetStartupStatus() => _startupRegistration.GetStatus();
 
     internal static bool ShouldAutomaticallyStartCore(
@@ -238,7 +240,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             UpdateCoreState(CoreState.Validating, null);
             string runtimeConfigPath = Path.Combine(_paths.RuntimeRoot, "mihomo", "active-config.yaml");
-            await RuntimeConfigBuilder.BuildAsync(profile.Path, runtimeConfigPath, _settings, cancellationToken);
+            await RuntimeConfigBuilder.BuildAsync(
+                profile.Path,
+                runtimeConfigPath,
+                _settings,
+                externalUiPath: _paths.ExternalUiRoot,
+                cancellationToken: cancellationToken);
 
             string runtimeDirectory = Path.Combine(_paths.RuntimeRoot, "mihomo");
             string servicePayload = JsonSerializer.Serialize(new ServiceCorePayload(
@@ -283,13 +290,23 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
             else
             {
-                if (!await _processManager.ValidateAsync(executable, runtimeConfigPath, cancellationToken))
+                if (!await _processManager.ValidateAsync(
+                    executable,
+                    runtimeConfigPath,
+                    runtimeDirectory,
+                    safePaths: _paths.ExternalUiRoot,
+                    cancellationToken: cancellationToken))
                 {
                     UpdateCoreState(CoreState.Failed, "Mihomo 配置验证失败");
                     return;
                 }
 
-                await _processManager.StartAsync(executable, runtimeConfigPath, runtimeDirectory, cancellationToken);
+                await _processManager.StartAsync(
+                    executable,
+                    runtimeConfigPath,
+                    runtimeDirectory,
+                    safePaths: _paths.ExternalUiRoot,
+                    cancellationToken: cancellationToken);
             }
 
             bool coreStarted = true;

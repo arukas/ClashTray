@@ -164,12 +164,22 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
 
         string executablePath = _paths.ManagedCoreExecutable;
-        if (!await _processManager.ValidateAsync(executablePath, payload.ConfigurationPath, cancellationToken))
+        if (!await _processManager.ValidateAsync(
+            executablePath,
+            payload.ConfigurationPath,
+            workingDirectory: null,
+            safePaths: _paths.ExternalUiRoot,
+            cancellationToken: cancellationToken))
         {
             return Failure(request, "Mihomo 配置验证失败。", CoreState.Failed);
         }
 
-        await _processManager.StartAsync(executablePath, payload.ConfigurationPath, payload.WorkingDirectory, cancellationToken);
+        await _processManager.StartAsync(
+            executablePath,
+            payload.ConfigurationPath,
+            payload.WorkingDirectory,
+            safePaths: _paths.ExternalUiRoot,
+            cancellationToken: cancellationToken);
         _activeCore = payload;
         _api = CreateApi(payload.ControllerPort, payload.ControllerSecret);
         _tunState = TunState.Unknown;

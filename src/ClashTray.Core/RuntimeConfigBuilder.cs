@@ -5,10 +5,23 @@ namespace ClashTray.Core;
 
 public static class RuntimeConfigBuilder
 {
+    public static Task<string> BuildAsync(
+        string sourcePath,
+        string destinationPath,
+        AppSettings settings,
+        CancellationToken cancellationToken = default)
+        => BuildAsync(
+            sourcePath,
+            destinationPath,
+            settings,
+            externalUiPath: null,
+            cancellationToken: cancellationToken);
+
     public static async Task<string> BuildAsync(
         string sourcePath,
         string destinationPath,
         AppSettings settings,
+        string? externalUiPath,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(sourcePath);
@@ -21,6 +34,11 @@ public static class RuntimeConfigBuilder
         filtered.Add(string.Empty);
         filtered.Add($"external-controller: 127.0.0.1:{settings.ControllerPort}");
         filtered.Add("secret: ''");
+        if (TryResolveExternalUiPath(externalUiPath, out string resolvedExternalUiPath))
+        {
+            filtered.Add($"external-ui: '{EscapeYamlSingleQuoted(resolvedExternalUiPath)}'");
+        }
+
         filtered.Add($"allow-lan: {(settings.AllowLan ? "true" : "false")}");
         filtered.Add($"ipv6: {(settings.Ipv6 ? "true" : "false")}");
         filtered.Add($"tcp-concurrent: {(settings.TcpConcurrent ? "true" : "false")}");
@@ -254,6 +272,9 @@ public static class RuntimeConfigBuilder
         string trimmed = line.TrimStart();
         return trimmed.StartsWith("external-controller:", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("secret:", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("external-ui:", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("external-ui-name:", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("external-ui-url:", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("allow-lan:", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("ipv6:", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("tcp-concurrent:", StringComparison.OrdinalIgnoreCase)
@@ -262,4 +283,34 @@ public static class RuntimeConfigBuilder
             || trimmed.StartsWith("mixed-port:", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("socks-port:", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool TryResolveExternalUiPath(string? path, out string resolvedPath)
+    {
+        resolvedPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+        {
+            return false;
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(path);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        if (!Directory.Exists(fullPath)
+            || !File.Exists(Path.Combine(fullPath, "index.html")))
+        {
+            return false;
+        }
+
+        resolvedPath = fullPath;
+        return true;
+    }
+
+    private static string EscapeYamlSingleQuoted(string value) => value.Replace("'", "''", StringComparison.Ordinal);
 }

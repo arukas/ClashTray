@@ -24,6 +24,10 @@ public sealed class AppPaths
 
     public string ManagedCoreMetadata => Path.Combine(CoreRoot, "mihomo.manifest.json");
 
+    public string ExternalUiRoot => Path.Combine(ProgramRoot, "ui");
+
+    public string ExternalUiEntryPoint => Path.Combine(ExternalUiRoot, "index.html");
+
     public string ConfigurationsRoot => Path.Combine(LocalRoot, "configurations");
 
     public string RuntimeRoot => Path.Combine(ProgramRoot, "runtime");

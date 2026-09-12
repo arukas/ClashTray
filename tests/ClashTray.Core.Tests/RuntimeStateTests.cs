@@ -534,6 +534,67 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task RuntimeConfigBuilderAddsBundledExternalUiAndRemovesRemoteUiSettings()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        Directory.CreateDirectory(paths.ExternalUiRoot);
+        await File.WriteAllTextAsync(paths.ExternalUiEntryPoint, "<!doctype html>");
+        string source = Path.Combine(paths.ConfigurationsRoot, "source.yaml");
+        string destination = Path.Combine(paths.RuntimeRoot, "mihomo", "active.yaml");
+        await File.WriteAllTextAsync(
+            source,
+            "external-ui: old-ui\nexternal-ui-name: old\nexternal-ui-url: https://example.com/ui.zip\nproxies: []\n");
+
+        try
+        {
+            await RuntimeConfigBuilder.BuildAsync(
+                source,
+                destination,
+                new AppSettings(ControllerPort: 9191),
+                externalUiPath: paths.ExternalUiRoot);
+            string generated = await File.ReadAllTextAsync(destination);
+
+            StringAssert.Contains(generated, $"external-ui: '{paths.ExternalUiRoot}'", StringComparison.Ordinal);
+            Assert.IsFalse(generated.Contains("external-ui: old-ui", StringComparison.Ordinal));
+            Assert.IsFalse(generated.Contains("external-ui-name:", StringComparison.Ordinal));
+            Assert.IsFalse(generated.Contains("external-ui-url:", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task RuntimeConfigBuilderSkipsExternalUiWhenBundledEntryPointIsMissing()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        string source = Path.Combine(paths.ConfigurationsRoot, "source.yaml");
+        string destination = Path.Combine(paths.RuntimeRoot, "mihomo", "active.yaml");
+        await File.WriteAllTextAsync(source, "external-ui: remote-ui\nproxies: []\n");
+
+        try
+        {
+            await RuntimeConfigBuilder.BuildAsync(
+                source,
+                destination,
+                new AppSettings(ControllerPort: 9191),
+                externalUiPath: paths.ExternalUiRoot);
+            string generated = await File.ReadAllTextAsync(destination);
+
+            Assert.IsFalse(generated.Contains("external-ui:", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task RuntimeConfigBuilderPreservesInlineProxyGroupWithoutAddingFilters()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));

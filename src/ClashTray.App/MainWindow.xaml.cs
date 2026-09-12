@@ -185,13 +185,21 @@ public sealed partial class MainWindow : Window
         CoreVersionText.Text = string.IsNullOrWhiteSpace(core.Version)
             ? $"ClashTray {appVersion} · Mihomo 未启动"
             : $"Mihomo {core.Version} · ClashTray {appVersion}";
-        ControllerEndpointButton.Content = core.State == CoreState.Running
+        bool dashboardAvailable = coreRunning && _runtime?.DashboardAvailable == true;
+        ControllerEndpointButton.Content = coreRunning
             ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}/ui/"
             : "核心未运行";
-        ControllerEndpointButton.IsEnabled = core.State == CoreState.Running;
+        ControllerEndpointButton.IsEnabled = coreRunning;
         ToolTipService.SetToolTip(
             ControllerEndpointButton,
-            core.State == CoreState.Running ? "在默认浏览器打开本机控制器" : "核心运行后可打开本机控制器");
+            !coreRunning
+                ? "核心运行后可打开本机控制器"
+                : dashboardAvailable
+                    ? "在默认浏览器打开 MetaCubeXD"
+                    : "MetaCubeXD 资源缺失；点击复制本机控制器地址");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
+            ControllerEndpointButton,
+            dashboardAvailable ? "打开 MetaCubeXD" : "打开或复制本机控制器地址");
         ConnectionCountText.Text = core.ConnectionCount.ToString(CultureInfo.InvariantCulture);
         TrafficText.Text = core.TrafficAvailable
             ? $"↑ {FormatRate(core.UploadBytesPerSecond)}  ↓ {FormatRate(core.DownloadBytesPerSecond)}"
@@ -273,6 +281,12 @@ public sealed partial class MainWindow : Window
 
     public void ShowError(string message)
     {
+        ShowMessage(message, InfoBarSeverity.Error);
+    }
+
+    private void ShowMessage(string message, InfoBarSeverity severity)
+    {
+        ErrorBanner.Severity = severity;
         ErrorBanner.Message = ErrorSanitizer.Sanitize(message);
         ErrorBanner.IsOpen = true;
     }
@@ -570,8 +584,18 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        Uri controllerUri = new Uri($"http://127.0.0.1:{_runtime.Settings.ControllerPort}/ui/");
-        if (!await Launcher.LaunchUriAsync(controllerUri))
+        Uri controllerUri = new Uri($"http://127.0.0.1:{_runtime.Settings.ControllerPort}/");
+        if (!_runtime.DashboardAvailable)
+        {
+            DataPackage package = new DataPackage();
+            package.SetText(controllerUri.ToString());
+            Clipboard.SetContent(package);
+            ShowMessage("MetaCubeXD 资源缺失，已复制本机控制器地址。", InfoBarSeverity.Informational);
+            return;
+        }
+
+        Uri dashboardUri = new Uri(controllerUri, "ui/");
+        if (!await Launcher.LaunchUriAsync(dashboardUri))
         {
             ShowError("无法打开默认浏览器中的本机控制器入口。");
         }

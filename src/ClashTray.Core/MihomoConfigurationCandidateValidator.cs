@@ -39,7 +39,8 @@ public sealed class MihomoConfigurationCandidateValidator : IConfigurationCandid
                 candidatePath,
                 runtimeCandidatePath,
                 _settingsProvider(),
-                cancellationToken);
+                externalUiPath: _paths.ExternalUiRoot,
+                cancellationToken: cancellationToken);
 
             await using MihomoProcessManager validator = new MihomoProcessManager();
             bool valid = await validator.ValidateAsync(

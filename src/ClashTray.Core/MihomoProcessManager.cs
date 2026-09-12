@@ -36,13 +36,31 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         _stopTimeout = stopTimeout;
     }
 
-    public async Task<bool> ValidateAsync(string executablePath, string configurationPath, CancellationToken cancellationToken = default)
-        => await ValidateAsync(executablePath, configurationPath, workingDirectory: null, cancellationToken);
+    public Task<bool> ValidateAsync(string executablePath, string configurationPath, CancellationToken cancellationToken = default)
+        => ValidateAsync(
+            executablePath,
+            configurationPath,
+            workingDirectory: null,
+            safePaths: null,
+            cancellationToken: cancellationToken);
+
+    public Task<bool> ValidateAsync(
+        string executablePath,
+        string configurationPath,
+        string? workingDirectory,
+        CancellationToken cancellationToken = default)
+        => ValidateAsync(
+            executablePath,
+            configurationPath,
+            workingDirectory,
+            safePaths: null,
+            cancellationToken: cancellationToken);
 
     public async Task<bool> ValidateAsync(
         string executablePath,
         string configurationPath,
         string? workingDirectory,
+        string? safePaths,
         CancellationToken cancellationToken = default)
     {
         await _operationLock.WaitAsync(cancellationToken);
@@ -58,6 +76,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
                     executablePath,
                     $"-t -f \"{configurationPath}\"",
                     workingDirectory,
+                    safePaths,
                     timeout.Token);
                 State = result == 0 ? CoreState.Stopped : CoreState.Failed;
                 OnStateChanged();
@@ -88,10 +107,23 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
     }
 
+    public Task StartAsync(
+        string executablePath,
+        string configurationPath,
+        string workingDirectory,
+        CancellationToken cancellationToken = default)
+        => StartAsync(
+            executablePath,
+            configurationPath,
+            workingDirectory,
+            safePaths: null,
+            cancellationToken: cancellationToken);
+
     public async Task StartAsync(
         string executablePath,
         string configurationPath,
         string workingDirectory,
+        string? safePaths,
         CancellationToken cancellationToken = default)
     {
         await _operationLock.WaitAsync(cancellationToken);
@@ -118,7 +150,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             DisposeProcess(exitedProcess, exitedLifetime);
             State = CoreState.Starting;
             OnStateChanged();
-            StartProcess(executablePath, configurationPath, workingDirectory);
+            StartProcess(executablePath, configurationPath, workingDirectory, safePaths);
         }
         finally
         {
@@ -139,10 +171,23 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
     }
 
+    public Task RestartAsync(
+        string executablePath,
+        string configurationPath,
+        string workingDirectory,
+        CancellationToken cancellationToken = default)
+        => RestartAsync(
+            executablePath,
+            configurationPath,
+            workingDirectory,
+            safePaths: null,
+            cancellationToken: cancellationToken);
+
     public async Task RestartAsync(
         string executablePath,
         string configurationPath,
         string workingDirectory,
+        string? safePaths,
         CancellationToken cancellationToken = default)
     {
         await _operationLock.WaitAsync(cancellationToken);
@@ -154,7 +199,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             cancellationToken.ThrowIfCancellationRequested();
             State = CoreState.Starting;
             OnStateChanged();
-            StartProcess(executablePath, configurationPath, workingDirectory);
+            StartProcess(executablePath, configurationPath, workingDirectory, safePaths);
         }
         finally
         {
@@ -246,7 +291,11 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
     }
 
-    private void StartProcess(string executablePath, string configurationPath, string workingDirectory)
+    private void StartProcess(
+        string executablePath,
+        string configurationPath,
+        string workingDirectory,
+        string? safePaths)
     {
         Directory.CreateDirectory(workingDirectory);
         ProcessStartInfo startInfo = new ProcessStartInfo
@@ -259,6 +308,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+        ApplySafePaths(startInfo, safePaths);
         Process process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         CancellationTokenSource lifetime = new CancellationTokenSource();
         process.Exited += ProcessExited;
@@ -317,6 +367,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         string executablePath,
         string arguments,
         string? workingDirectory,
+        string? safePaths,
         CancellationToken cancellationToken)
     {
         ProcessStartInfo startInfo = new ProcessStartInfo
@@ -332,6 +383,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         {
             startInfo.WorkingDirectory = workingDirectory;
         }
+        ApplySafePaths(startInfo, safePaths);
 
         using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("Unable to start Mihomo validation.");
         Task standardOutput = DrainValidationOutputAsync(process.StandardOutput);
@@ -377,6 +429,14 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         char[] buffer = new char[8 * 1024];
         while (await reader.ReadAsync(buffer.AsMemory(), CancellationToken.None) > 0)
         {
+        }
+    }
+
+    private static void ApplySafePaths(ProcessStartInfo startInfo, string? safePaths)
+    {
+        if (!string.IsNullOrWhiteSpace(safePaths))
+        {
+            startInfo.Environment["SAFE_PATHS"] = safePaths;
         }
     }
 
