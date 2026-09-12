@@ -15,19 +15,44 @@ public static class ManagedCoreVerifier
     private const long MaxExecutableBytes = 128L * 1024 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public static async Task ValidateAsync(
+    public static Task ValidateAsync(
         AppPaths paths,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
-        string executablePath = paths.ManagedCoreExecutable;
-        if (!CorePathPolicy.IsManagedCorePath(paths, executablePath) || !File.Exists(executablePath))
+        return ValidateFilesAsync(
+            paths,
+            paths.ManagedCoreExecutable,
+            paths.ManagedCoreMetadata,
+            requireExactManagedPaths: true,
+            cancellationToken);
+    }
+
+    internal static async Task ValidateFilesAsync(
+        AppPaths paths,
+        string executablePath,
+        string metadataPath,
+        bool requireExactManagedPaths = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        if (!IsCoreArtifactPath(paths, executablePath)
+            || (requireExactManagedPaths
+                && !string.Equals(
+                    Path.GetFullPath(executablePath),
+                    Path.GetFullPath(paths.ManagedCoreExecutable),
+                    StringComparison.OrdinalIgnoreCase))
+            || !File.Exists(executablePath))
         {
             throw new InvalidDataException("受管 Mihomo 核心路径不存在或包含不受信任的重解析点。");
         }
 
-        string metadataPath = paths.ManagedCoreMetadata;
-        if (!IsManagedMetadataPath(paths, metadataPath)
+        if (!IsCoreArtifactPath(paths, metadataPath)
+            || (requireExactManagedPaths
+                && !string.Equals(
+                    Path.GetFullPath(metadataPath),
+                    Path.GetFullPath(paths.ManagedCoreMetadata),
+                    StringComparison.OrdinalIgnoreCase))
             || !File.Exists(metadataPath)
             || File.GetAttributes(metadataPath).HasFlag(FileAttributes.ReparsePoint))
         {
@@ -110,13 +135,17 @@ public static class ManagedCoreVerifier
     private static bool IsSha256(string value) =>
         value.Length == 64 && value.All(Uri.IsHexDigit);
 
-    private static bool IsManagedMetadataPath(AppPaths paths, string path)
+    private static bool IsCoreArtifactPath(AppPaths paths, string path)
     {
         try
         {
             string fullPath = Path.GetFullPath(path);
-            string expected = Path.Combine(paths.CoreRoot, "mihomo.manifest.json");
-            return string.Equals(fullPath, Path.GetFullPath(expected), StringComparison.OrdinalIgnoreCase)
+            string? directory = Path.GetDirectoryName(fullPath);
+            return directory is not null
+                && string.Equals(
+                    directory,
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(paths.CoreRoot)),
+                    StringComparison.OrdinalIgnoreCase)
                 && !CorePathPolicy.HasReparsePointOnPath(fullPath, paths.ProgramRoot);
         }
         catch (ArgumentException)

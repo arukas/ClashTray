@@ -146,6 +146,66 @@ public sealed class CoreUpdater
         }
     }
 
+    public async Task<string> RollbackLastInstallAsync(CancellationToken cancellationToken = default)
+    {
+        _paths.EnsureProgramDataDirectories(_managedUserSid);
+
+        string targetPath = _paths.ManagedCoreExecutable;
+        string metadataPath = _paths.ManagedCoreMetadata;
+        string backupPath = targetPath + ".previous";
+        string backupMetadataPath = metadataPath + ".previous";
+        if (!File.Exists(targetPath)
+            || !File.Exists(metadataPath)
+            || !File.Exists(backupPath)
+            || !File.Exists(backupMetadataPath))
+        {
+            throw new InvalidOperationException("没有可用的 Mihomo 核心回滚版本。");
+        }
+
+        await ManagedCoreVerifier.ValidateFilesAsync(
+            _paths,
+            backupPath,
+            backupMetadataPath,
+            cancellationToken: cancellationToken);
+
+        string displacedPath = targetPath + ".failed";
+        string displacedMetadataPath = metadataPath + ".failed";
+        bool coreSwapped = false;
+        bool metadataSwapped = false;
+        try
+        {
+            ReplaceFromBackup(backupPath, targetPath, displacedPath);
+            coreSwapped = true;
+            ReplaceFromBackup(backupMetadataPath, metadataPath, displacedMetadataPath);
+            metadataSwapped = true;
+            await ManagedCoreVerifier.ValidateAsync(_paths, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(_managedUserSid))
+            {
+                WindowsPathSecurity.ProtectManagedCoreFile(targetPath, _managedUserSid);
+                WindowsPathSecurity.ProtectManagedCoreFile(metadataPath, _managedUserSid);
+            }
+
+            TryDelete(displacedPath);
+            TryDelete(displacedMetadataPath);
+            return targetPath;
+        }
+        catch
+        {
+            if (metadataSwapped)
+            {
+                RestoreSwappedFile(metadataPath, backupMetadataPath, displacedMetadataPath);
+            }
+
+            if (coreSwapped)
+            {
+                RestoreSwappedFile(targetPath, backupPath, displacedPath);
+            }
+
+            throw;
+        }
+    }
+
     public static void ValidateManifest(CoreUpdateManifest manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
@@ -179,6 +239,37 @@ public sealed class CoreUpdater
         else
         {
             File.Move(candidatePath, targetPath);
+        }
+    }
+
+    private static void ReplaceFromBackup(string backupPath, string targetPath, string displacedPath)
+    {
+        TryDelete(displacedPath);
+        if (File.Exists(targetPath))
+        {
+            File.Replace(backupPath, targetPath, displacedPath, ignoreMetadataErrors: true);
+        }
+        else
+        {
+            File.Move(backupPath, targetPath);
+        }
+    }
+
+    private static void RestoreSwappedFile(string targetPath, string backupPath, string displacedPath)
+    {
+        if (!File.Exists(displacedPath))
+        {
+            return;
+        }
+
+        TryDelete(backupPath);
+        if (File.Exists(targetPath))
+        {
+            File.Replace(displacedPath, targetPath, backupPath, ignoreMetadataErrors: true);
+        }
+        else
+        {
+            File.Move(displacedPath, targetPath);
         }
     }
 

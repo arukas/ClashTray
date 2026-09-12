@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Diagnostics;
+using System.Text;
 using ClashTray.Contracts;
 using ClashTray.Core;
 
@@ -41,6 +42,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 ServiceCommand.StopCore => await StopCoreAsync(request, cancellationToken),
                 ServiceCommand.RestartCore => await RestartCoreAsync(request, cancellationToken),
                 ServiceCommand.InstallCore => await InstallCoreAsync(request, cancellationToken),
+                ServiceCommand.RollbackCore => await RollbackCoreAsync(request, cancellationToken),
                 ServiceCommand.EnableTun => await SetTunAsync(request, enabled: true, cancellationToken),
                 ServiceCommand.DisableTun => await SetTunAsync(request, enabled: false, cancellationToken),
                 _ => Failure(request, "未知服务命令。")
@@ -182,12 +184,18 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
 
         ServiceCoreUpdatePayload payload = Deserialize<ServiceCoreUpdatePayload>(request.Payload);
-
+        bool installed = false;
         try
         {
             CoreUpdateManifest manifest = new(payload.Version, payload.DownloadUri, payload.Sha256);
             CoreUpdater.ValidateManifest(manifest);
             string path = await _coreUpdater.DownloadAndInstallAsync(manifest, cancellationToken);
+            installed = true;
+            if (!await ValidateInstalledCoreAsync(cancellationToken))
+            {
+                throw new InvalidDataException("新 Mihomo 核心未通过最小配置健康检查。");
+            }
+
             return new ServiceResponse(
                 request.RequestId,
                 true,
@@ -195,10 +203,128 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 Payload: path,
                 Core: _processManager.State);
         }
-        catch (Exception exception) when (exception is ArgumentException or InvalidDataException or HttpRequestException or IOException)
+        catch (OperationCanceledException exception)
         {
-            return Failure(request, $"核心安装失败：{exception.Message}", _processManager.State);
+            if (installed)
+            {
+                string? rollbackError = await TryRollbackInstalledCoreAsync();
+                if (rollbackError is not null)
+                {
+                    throw new IOException($"核心更新取消，且自动回滚失败：{rollbackError}", exception);
+                }
+            }
+
+            throw;
         }
+        catch (Exception exception) when (exception is ArgumentException
+            or InvalidDataException
+            or HttpRequestException
+            or IOException
+            or InvalidOperationException
+            or UnauthorizedAccessException
+            or System.ComponentModel.Win32Exception)
+        {
+            string message = $"核心安装失败：{exception.Message}";
+            if (installed)
+            {
+                string? rollbackError = await TryRollbackInstalledCoreAsync();
+                message = rollbackError is null
+                    ? $"{message} 已自动回滚到上一个核心。"
+                    : $"{message}；自动回滚失败：{rollbackError}";
+            }
+
+            return Failure(request, message, _processManager.State);
+        }
+    }
+
+    private async Task<ServiceResponse> RollbackCoreAsync(ServiceRequest request, CancellationToken cancellationToken)
+    {
+        if (_processManager.State == CoreState.Running)
+        {
+            return Failure(request, "请先停止 Mihomo 核心再回滚。", CoreState.Running);
+        }
+
+        try
+        {
+            string path = await _coreUpdater.RollbackLastInstallAsync(cancellationToken);
+            await _processManager.StopAsync(CancellationToken.None);
+            return new ServiceResponse(
+                request.RequestId,
+                true,
+                _tunState,
+                Payload: path,
+                Core: _processManager.State);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
+            or InvalidDataException
+            or IOException
+            or UnauthorizedAccessException)
+        {
+            return Failure(request, $"核心回滚失败：{exception.Message}", _processManager.State);
+        }
+    }
+
+    private async Task<bool> ValidateInstalledCoreAsync(CancellationToken cancellationToken)
+    {
+        string runtimeDirectory = Path.Combine(_paths.RuntimeRoot, "mihomo");
+        Directory.CreateDirectory(runtimeDirectory);
+        string configurationPath = Path.Combine(
+            runtimeDirectory,
+            $"core-healthcheck-{Guid.NewGuid():N}.yaml");
+        try
+        {
+            await File.WriteAllTextAsync(
+                configurationPath,
+                """
+                mixed-port: 7890
+                mode: rule
+                log-level: silent
+                external-controller: 127.0.0.1:19090
+                secret: ''
+                proxies: []
+                """,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                cancellationToken);
+            return await _processManager.ValidateAsync(
+                _paths.ManagedCoreExecutable,
+                configurationPath,
+                runtimeDirectory,
+                cancellationToken);
+        }
+        finally
+        {
+            if (File.Exists(configurationPath))
+            {
+                File.Delete(configurationPath);
+            }
+        }
+    }
+
+    private async Task<string?> TryRollbackInstalledCoreAsync()
+    {
+        string? error = null;
+        try
+        {
+            await _coreUpdater.RollbackLastInstallAsync(CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
+            or InvalidDataException
+            or IOException
+            or UnauthorizedAccessException)
+        {
+            error = exception.Message;
+        }
+
+        try
+        {
+            await _processManager.StopAsync(CancellationToken.None);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            error = error is null ? exception.Message : $"{error}；{exception.Message}";
+        }
+
+        return error;
     }
 
     private async Task<ServiceResponse> StopCoreAsync(ServiceRequest request, CancellationToken cancellationToken)

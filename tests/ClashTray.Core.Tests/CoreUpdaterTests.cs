@@ -1,12 +1,15 @@
 using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace ClashTray.Core.Tests;
 
 [TestClass]
 public sealed class CoreUpdaterTests
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     [TestMethod]
     public async Task CoreUpdaterAcceptsVerifiedWindowsAmd64Executable()
     {
@@ -97,6 +100,47 @@ public sealed class CoreUpdaterTests
     }
 
     [TestMethod]
+    public async Task CoreUpdaterRollsBackToPreviousVerifiedInstall()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        string archivePath = Path.Combine(root, "mihomo.zip");
+
+        try
+        {
+            string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
+            using (ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Create))
+            {
+                await archive.CreateEntryFromFileAsync(executablePath, "mihomo.exe");
+            }
+
+            byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
+            using MutableArchiveHandler handler = new MutableArchiveHandler(archiveBytes);
+            using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
+            CoreUpdater updater = new CoreUpdater(paths, httpClient);
+
+            await updater.DownloadAndInstallAsync(CreateManifest(archiveBytes) with { Version = "v1" });
+            await updater.DownloadAndInstallAsync(CreateManifest(archiveBytes) with { Version = "v2" });
+
+            await updater.RollbackLastInstallAsync();
+
+            ManagedCoreMetadata metadata = JsonSerializer.Deserialize<ManagedCoreMetadata>(
+                await File.ReadAllTextAsync(paths.ManagedCoreMetadata),
+                JsonOptions)
+                ?? throw new InvalidDataException("Rollback metadata is missing.");
+            Assert.AreEqual("v1", metadata.Version);
+            await ManagedCoreVerifier.ValidateAsync(paths);
+            Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable + ".previous"));
+            Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable + ".failed"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task CoreUpdaterRefusesToOverwriteUnknownCore()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
@@ -157,6 +201,22 @@ public sealed class CoreUpdaterTests
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent(_archiveBytes)
+            });
+    }
+
+    private sealed class MutableArchiveHandler : HttpMessageHandler
+    {
+        public MutableArchiveHandler(byte[] archiveBytes)
+        {
+            ArchiveBytes = archiveBytes;
+        }
+
+        public byte[] ArchiveBytes { get; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(ArchiveBytes)
             });
     }
 

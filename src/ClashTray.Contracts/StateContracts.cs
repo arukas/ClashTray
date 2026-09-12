@@ -175,6 +175,7 @@ public enum ServiceCommand
     StopCore,
     RestartCore,
     InstallCore,
+    RollbackCore,
     EnableTun,
     DisableTun
 }

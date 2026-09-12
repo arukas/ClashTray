@@ -986,6 +986,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             await StopCoreAsync(cancellationToken);
         }
 
+        bool installed = false;
+        bool rolledBack = false;
         try
         {
             ServiceCoreUpdatePayload payload = new(
@@ -1001,24 +1003,84 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 throw new InvalidOperationException(response.Error ?? "ClashTray 服务无法安装 Mihomo 核心。");
             }
 
+            installed = true;
             string path = response.Payload ?? _coreDiscovery.ManagedExecutablePath;
             _snapshot = _snapshot with { Core = _snapshot.Core with { Version = FindCoreVersion(), ErrorMessage = null }, ErrorMessage = null };
             Publish();
             if (wasRunning)
             {
                 await StartCoreAsync(cancellationToken);
+                if (!IsCoreHealthy())
+                {
+                    await StopCoreAsync(CancellationToken.None);
+                    await RollbackCoreUpdateAsync(CancellationToken.None);
+                    rolledBack = true;
+                    _snapshot = _snapshot with
+                    {
+                        Core = _snapshot.Core with
+                        {
+                            Version = FindCoreVersion(),
+                            ErrorMessage = "新核心健康检查失败，已自动回滚。"
+                        },
+                        ErrorMessage = "新核心健康检查失败，已自动回滚。"
+                    };
+                    Publish();
+                    await StartCoreAsync(CancellationToken.None);
+                    if (!IsCoreHealthy())
+                    {
+                        throw new InvalidOperationException("核心更新失败，且回滚后的旧核心也未能恢复。");
+                    }
+
+                    _logBuffer.Add(new LogEntry(
+                        DateTimeOffset.UtcNow,
+                        "ClashTray",
+                        "warning",
+                        "新核心健康检查失败，已自动回滚并恢复旧核心。"));
+                    _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
+                    Publish();
+                    throw new InvalidOperationException("核心更新健康检查失败，已自动回滚并恢复旧核心。");
+                }
             }
 
             return path;
         }
         catch
         {
-            if (wasRunning)
+            if (installed && !rolledBack)
+            {
+                if (_snapshot.Core.State == CoreState.Running || _api is not null || _usingServiceCore)
+                {
+                    await StopCoreAsync(CancellationToken.None);
+                }
+
+                await RollbackCoreUpdateAsync(CancellationToken.None);
+                _snapshot = _snapshot with
+                {
+                    Core = _snapshot.Core with { Version = FindCoreVersion() }
+                };
+                Publish();
+            }
+
+            if (wasRunning && !IsCoreHealthy())
             {
                 await StartCoreAsync(CancellationToken.None);
             }
 
             throw;
+        }
+    }
+
+    private bool IsCoreHealthy() =>
+        _snapshot.Core.State == CoreState.Running && _coreHealthConfirmed;
+
+    private async Task RollbackCoreUpdateAsync(CancellationToken cancellationToken)
+    {
+        ServiceResponse response = await _servicePipeClient.SendAsync(
+            ServiceCommand.RollbackCore,
+            cancellationToken: cancellationToken);
+        if (!response.Succeeded)
+        {
+            throw new InvalidOperationException(response.Error ?? "ClashTray 服务无法回滚 Mihomo 核心。");
         }
     }
 
