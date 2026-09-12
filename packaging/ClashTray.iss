@@ -6,6 +6,9 @@
 #ifndef PackageVersion
   #define PackageVersion "0.2.0"
 #endif
+#ifndef PackageFileVersion
+  #define PackageFileVersion "0.2.0.0"
+#endif
 #ifndef Variant
   #define Variant "Full"
 #endif
@@ -45,15 +48,15 @@ CloseApplications=no
 RestartApplications=no
 SetupLogging=yes
 OutputDir={#OutputDirectory}
-OutputBaseFilename=ClashTray-Setup-{#Variant}
+OutputBaseFilename=ClashTray-{#PackageVersion}-win-x64-{#Variant}
 SetupIconFile={#RepoRoot}\src\ClashTray.App\Assets\App\ClashTray.ico
 Compression=lzma2/max
 SolidCompression=yes
-VersionInfoVersion={#PackageVersion}
+VersionInfoVersion={#PackageFileVersion}
 VersionInfoCompany=ClashTray Project
 VersionInfoDescription=ClashTray Mihomo control center installer
 VersionInfoProductName=ClashTray
-VersionInfoProductVersion={#PackageVersion}
+VersionInfoProductVersion={#PackageFileVersion}
 VersionInfoCopyright=Copyright (C) ClashTray Project
 MinVersion=10.0.17763
 

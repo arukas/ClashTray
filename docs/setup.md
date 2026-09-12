@@ -42,17 +42,17 @@ The current release path is a set of Windows x64 EXE installers built by Inno Se
 
 The output is:
 
-- `packaging\out\ClashTray-Setup-Full.exe`: one Inno Setup installer containing the shared self-contained App/Service payload, official Mihomo v1.19.30 x64 core, and its license notice.
-- `packaging\out\ClashTray-Setup-Full.sha256`: SHA-256 sidecar file.
-- `packaging\out\ClashTray-Setup-NoCET.exe`: a self-contained Full-equivalent installer built with `CETCompat=false` for older-patched Windows 10 22H2.
-- `packaging\out\ClashTray-Setup-NoCET.sha256`: SHA-256 sidecar file for the compatibility installer.
-- `packaging\out\ClashTray-Setup-Mini.exe`: a framework-dependent installer without the Mihomo core; the installer checks for the x64 .NET 10 Desktop Runtime and Windows App Runtime 2.4+.
-- `packaging\out\ClashTray-Setup-Mini.sha256`: SHA-256 sidecar file for the Mini installer.
+- `packaging\out\ClashTray-0.2.0-win-x64-Full.exe`: one Inno Setup installer containing the shared self-contained App/Service payload, official Mihomo v1.19.30 x64 core, and its license notice.
+- `packaging\out\ClashTray-0.2.0-win-x64-Full.sha256`: SHA-256 sidecar file.
+- `packaging\out\ClashTray-0.2.0-win-x64-NoCET.exe`: a self-contained Full-equivalent installer built with `CETCompat=false` for older-patched Windows 10 22H2.
+- `packaging\out\ClashTray-0.2.0-win-x64-NoCET.sha256`: SHA-256 sidecar file for the compatibility installer.
+- `packaging\out\ClashTray-0.2.0-win-x64-Mini.exe`: a framework-dependent installer without the Mihomo core; the installer checks for the x64 .NET 10 Desktop Runtime and Windows App Runtime 2.4+.
+- `packaging\out\ClashTray-0.2.0-win-x64-Mini.sha256`: SHA-256 sidecar file for the Mini installer.
 
 The Inno Setup installer requests administrator approval. Double-clicking it should show the UAC prompt; the installed desktop app subsequently runs with ordinary user permissions. If Explorer does not show a “Run as administrator” context-menu item, launch it from any PowerShell window with:
 
 ```powershell
-Start-Process -FilePath 'D:\ClashTray\packaging\out\ClashTray-Setup-Full.exe' -Verb RunAs
+Start-Process -FilePath 'D:\ClashTray\packaging\out\ClashTray-0.2.0-win-x64-Full.exe' -Verb RunAs
 ```
 
 After approving UAC, the installer places files under `C:\Program Files\ClashTray`, installs the bundled core under `%PROGRAMDATA%\ClashTray\core`, registers and starts `ClashTrayService`, creates a Start Menu shortcut, starts the tray app, and writes the normal Windows uninstall entry. The service pipe is ACL-restricted to the installing user, LocalSystem, and Administrators.
@@ -60,7 +60,7 @@ After approving UAC, the installer places files under `C:\Program Files\ClashTra
 For a first manual verification:
 
 1. Quit any running ClashTray instance from its tray menu.
-2. Run `ClashTray-Setup-Full.exe` and approve the UAC prompt.
+2. Run `ClashTray-0.2.0-win-x64-Full.exe` and approve the UAC prompt.
 3. Start **ClashTray** from the Start Menu.
 4. Confirm the tray icon appears, open the panel, and verify that TUN no longer reports “service unavailable”.
 5. The installer already provides Mihomo v1.19.30; import a YAML configuration and test start/stop, mode switching, System Proxy, and TUN. Use NoCET only when the normal Full installer cannot start on an older-patched Windows 10 22H2 system.
@@ -76,7 +76,7 @@ Unsigned EXE builds do not need an MSIX certificate, but Windows may show an unk
 
 ## Legacy MSIX files
 
-`Build-MSIX.ps1` and `packaging\ClashTray.Package` are retained as historical packaging material. They are not part of the current install path. Do not use the old unsigned `.msix` for manual verification; use `Build-EXE.ps1` and `ClashTray-Setup-Full.exe` instead.
+`Build-MSIX.ps1` and `packaging\ClashTray.Package` are retained as historical packaging material. They are not part of the current install path. Do not use the old unsigned `.msix` for manual verification; use `Build-EXE.ps1` and the versioned Full installer instead.
 
 ## Release safety
 
@@ -92,4 +92,4 @@ The recommended release path is `packaging/Build-EXE.ps1`. It publishes App and 
 .\packaging\Build-EXE.ps1 -Variant Mini -PackageVersion 0.2.0
 ```
 
-`Full` is self-contained and includes the pinned, SHA-256 verified Mihomo core. `NoCET` is the same bundled-core shape with `CETCompat=false` for older-patched Windows 10 22H2. `Mini` omits the core and uses framework-dependent App and Service payloads; its installer requires the x64 .NET 10 Desktop Runtime and Windows App Runtime 2.4+ and aborts before installation when either is missing. Outputs are named `ClashTray-Setup-Full.exe`, `ClashTray-Setup-NoCET.exe`, and `ClashTray-Setup-Mini.exe`, with a matching `.sha256` sidecar. See [release.md](release.md) for the release matrix and checks.
+`Full` is self-contained and includes the pinned, SHA-256 verified Mihomo core. `NoCET` is the same bundled-core shape with `CETCompat=false` for older-patched Windows 10 22H2. `Mini` omits the core and uses framework-dependent App and Service payloads; its installer requires the x64 .NET 10 Desktop Runtime and Windows App Runtime 2.4+ and aborts before installation when either is missing. Outputs are named `ClashTray-<version>-win-x64-Full.exe`, `ClashTray-<version>-win-x64-NoCET.exe`, and `ClashTray-<version>-win-x64-Mini.exe`, with a matching `.sha256` sidecar; pre-release suffixes remain in the file name. See [release.md](release.md) for the release matrix and checks.

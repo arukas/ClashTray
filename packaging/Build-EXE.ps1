@@ -3,7 +3,7 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
 
-    [ValidatePattern('^\d+\.\d+\.\d+(\.\d+)?$')]
+    [ValidatePattern('^\d+\.\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?$')]
     [string]$PackageVersion = '0.2.0',
 
     [ValidateSet('Full', 'NoCET', 'Mini')]
@@ -16,6 +16,12 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$packageCoreVersion = ($PackageVersion -split '-', 2)[0]
+$packageFileVersion = if (($packageCoreVersion -split '\.').Count -eq 3) {
+    "$packageCoreVersion.0"
+} else {
+    $packageCoreVersion
+}
 $includeCore = $Variant -in @('Full', 'NoCET')
 $selfContained = $Variant -ne 'Mini'
 $disableCet = $Variant -eq 'NoCET'
@@ -379,6 +385,7 @@ $appPublishArguments = @(
     '--self-contained', $selfContained.ToString().ToLowerInvariant(),
     '--output', $appPublish,
     '--property:Platform=x64',
+    "--property:Version=$PackageVersion",
     '--property:WindowsPackageType=None',
     "--property:WindowsAppSDKSelfContained=$($selfContained.ToString().ToLowerInvariant())",
     '--property:PublishReadyToRun=false'
@@ -400,7 +407,8 @@ $servicePublishArguments = @(
     '--runtime', 'win-x64',
     '--self-contained', $selfContained.ToString().ToLowerInvariant(),
     '--output', $servicePublish,
-    '--property:Platform=x64'
+    '--property:Platform=x64',
+    "--property:Version=$PackageVersion"
 )
 if ($disableCet) {
     $servicePublishArguments += '--property:CETCompat=false'
@@ -437,7 +445,7 @@ foreach ($requiredFile in $requiredPayloadFiles) {
     }
 }
 
-$artifactStem = "ClashTray-Setup-$Variant"
+$artifactStem = "ClashTray-$PackageVersion-win-x64-$Variant"
 $installerPath = Join-Path $outputRoot "$artifactStem.exe"
 $hashPath = Join-Path $outputRoot "$artifactStem.sha256"
 if (Test-Path -LiteralPath $installerPath) {
@@ -449,6 +457,7 @@ if (Test-Path -LiteralPath $hashPath) {
 $includeCoreDefine = if ($includeCore) { '1' } else { '0' }
 $innoArguments = @(
     "/DPackageVersion=$PackageVersion",
+    "/DPackageFileVersion=$packageFileVersion",
     "/DVariant=$Variant",
     "/DPayloadRoot=$payloadRoot",
     "/DOutputDirectory=$outputRoot",

@@ -8,17 +8,19 @@ ClashTray 的当前发布入口是 `packaging/Build-EXE.ps1`。脚本先发布 A
 
 | `-Variant` | App / Service | Mihomo | 运行时要求 | 产物 |
 | --- | --- | --- | --- | --- |
-| `Full` | self-contained | 内置，固定版本 + SHA-256 | Windows 10/11 x64 | `ClashTray-Setup-Full.exe` |
-| `NoCET` | self-contained，CETCompat=false | 内置，固定版本 + SHA-256 | 补丁较旧的 Windows 10 22H2 x64 | `ClashTray-Setup-NoCET.exe` |
-| `Mini` | framework-dependent，Windows App SDK runtime 外置 | 不内置；可在应用内验证更新 | .NET 10 Desktop Runtime + Windows App Runtime 2.4+（安装器会检查） | `ClashTray-Setup-Mini.exe` |
+| `Full` | self-contained | 内置，固定版本 + SHA-256 | Windows 10/11 x64 | `ClashTray-<version>-win-x64-Full.exe` |
+| `NoCET` | self-contained，CETCompat=false | 内置，固定版本 + SHA-256 | 补丁较旧的 Windows 10 22H2 x64 | `ClashTray-<version>-win-x64-NoCET.exe` |
+| `Mini` | framework-dependent，Windows App SDK runtime 外置 | 不内置；可在应用内验证更新 | .NET 10 Desktop Runtime + Windows App Runtime 2.4+（安装器会检查） | `ClashTray-<version>-win-x64-Mini.exe` |
 
 `Full` 是默认和推荐版本。`NoCET` 是为补丁较旧、无法启动 .NET 10 的 Windows 10 22H2 准备的自包含兼容包；它通过 `CETCompat=false` 关闭 .NET 进程的 CET 兼容标志，因此会减少一层硬件控制流防护。`Mini` 用于降低下载体积，安装时要求 x64 .NET 10 Desktop Runtime 和 Windows App Runtime 2.4+，缺少时会提示并退出。Mini 不内置核心，但不会清空已有 `%PROGRAMDATA%\ClashTray\core`，可以在应用内通过经过验证的核心更新流程补齐。三种变体都内置同一份固定版本 MetaCubeXD 静态资源，安装到 `%PROGRAMDATA%\ClashTray\ui`，并由运行配置通过 `external-ui` 提供本机 `/ui/` 入口；构建脚本会校验 `packaging/metacubexd-release.json` 中的官方压缩包 SHA-256。WinUI 3 仍是桌面 UI 的必要依赖；Mini 只把 .NET / Windows App SDK runtime 改为外置，不会删除客户端 UI。所有变体的安装器由 Inno Setup 7 使用 LZMA2 solid compression 生成。
+
+正式或预发布版本都使用版本化文件名，例如 `ClashTray-0.2.0-alpha.3-win-x64-Full.exe`。`release.yml` 会在构建前读取仓库中固定的 Mihomo 与 MetaCubeXD 清单，生成随 Release 上传的 `release-manifest.json`；这样每次发布的第三方组件版本、下载来源和校验值都可追溯，不依赖运行时的 `latest`。
 
 Full 和 NoCET 的 App 与 Service 共用同一个 self-contained runtime 目录；Mini 使用 framework-dependent 发布。Inno Setup 配置 `Compression=lzma2/max` 与 `SolidCompression=yes`，对合并后的 App payload 和可选 Core payload 做整体压缩。安装器旁生成 SHA-256 sidecar：
 
 ```powershell
 .\packaging\Build-EXE.ps1 -Variant Full -PackageVersion 0.2.0 -OutputDirectory .\packaging\out\0.2.0\full
-Get-FileHash .\packaging\out\0.2.0\full\ClashTray-Setup-Full.exe -Algorithm SHA256
+Get-FileHash .\packaging\out\0.2.0\full\ClashTray-0.2.0-win-x64-Full.exe -Algorithm SHA256
 ```
 
 ## 发布前检查
