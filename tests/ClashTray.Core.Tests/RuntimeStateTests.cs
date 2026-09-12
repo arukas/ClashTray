@@ -230,6 +230,33 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task InitializeSurfacesRecoveredSettingsWarning()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        await File.WriteAllTextAsync(paths.SettingsFile, "{\"logLevel\":\"trace\"}");
+        FakeSystemProxyController proxy = new FakeSystemProxyController(SystemProxyState.Off);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, null, proxy);
+
+        try
+        {
+            await runtime.InitializeAsync();
+
+            StringAssert.Contains(runtime.Snapshot.ErrorMessage, "设置文件已损坏", StringComparison.Ordinal);
+            Assert.IsFalse(File.Exists(paths.SettingsFile));
+            Assert.AreEqual(1, Directory.GetFiles(paths.LocalRoot, "settings.json.corrupt-*").Length);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task SwitchingProxyOptionDisconnectsOnlyAfterSuccessfulSelection()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
@@ -754,8 +781,8 @@ public sealed class RuntimeStateTests
 
         public AppSettings Settings { get; private set; }
 
-        public Task<AppSettings> LoadAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(Settings);
+        public Task<SettingsLoadResult> LoadWithStatusAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new SettingsLoadResult(Settings, SettingsLoadStatus.Loaded, null));
 
         public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
         {

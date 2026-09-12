@@ -107,7 +107,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        _settings = await _settingsStore.LoadAsync(cancellationToken);
+        SettingsLoadResult settingsLoad = await _settingsStore.LoadWithStatusAsync(cancellationToken);
+        _settings = settingsLoad.Settings;
         IReadOnlyList<ConfigurationProfile> storedConfigurations = await _configurationStore.ListAsync(cancellationToken);
         string? activeConfigurationId = _settings.ActiveConfigurationId
             ?? storedConfigurations.FirstOrDefault(configuration => configuration.IsActive)?.Id;
@@ -187,6 +188,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _snapshot.Core.State))
         {
             await StartCoreAsync(cancellationToken);
+        }
+
+        if (settingsLoad.Status is SettingsLoadStatus.Recovered
+            or SettingsLoadStatus.ReadFailed
+            or SettingsLoadStatus.RecoveryFailed)
+        {
+            _snapshot = _snapshot with { ErrorMessage = settingsLoad.Message };
+            Publish();
         }
     }
 

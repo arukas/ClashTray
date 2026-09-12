@@ -28,6 +28,30 @@ public sealed class SettingsStoreTests
     }
 
     [TestMethod]
+    public async Task CorruptSettingsAreMovedAsideWithRecoveryStatus()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        await File.WriteAllTextAsync(paths.SettingsFile, "{\"httpPort\":0}");
+
+        try
+        {
+            SettingsLoadResult result = await new SettingsStore(paths).LoadWithStatusAsync();
+
+            Assert.AreEqual(SettingsLoadStatus.Recovered, result.Status);
+            Assert.AreEqual(new AppSettings(), result.Settings);
+            string[] backups = Directory.GetFiles(paths.LocalRoot, "settings.json.corrupt-*");
+            Assert.AreEqual(1, backups.Length);
+            Assert.IsFalse(File.Exists(paths.SettingsFile));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task SaveRejectsInvalidPersistedValues()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));

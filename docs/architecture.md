@@ -16,6 +16,8 @@ System Proxy changes are reversible. The original registry values are saved befo
 
 While the core is running, changes to ports, the controller port, TCP concurrent mode, or log level are applied through one controlled core restart while the runtime operation coordinator is held. Mixed-port and bypass-list changes first restore an owned System Proxy state, then reapply the new binding only after the core is confirmed healthy; a failed transaction restores the previous settings.
 
+Settings loading distinguishes first run, successful load, corruption recovery, and unreadable storage. Invalid JSON, invalid fields, and oversized files are moved aside with a timestamped corrupt suffix before defaults are used; permission or I/O failures leave the original file untouched and are shown once in the startup error banner.
+
 Subscription refresh validates the downloaded YAML, compares its SHA-256 with the stored subscription content, and replaces the file only when the hash changes. An active Mihomo core is restarted only for changed content; an unchanged refresh updates metadata and skips the restart.
 
 Configuration imports, local reloads, and changed subscription content are first written to a temporary candidate. The candidate must pass strict UTF-8/basic checks and, when the trusted managed core is installed, a generated-runtime `mihomo -t` validation before the stored file and metadata are committed. A rejected candidate leaves the last accepted file and metadata unchanged; a commit failure restores both from their in-memory backups.
