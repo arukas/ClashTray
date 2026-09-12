@@ -3,7 +3,7 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string] $Configuration = 'Release',
     [string] $CertificatePath,
-    [string] $PackageVersion = '0.1.0.0'
+    [string] $PackageVersion = '0.2.0.0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,7 +22,7 @@ $signtool = 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtoo
 
 if (-not (Test-Path -LiteralPath $dotnet)) { throw "Missing .NET SDK: $dotnet" }
 if (-not (Test-Path -LiteralPath $makeAppx)) { throw "Missing MakeAppx: $makeAppx" }
-if ($PackageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "PackageVersion must use four numeric components, for example 0.1.0.0." }
+if ($PackageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "PackageVersion must use four numeric components, for example 0.2.0.0." }
 
 Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $appPublish, $servicePublish, $packageRoot, $outputRoot -Force | Out-Null

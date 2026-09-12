@@ -4,7 +4,7 @@
 ; payload into a single LZMA2 solid installer.
 
 #ifndef PackageVersion
-  #define PackageVersion "0.1.0"
+  #define PackageVersion "0.2.0"
 #endif
 #ifndef Variant
   #define Variant "Full"

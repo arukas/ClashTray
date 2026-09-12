@@ -17,8 +17,8 @@ ClashTray 的当前发布入口是 `packaging/Build-EXE.ps1`。脚本先发布 A
 Full 和 NoCET 的 App 与 Service 共用同一个 self-contained runtime 目录；Mini 使用 framework-dependent 发布。Inno Setup 配置 `Compression=lzma2/max` 与 `SolidCompression=yes`，对合并后的 App payload 和可选 Core payload 做整体压缩。安装器旁生成 SHA-256 sidecar：
 
 ```powershell
-.\packaging\Build-EXE.ps1 -Variant Full -PackageVersion 1.0.0 -OutputDirectory .\packaging\out\1.0.0\full
-Get-FileHash .\packaging\out\1.0.0\full\ClashTray-Setup-Full.exe -Algorithm SHA256
+.\packaging\Build-EXE.ps1 -Variant Full -PackageVersion 0.2.0 -OutputDirectory .\packaging\out\0.2.0\full
+Get-FileHash .\packaging\out\0.2.0\full\ClashTray-Setup-Full.exe -Algorithm SHA256
 ```
 
 ## 发布前检查

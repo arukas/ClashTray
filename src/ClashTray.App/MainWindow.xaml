@@ -149,7 +149,7 @@
         <Grid Grid.Row="5" Margin="0,6,0,0" Height="28">
             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <FontIcon Glyph="&#xE950;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            <TextBlock x:Name="CoreVersionText" Grid.Column="1" Text="Mihomo · 未启动" Margin="6,0,0,0" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <TextBlock x:Name="CoreVersionText" Grid.Column="1" Text="ClashTray 0.2.0 · Mihomo 未启动" Margin="6,0,0,0" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
             <Button x:Name="QuitButton" Grid.Column="2" Content="退出" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="QuitButton_Click"/>
         </Grid>
     </Grid>

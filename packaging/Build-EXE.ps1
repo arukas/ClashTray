@@ -4,7 +4,7 @@ param(
     [string]$Configuration = 'Release',
 
     [ValidatePattern('^\d+\.\d+\.\d+(\.\d+)?$')]
-    [string]$PackageVersion = '0.1.0',
+    [string]$PackageVersion = '0.2.0',
 
     [ValidateSet('Full', 'NoCET', 'Mini')]
     [string]$Variant = 'Full',

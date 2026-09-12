@@ -72,13 +72,13 @@ dotnet test ClashTray.sln --configuration Debug --property:Platform=x64 --no-bui
 
 ```powershell
 # 默认 Full：包含经过校验的 Mihomo 核心
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant Full
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.2.0 -Variant Full
 
 # 旧版 Windows 10 兼容包：自包含、包含核心、关闭 CET
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant NoCET
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.2.0 -Variant NoCET
 
 # 更小的 framework-dependent 版本；安装时检查 .NET 10 Desktop Runtime 和 Windows App Runtime 2.4+
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant Mini
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.2.0 -Variant Mini
 ```
 
 详见 [docs/setup.md](docs/setup.md)、[docs/release.md](docs/release.md) 和 [docs/roadmap.md](docs/roadmap.md)。旧的 `Build-MSIX.ps1` 和 `packaging/ClashTray.Package` 保留作实验性 / 历史打包材料；当前发布路径是 Inno Setup LZMA2 solid 压缩的 EXE 安装器。

@@ -35,9 +35,9 @@ The isolated WinUI smoke flow verifies both startup switches, port/text drafts, 
 The current release path is a set of Windows x64 EXE installers built by Inno Setup 7; Full is the recommended self-contained variant, NoCET is the compatibility variant for older-patched Windows 10 22H2 systems, and Mini is the smaller framework-dependent variant. x86 and ARM64 packages are not provided. App, Service, and Setup all target x64; App and Service are staged into one shared self-contained directory for self-contained builds. Mini requires the x64 .NET 10 Desktop Runtime and Windows App Runtime 2.4+; its installer checks both before copying files and exits with a clear message if either is missing. It does not use MSIX, AppX signing, or the Windows Store. Build it from the repository root:
 
 ```powershell
-& .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant Full
-& .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant NoCET
-& .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.1.0 -Variant Mini
+& .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.2.0 -Variant Full
+& .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.2.0 -Variant NoCET
+& .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.2.0 -Variant Mini
 ```
 
 The output is:
@@ -87,9 +87,9 @@ Test invalid YAML, unavailable subscriptions, controller/port conflicts, Mihomo 
 The recommended release path is `packaging/Build-EXE.ps1`. It publishes App and Service, merges them into one shared payload directory, and calls Inno Setup with `Compression=lzma2/max` and `SolidCompression=yes` to create the installer:
 
 ```powershell
-.\packaging\Build-EXE.ps1 -Variant Full -PackageVersion 1.0.0
-.\packaging\Build-EXE.ps1 -Variant NoCET -PackageVersion 1.0.0
-.\packaging\Build-EXE.ps1 -Variant Mini -PackageVersion 1.0.0
+.\packaging\Build-EXE.ps1 -Variant Full -PackageVersion 0.2.0
+.\packaging\Build-EXE.ps1 -Variant NoCET -PackageVersion 0.2.0
+.\packaging\Build-EXE.ps1 -Variant Mini -PackageVersion 0.2.0
 ```
 
 `Full` is self-contained and includes the pinned, SHA-256 verified Mihomo core. `NoCET` is the same bundled-core shape with `CETCompat=false` for older-patched Windows 10 22H2. `Mini` omits the core and uses framework-dependent App and Service payloads; its installer requires the x64 .NET 10 Desktop Runtime and Windows App Runtime 2.4+ and aborts before installation when either is missing. Outputs are named `ClashTray-Setup-Full.exe`, `ClashTray-Setup-NoCET.exe`, and `ClashTray-Setup-Mini.exe`, with a matching `.sha256` sidecar. See [release.md](release.md) for the release matrix and checks.

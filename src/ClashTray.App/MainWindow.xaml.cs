@@ -11,6 +11,7 @@ using WinRT.Interop;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 using Windows.System;
+using System.Reflection;
 
 namespace ClashTray.App;
 
@@ -175,7 +176,14 @@ public sealed partial class MainWindow : Window
             CoreState.Starting or CoreState.Stopping or CoreState.Restarting or CoreState.Validating => Colors.Orange,
             _ => Colors.Gray
         });
-        CoreVersionText.Text = string.IsNullOrWhiteSpace(core.Version) ? "版本未知" : $"Mihomo {core.Version}";
+        string appVersion = typeof(MainWindow)
+            .Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion
+            ?? "0.2.0";
+        CoreVersionText.Text = string.IsNullOrWhiteSpace(core.Version)
+            ? $"ClashTray {appVersion} · Mihomo 未启动"
+            : $"Mihomo {core.Version} · ClashTray {appVersion}";
         ControllerEndpointButton.Content = core.State == CoreState.Running
             ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}/ui/"
             : "核心未运行";
