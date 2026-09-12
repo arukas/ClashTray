@@ -13,13 +13,14 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
     private const int MaxRequestCharacters = 64 * 1024;
     private readonly string _userSid;
     private readonly CancellationTokenSource _cts = new();
-    private readonly ServiceRuntimeController _controller = new();
+    private readonly ServiceRuntimeController _controller;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
     private Task? _serverTask;
 
     public ServiceCommandHost(string userSid)
     {
         _userSid = userSid;
+        _controller = new ServiceRuntimeController(managedUserSid: userSid);
     }
 
     public void Start() => _serverTask = Task.Run(RunAsync);

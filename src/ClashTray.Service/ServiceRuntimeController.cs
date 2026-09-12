@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Diagnostics;
-using Microsoft.Win32;
 using ClashTray.Contracts;
 using ClashTray.Core;
 
@@ -12,14 +11,22 @@ namespace ClashTray.Service;
 /// </summary>
 internal sealed class ServiceRuntimeController : IAsyncDisposable
 {
-    private const string ProfileListPath = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList";
     private static readonly TimeSpan StatusQueryTimeout = TimeSpan.FromSeconds(2);
+    private readonly AppPaths _paths;
     private readonly MihomoProcessManager _processManager = new();
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(5) };
+    private readonly HttpClient _coreUpdateHttpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly CoreUpdater _coreUpdater;
     private MihomoApiClient? _api;
     private TunState _tunState = TunState.Off;
     private ServiceCorePayload? _activeCore;
+
+    public ServiceRuntimeController(AppPaths? paths = null, string? managedUserSid = null)
+    {
+        _paths = paths ?? new AppPaths();
+        _coreUpdater = new CoreUpdater(_paths, _coreUpdateHttpClient, managedUserSid);
+    }
 
     public CoreState CoreState => _processManager.State;
 
@@ -33,6 +40,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 ServiceCommand.StartCore => await StartCoreAsync(request, cancellationToken),
                 ServiceCommand.StopCore => await StopCoreAsync(request, cancellationToken),
                 ServiceCommand.RestartCore => await RestartCoreAsync(request, cancellationToken),
+                ServiceCommand.InstallCore => await InstallCoreAsync(request, cancellationToken),
                 ServiceCommand.EnableTun => await SetTunAsync(request, enabled: true, cancellationToken),
                 ServiceCommand.DisableTun => await SetTunAsync(request, enabled: false, cancellationToken),
                 _ => Failure(request, "未知服务命令。")
@@ -109,6 +117,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         finally
         {
             _httpClient.Dispose();
+            _coreUpdateHttpClient.Dispose();
         }
     }
 
@@ -143,16 +152,53 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             return Success(request);
         }
 
-        if (!await _processManager.ValidateAsync(payload.ExecutablePath, payload.ConfigurationPath, cancellationToken))
+        try
+        {
+            await ManagedCoreVerifier.ValidateAsync(_paths, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            return Failure(request, $"受管 Mihomo 核心校验失败：{exception.Message}", CoreState.Failed);
+        }
+
+        string executablePath = _paths.ManagedCoreExecutable;
+        if (!await _processManager.ValidateAsync(executablePath, payload.ConfigurationPath, cancellationToken))
         {
             return Failure(request, "Mihomo 配置验证失败。", CoreState.Failed);
         }
 
-        await _processManager.StartAsync(payload.ExecutablePath, payload.ConfigurationPath, payload.WorkingDirectory, cancellationToken);
+        await _processManager.StartAsync(executablePath, payload.ConfigurationPath, payload.WorkingDirectory, cancellationToken);
         _activeCore = payload;
         _api = CreateApi(payload.ControllerPort, payload.ControllerSecret);
         _tunState = TunState.Unknown;
         return await RefreshTunStateAfterStartAsync(request, cancellationToken);
+    }
+
+    private async Task<ServiceResponse> InstallCoreAsync(ServiceRequest request, CancellationToken cancellationToken)
+    {
+        if (_processManager.State == CoreState.Running)
+        {
+            return Failure(request, "请先停止 Mihomo 核心再安装更新。", CoreState.Running);
+        }
+
+        ServiceCoreUpdatePayload payload = Deserialize<ServiceCoreUpdatePayload>(request.Payload);
+
+        try
+        {
+            CoreUpdateManifest manifest = new(payload.Version, payload.DownloadUri, payload.Sha256);
+            CoreUpdater.ValidateManifest(manifest);
+            string path = await _coreUpdater.DownloadAndInstallAsync(manifest, cancellationToken);
+            return new ServiceResponse(
+                request.RequestId,
+                true,
+                _tunState,
+                Payload: path,
+                Core: _processManager.State);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidDataException or HttpRequestException or IOException)
+        {
+            return Failure(request, $"核心安装失败：{exception.Message}", _processManager.State);
+        }
     }
 
     private async Task<ServiceResponse> StopCoreAsync(ServiceRequest request, CancellationToken cancellationToken)
@@ -352,10 +398,9 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private MihomoApiClient CreateApi(int port, string secret) =>
         new(_httpClient, new Uri($"http://127.0.0.1:{port}/"), secret);
 
-    private static void ValidateCorePayload(ServiceCorePayload payload)
+    private void ValidateCorePayload(ServiceCorePayload payload)
     {
-        if (!IsAllowedCoreExecutable(payload.ExecutablePath)
-            || !IsAllowedRuntimePath(payload.ConfigurationPath, allowYaml: true)
+        if (!IsAllowedRuntimePath(payload.ConfigurationPath, allowYaml: true)
             || !IsAllowedRuntimePath(payload.WorkingDirectory, allowYaml: false)
             || payload.ControllerPort is < 1 or > 65535
             || payload.ControllerSecret is null)
@@ -364,90 +409,17 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
     }
 
-    private static bool IsAllowedCoreExecutable(string path)
+    private bool IsAllowedRuntimePath(string path, bool allowYaml)
     {
         string fullPath = Path.GetFullPath(path);
-        string? directory = Path.GetDirectoryName(fullPath);
-        return File.Exists(fullPath)
-            && string.Equals(Path.GetFileName(fullPath), "mihomo.exe", StringComparison.OrdinalIgnoreCase)
-            && directory is not null
-            && IsAllowedCoreDirectory(directory);
+        if (allowYaml)
+        {
+            return CorePathPolicy.IsManagedRuntimeFile(_paths, fullPath)
+                && (Path.GetExtension(fullPath) is ".yaml" or ".yml");
+        }
+
+        return CorePathPolicy.IsManagedRuntimeDirectory(_paths, fullPath);
     }
-
-    private static bool IsAllowedRuntimePath(string path, bool allowYaml)
-    {
-        string fullPath = Path.GetFullPath(path);
-        string? directory = Directory.Exists(fullPath) ? fullPath : Path.GetDirectoryName(fullPath);
-        if (directory is null || !IsAllowedRuntimeDirectory(directory))
-        {
-            return false;
-        }
-
-        return !allowYaml || Path.GetExtension(fullPath) is ".yaml" or ".yml";
-    }
-
-    private static bool IsAllowedCoreDirectory(string path)
-    {
-        string fullPath = Path.GetFullPath(path);
-        string programDataCore = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "ClashTray",
-            "core");
-        if (PathEquals(fullPath, programDataCore))
-        {
-            return true;
-        }
-
-        if (!OperatingSystem.IsWindows())
-        {
-            return false;
-        }
-
-        using RegistryKey? profiles = Registry.LocalMachine.OpenSubKey(ProfileListPath, writable: false);
-        if (profiles is null)
-        {
-            return false;
-        }
-
-        foreach (string sid in profiles.GetSubKeyNames())
-        {
-            using RegistryKey? profile = profiles.OpenSubKey(sid, writable: false);
-            string? profilePath = profile?.GetValue("ProfileImagePath") as string;
-            if (string.IsNullOrWhiteSpace(profilePath))
-            {
-                continue;
-            }
-
-            string localCore = Path.Combine(
-                Environment.ExpandEnvironmentVariables(profilePath),
-                "AppData",
-                "Local",
-                "ClashTray",
-                "core");
-            if (PathEquals(fullPath, localCore))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool IsAllowedRuntimeDirectory(string path)
-    {
-        string expected = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "ClashTray",
-            "runtime",
-            "mihomo");
-        return PathEquals(path, expected);
-    }
-
-    private static bool PathEquals(string left, string right) =>
-        string.Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
-            StringComparison.OrdinalIgnoreCase);
 
     private ServiceResponse Success(ServiceRequest request, string? error = null) =>
         new(request.RequestId, true, _tunState, Error: error, Core: CoreState);

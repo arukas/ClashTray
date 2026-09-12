@@ -63,6 +63,9 @@ Source: "{#PayloadRoot}\App\*"; DestDir: "{app}\App"; Flags: ignoreversion recur
 Source: "{#PayloadRoot}\Core\*"; DestDir: "{commonappdata}\ClashTray\core"; Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist
 #endif
 
+[Dirs]
+Name: "{commonappdata}\ClashTray\core"; Permissions: users-readexec, admins-full, system-full
+
 [InstallDelete]
 ; Remove the legacy C# installer layout when upgrading an existing install.
 Type: filesandordirs; Name: "{app}\Service"

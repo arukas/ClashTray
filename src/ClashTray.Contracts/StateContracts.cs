@@ -174,6 +174,7 @@ public enum ServiceCommand
     StartCore,
     StopCore,
     RestartCore,
+    InstallCore,
     EnableTun,
     DisableTun
 }
@@ -189,11 +190,15 @@ public sealed record ServiceResponse(
     CoreState Core = CoreState.Stopped);
 
 public sealed record ServiceCorePayload(
-    string ExecutablePath,
     string ConfigurationPath,
     string WorkingDirectory,
     int ControllerPort,
     string ControllerSecret);
+
+public sealed record ServiceCoreUpdatePayload(
+    string Version,
+    Uri DownloadUri,
+    string Sha256);
 
 public sealed record ServiceTunPayload(
     int ControllerPort,

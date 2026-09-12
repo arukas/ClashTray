@@ -19,7 +19,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly CoreDiscovery _coreDiscovery;
     private readonly SystemProxyManager _systemProxy;
     private readonly IServicePipeClient _servicePipeClient;
-    private readonly CoreUpdater _coreUpdater;
     private readonly SubscriptionScheduler _subscriptionScheduler;
     private readonly MihomoProcessManager _processManager = new();
     private readonly IStartupRegistration _startupRegistration;
@@ -70,7 +69,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             ?? (useDefaultEnvironment ? new ServicePipeClient() : new IsolatedServicePipeClient());
         _coreDiscovery = new CoreDiscovery(_paths);
         _systemProxy = new SystemProxyManager(_paths);
-        _coreUpdater = new CoreUpdater(_paths);
         _subscriptionScheduler = new SubscriptionScheduler(
             cancellation => _configurationStore.ListAsync(cancellation),
             (profile, cancellation) => RefreshSubscriptionAsync(profile, cancellation),
@@ -210,7 +208,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             string runtimeDirectory = Path.Combine(_paths.RuntimeRoot, "mihomo");
             string servicePayload = JsonSerializer.Serialize(new ServiceCorePayload(
-                executable,
                 runtimeConfigPath,
                 runtimeDirectory,
                 _settings.ControllerPort,
@@ -958,6 +955,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task<string> InstallCoreUpdateAsync(CoreUpdateManifest manifest, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(manifest);
         bool wasRunning = _snapshot.Core.State == CoreState.Running;
         if (wasRunning)
         {
@@ -966,7 +964,20 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         try
         {
-            string path = await _coreUpdater.DownloadAndInstallAsync(manifest, cancellationToken);
+            ServiceCoreUpdatePayload payload = new(
+                manifest.Version,
+                manifest.DownloadUri,
+                manifest.Sha256);
+            ServiceResponse response = await _servicePipeClient.SendAsync(
+                ServiceCommand.InstallCore,
+                JsonSerializer.Serialize(payload),
+                cancellationToken);
+            if (!response.Succeeded)
+            {
+                throw new InvalidOperationException(response.Error ?? "ClashTray 服务无法安装 Mihomo 核心。");
+            }
+
+            string path = response.Payload ?? _coreDiscovery.ManagedExecutablePath;
             _snapshot = _snapshot with { Core = _snapshot.Core with { Version = FindCoreVersion(), ErrorMessage = null }, ErrorMessage = null };
             Publish();
             if (wasRunning)

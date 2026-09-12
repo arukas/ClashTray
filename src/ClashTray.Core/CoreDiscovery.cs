@@ -11,22 +11,22 @@ public sealed class CoreDiscovery
         _paths = paths;
     }
 
+    public string ManagedExecutablePath => _paths.ManagedCoreExecutable;
+
     public string? FindExecutable(string? configuredPath = null)
     {
-        List<string> candidates = new List<string>();
-        if (!string.IsNullOrWhiteSpace(configuredPath))
+        if (!string.IsNullOrWhiteSpace(configuredPath)
+            && CorePathPolicy.IsManagedCorePath(_paths, configuredPath)
+            && File.Exists(configuredPath))
         {
-            candidates.Add(configuredPath);
+            return Path.GetFullPath(configuredPath);
         }
 
-        candidates.Add(Path.Combine(_paths.LocalRoot, "core", "mihomo.exe"));
-        candidates.Add(Path.Combine(_paths.ProgramRoot, "core", "mihomo.exe"));
-        candidates.Add(Path.Combine(AppContext.BaseDirectory, "mihomo.exe"));
-
-        return candidates
-            .Where(File.Exists)
-            .Select(Path.GetFullPath)
-            .FirstOrDefault();
+        return CorePathPolicy.IsManagedCorePath(_paths, _paths.ManagedCoreExecutable)
+            && File.Exists(_paths.ManagedCoreExecutable)
+            && File.Exists(_paths.ManagedCoreMetadata)
+            ? _paths.ManagedCoreExecutable
+            : null;
     }
 
     public static string? GetVersion(string executablePath)
@@ -40,6 +40,10 @@ public sealed class CoreDiscovery
             return null;
         }
         catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
         {
             return null;
         }

@@ -31,7 +31,10 @@ public sealed class CoreUpdaterTests
 
             string installedPath = await updater.DownloadAndInstallAsync(manifest);
 
+            Assert.AreEqual(paths.ManagedCoreExecutable, installedPath);
             Assert.IsTrue(File.Exists(installedPath));
+            Assert.IsTrue(File.Exists(paths.ManagedCoreMetadata));
+            await ManagedCoreVerifier.ValidateAsync(paths);
         }
         finally
         {
@@ -62,7 +65,7 @@ public sealed class CoreUpdaterTests
             CoreUpdater updater = new CoreUpdater(paths, httpClient);
 
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(CreateManifest(archiveBytes)));
-            Assert.IsFalse(File.Exists(Path.Combine(paths.LocalRoot, "core", "mihomo.exe")));
+            Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable));
         }
         finally
         {
@@ -85,7 +88,52 @@ public sealed class CoreUpdaterTests
 
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(
                 CreateManifest([])));
-            Assert.IsFalse(File.Exists(Path.Combine(paths.LocalRoot, "core", "mihomo.exe")));
+            Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task CoreUpdaterRefusesToOverwriteUnknownCore()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        Directory.CreateDirectory(paths.CoreRoot);
+        string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
+        File.Copy(executablePath, paths.ManagedCoreExecutable);
+
+        try
+        {
+            CoreUpdater updater = new CoreUpdater(paths);
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(
+                new CoreUpdateManifest(
+                    "v0.0.0-test",
+                    new Uri("https://github.com/MetaCubeX/mihomo/releases/download/v0.0.0-test/mihomo-windows-amd64-v0.0.0-test.zip"),
+                    new string('0', 64))));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void CoreDiscoveryIgnoresUserWritableLocalCore()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        string localCore = Path.Combine(paths.LocalRoot, "core", "mihomo.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(localCore)!);
+        File.Copy(Environment.ProcessPath!, localCore);
+
+        try
+        {
+            Assert.IsNull(new CoreDiscovery(paths).FindExecutable());
         }
         finally
         {

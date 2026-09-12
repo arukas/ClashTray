@@ -161,7 +161,19 @@ function Prepare-MihomoPayload {
     }
 
     Assert-WindowsAmd64Pe -Path $coreExecutables[0].FullName
-    Copy-Item -LiteralPath $coreExecutables[0].FullName -Destination (Join-Path $corePayload 'mihomo.exe') -Force
+    $coreExecutablePath = Join-Path $corePayload 'mihomo.exe'
+    Copy-Item -LiteralPath $coreExecutables[0].FullName -Destination $coreExecutablePath -Force
+    $coreExecutableHash = (Get-FileHash -LiteralPath $coreExecutablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $coreMetadata = [ordered]@{
+        version = $mihomoVersion
+        downloadUri = $mihomoBinaryArchiveUri
+        archiveSha256 = $mihomoBinaryArchiveSha256
+        executableSha256 = $coreExecutableHash
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $corePayload 'mihomo.manifest.json'),
+        ($coreMetadata | ConvertTo-Json),
+        [Text.UTF8Encoding]::new($false))
 
     Invoke-WebRequest -Uri $mihomoLicenseUri -OutFile (Join-Path $corePayload 'Mihomo-LICENSE.txt')
     if (-not (Test-Path -LiteralPath (Join-Path $corePayload 'Mihomo-LICENSE.txt') -PathType Leaf)) {
@@ -308,8 +320,9 @@ $requiredPayloadFiles = @(
 )
 if ($includeCore) {
     $requiredPayloadFiles += @(
-        (Join-Path $corePayload 'mihomo.exe'),
-        (Join-Path $corePayload 'Mihomo-LICENSE.txt'),
+    (Join-Path $corePayload 'mihomo.exe'),
+    (Join-Path $corePayload 'mihomo.manifest.json'),
+    (Join-Path $corePayload 'Mihomo-LICENSE.txt'),
         (Join-Path $corePayload 'Mihomo-Release.txt')
     )
 }

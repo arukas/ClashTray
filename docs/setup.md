@@ -19,7 +19,7 @@ From the repository root:
 & 'C:\Program Files\dotnet\dotnet.exe' test ClashTray.sln --configuration Debug --property:Platform=x64 --no-build
 ```
 
-The first launch creates user data in `%LOCALAPPDATA%\ClashTray` and runtime data in `%PROGRAMDATA%\ClashTray`. A Release EXE installation includes the pinned official Mihomo v1.19.30 x64 core under `%PROGRAMDATA%\ClashTray\core`; a plain developer launch still needs a core at `%LOCALAPPDATA%\ClashTray\core\mihomo.exe` or an update through the verified update flow.
+The first launch creates user data in `%LOCALAPPDATA%\ClashTray` and runtime data in `%PROGRAMDATA%\ClashTray`. A Release EXE installation includes the pinned official Mihomo v1.19.30 x64 core and its trusted manifest under `%PROGRAMDATA%\ClashTray\core`; a plain developer launch must use that same managed location because `LocalAppData\core` is ignored. Core installation and updates are submitted through the restricted service, which revalidates the official source, archive checksum, executable checksum, and x64 PE format before replacement.
 
 The Windows Service is optional during ordinary development. If it is installed, the app sends core lifecycle and TUN requests through its restricted pipe; otherwise core lifecycle falls back to the desktop process and TUN reports that the service is unavailable.
 

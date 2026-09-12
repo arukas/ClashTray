@@ -18,6 +18,12 @@ public sealed class AppPaths
 
     public string ProgramRoot { get; }
 
+    public string CoreRoot => Path.Combine(ProgramRoot, "core");
+
+    public string ManagedCoreExecutable => Path.Combine(CoreRoot, "mihomo.exe");
+
+    public string ManagedCoreMetadata => Path.Combine(CoreRoot, "mihomo.manifest.json");
+
     public string ConfigurationsRoot => Path.Combine(LocalRoot, "configurations");
 
     public string RuntimeRoot => Path.Combine(ProgramRoot, "runtime");
@@ -38,5 +44,17 @@ public sealed class AppPaths
         Directory.CreateDirectory(RuntimeRoot);
         Directory.CreateDirectory(LogsRoot);
         WindowsPathSecurity.ProtectRuntimeDirectory(RuntimeRoot);
+    }
+
+    public void EnsureProgramDataDirectories(string? managedUserSid = null)
+    {
+        Directory.CreateDirectory(ProgramRoot);
+        Directory.CreateDirectory(CoreRoot);
+        Directory.CreateDirectory(RuntimeRoot);
+        WindowsPathSecurity.ProtectRuntimeDirectory(RuntimeRoot);
+        if (!string.IsNullOrWhiteSpace(managedUserSid))
+        {
+            WindowsPathSecurity.ProtectManagedCoreDirectory(CoreRoot, managedUserSid);
+        }
     }
 }
