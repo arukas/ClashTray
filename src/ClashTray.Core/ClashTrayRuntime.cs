@@ -13,6 +13,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly CancellationTokenSource _runtimeCts = new();
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(8) };
     private readonly BoundedLogBuffer _logBuffer = new(500);
+    private readonly SnapshotPublishThrottle _throttledPublisher;
     private readonly AppPaths _paths;
     private readonly ConfigurationStore _configurationStore;
     private readonly ISettingsStore _settingsStore;
@@ -85,6 +86,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             () => _settings,
             OnScheduledSubscriptionRefreshFailed,
             OnScheduledSubscriptionCycleFailed);
+        _throttledPublisher = new SnapshotPublishThrottle(Publish, _runtimeCts.Token);
         _processManager.StateChanged += OnProcessStateChanged;
         _processManager.LogLineReceived += OnProcessLogLine;
     }
@@ -1406,6 +1408,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
 
         await _runtimeCts.CancelAsync();
+        await _throttledPublisher.DisposeAsync();
         SetController(null);
         await StopLogStreamAsync();
         if (_dataRefreshTask is not null)
@@ -1540,7 +1543,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 RuleProviders = providerData.RuleProviders,
                 Logs = _logBuffer.Snapshot()
             };
-            Publish();
+            _throttledPublisher.Request();
         }
         finally
         {
@@ -2623,7 +2626,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         _logBuffer.Add(entry);
         _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
-        Publish();
+        _throttledPublisher.Request();
     }
 
     private bool IsCoreRunningForSettings() =>
