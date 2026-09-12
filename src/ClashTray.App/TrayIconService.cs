@@ -255,9 +255,9 @@ internal sealed class TrayIconService : IDisposable
             IntPtr.Zero,
             path,
             NativeMethods.IMAGE_ICON,
-            0,
-            0,
-            NativeMethods.LR_LOADFROMFILE | NativeMethods.LR_DEFAULTSIZE);
+            GetSmallIconWidth(),
+            GetSmallIconHeight(),
+            NativeMethods.LR_LOADFROMFILE);
         if (handle != IntPtr.Zero)
         {
             _ownsIcon = true;
@@ -266,6 +266,19 @@ internal sealed class TrayIconService : IDisposable
 
         _ownsIcon = false;
         return NativeMethods.LoadIcon(IntPtr.Zero, new IntPtr(NativeMethods.IDI_APPLICATION));
+    }
+
+    private int GetSmallIconWidth() => GetSmallIconMetric(NativeMethods.SM_CXSMICON);
+
+    private int GetSmallIconHeight() => GetSmallIconMetric(NativeMethods.SM_CYSMICON);
+
+    private int GetSmallIconMetric(int metric)
+    {
+        uint dpi = NativeMethods.GetDpiForWindow(_windowHandle);
+        int value = dpi == 0
+            ? NativeMethods.GetSystemMetrics(metric)
+            : NativeMethods.GetSystemMetricsForDpi(metric, dpi);
+        return value > 0 ? value : 16;
     }
 
     private void ReleaseIcon()

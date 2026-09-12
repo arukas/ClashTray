@@ -81,5 +81,6 @@ For Chinese UI/documentation, **Noto Sans CJK SC** / **Noto Sans SC** is recomme
 
 ## Notes
 
-The tray icon intentionally remains simpler than the application icon so it stays legible at 16–24 px.
+The tray icon intentionally remains simpler than the application icon so it stays legible at 16–24 px. Each state ICO contains 16, 20, 24, and 32 px resources; the Win32 loader selects the DPI-aware small-icon dimensions instead of loading the largest resource and relying on shell scaling.
+The panel keeps the Logo button's 40 px hit target while rendering the existing transparent-safe-area artwork at that size, making the visible mark approximately 24–26 px.
 The Windows identity is expressed through Fluent-style geometry, taskbar/tray metaphors, and Windows blue rather than by reproducing the Microsoft Windows trademark.

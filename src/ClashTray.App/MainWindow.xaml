@@ -11,7 +11,7 @@
             <Button x:Name="LogoButton" CornerRadius="10" Background="{ThemeResource ControlFillColorSecondaryBrush}"
                     Width="40" Height="40" Padding="0" BorderThickness="0" Click="LogoButton_Click"
                     AutomationProperties.Name="ClashTray Logo" ToolTipService.ToolTip="ClashTray">
-                <Image x:Name="ThemeLogo" Source="ms-appx:///Assets/Themes/Light/logo.png" Width="28" Height="28" Stretch="Uniform"/>
+                <Image x:Name="ThemeLogo" Source="ms-appx:///Assets/Themes/Light/logo.png" Width="40" Height="40" Stretch="Uniform"/>
             </Button>
             <TeachingTip x:Name="EasterEggTip" Target="{x:Bind LogoButton}" PreferredPlacement="Bottom"
                          IsLightDismissEnabled="True" ShouldConstrainToRootBounds="True"/>

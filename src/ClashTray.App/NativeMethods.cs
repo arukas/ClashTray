@@ -52,7 +52,8 @@ internal static class NativeMethods
     public const int IDI_APPLICATION = 32512;
     public const uint IMAGE_ICON = 1;
     public const uint LR_LOADFROMFILE = 0x00000010;
-    public const uint LR_DEFAULTSIZE = 0x00000040;
+    public const int SM_CXSMICON = 49;
+    public const int SM_CYSMICON = 50;
 
     public const int S_OK = 0;
 
@@ -214,6 +215,14 @@ internal static class NativeMethods
     [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr LoadIcon(IntPtr instance, IntPtr iconName);
+
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern int GetSystemMetrics(int index);
+
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern int GetSystemMetricsForDpi(int index, uint dpi);
 
     [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
     [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
