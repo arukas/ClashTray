@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Media;
 using WinRT.Interop;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
+using Windows.System;
 
 namespace ClashTray.App;
 
@@ -175,9 +176,13 @@ public sealed partial class MainWindow : Window
             _ => Colors.Gray
         });
         CoreVersionText.Text = string.IsNullOrWhiteSpace(core.Version) ? "版本未知" : $"Mihomo {core.Version}";
-        CoreEndpointText.Text = core.State == CoreState.Running
-            ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}"
+        ControllerEndpointButton.Content = core.State == CoreState.Running
+            ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}/ui/"
             : "核心未运行";
+        ControllerEndpointButton.IsEnabled = core.State == CoreState.Running;
+        ToolTipService.SetToolTip(
+            ControllerEndpointButton,
+            core.State == CoreState.Running ? "在默认浏览器打开本机控制器" : "核心运行后可打开本机控制器");
         ConnectionCountText.Text = core.ConnectionCount.ToString(CultureInfo.InvariantCulture);
         TrafficText.Text = core.TrafficAvailable
             ? $"↑ {FormatRate(core.UploadBytesPerSecond)}  ↓ {FormatRate(core.DownloadBytesPerSecond)}"
@@ -547,6 +552,20 @@ public sealed partial class MainWindow : Window
         DataPackage package = new DataPackage();
         package.SetText(endpoint);
         Clipboard.SetContent(package);
+    }
+
+    private async void ControllerEndpointButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_runtime is null || _runtime.Snapshot.Core.State != CoreState.Running)
+        {
+            return;
+        }
+
+        Uri controllerUri = new Uri($"http://127.0.0.1:{_runtime.Settings.ControllerPort}/ui/");
+        if (!await Launcher.LaunchUriAsync(controllerUri))
+        {
+            ShowError("无法打开默认浏览器中的本机控制器入口。");
+        }
     }
 
     private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)

@@ -20,7 +20,7 @@
                 <StackPanel Orientation="Horizontal" Spacing="6">
                     <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="Gray" VerticalAlignment="Center"/>
                     <TextBlock x:Name="CoreStateText" Text="已停止" FontSize="12"/>
-                    <TextBlock x:Name="CoreEndpointText" Text="核心未运行" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <Button x:Name="ControllerEndpointButton" Content="核心未运行" FontSize="12" Padding="0" BorderThickness="0" Background="Transparent" Click="ControllerEndpointButton_Click" AutomationProperties.Name="打开本机控制器" IsEnabled="False"/>
                 </StackPanel>
             </StackPanel>
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
