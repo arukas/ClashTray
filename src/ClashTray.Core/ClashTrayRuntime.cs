@@ -615,13 +615,61 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task SelectProxyAsync(string group, string proxy, CancellationToken cancellationToken = default)
     {
-        if (_api is null)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            throw new InvalidOperationException("Mihomo 核心尚未运行。");
-        }
+            MihomoApiClient api = _api ?? throw new InvalidOperationException("Mihomo 核心尚未运行。");
+            string? previousProxy = _snapshot.ProxyGroups
+                .FirstOrDefault(item => string.Equals(item.Name, group, StringComparison.Ordinal))
+                ?.Current;
 
-        await _api.SelectProxyAsync(group, proxy, cancellationToken);
-        await RefreshFromApiAsync(cancellationToken);
+            await api.SelectProxyAsync(group, proxy, cancellationToken);
+            if (!ReferenceEquals(_api, api))
+            {
+                throw new InvalidOperationException("节点切换期间核心已重启，请重新选择节点。");
+            }
+
+            Exception? disconnectException = null;
+            bool selectionChanged = previousProxy is not null
+                && !string.Equals(previousProxy, proxy, StringComparison.Ordinal);
+            if (_settings.DisconnectConnectionsAfterProxySwitch && selectionChanged)
+            {
+                try
+                {
+                    await api.CloseAllConnectionsAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    disconnectException = exception;
+                    _logBuffer.Add(new LogEntry(
+                        DateTimeOffset.UtcNow,
+                        "ClashTray",
+                        "error",
+                        $"节点已切换，但未能断开旧连接：{exception.Message}"));
+                }
+            }
+
+            await RefreshFromApiAsync(cancellationToken);
+            if (disconnectException is not null)
+            {
+                const string message = "节点已切换，但未能断开旧连接。";
+                _snapshot = _snapshot with
+                {
+                    ErrorMessage = message,
+                    Logs = _logBuffer.Snapshot()
+                };
+                Publish();
+                throw new InvalidOperationException(message, disconnectException);
+            }
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
     }
 
     public async Task<int?> TestProxyDelayAsync(string proxy, CancellationToken cancellationToken = default)

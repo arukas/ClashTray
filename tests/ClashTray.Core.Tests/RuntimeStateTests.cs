@@ -7,6 +7,8 @@ namespace ClashTray.Core.Tests;
 [TestClass]
 public sealed class RuntimeStateTests
 {
+    private static readonly string[] SelectionThenClose = ["select", "close"];
+
     [TestMethod]
     public async Task MetricFailureKeepsLastValuesAndDoesNotStopConfirmedCore()
     {
@@ -145,6 +147,76 @@ public sealed class RuntimeStateTests
             Assert.AreEqual(SystemProxyState.Off, proxy.State);
             Assert.AreEqual(SystemProxyState.Off, runtime.Snapshot.SystemProxy);
             Assert.IsGreaterThanOrEqualTo(2, proxy.DisableCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task SwitchingProxyOptionDisconnectsOnlyAfterSuccessfulSelection()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using ProxySwitchHandler handler = new ProxySwitchHandler();
+        using HttpClient httpClient = new HttpClient(handler);
+        MihomoApiClient api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            await runtime.UpdateSettingsAsync(runtime.Settings with
+            {
+                DisconnectConnectionsAfterProxySwitch = true
+            });
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            await runtime.RefreshControllerDataForTestingAsync();
+
+            await runtime.SelectProxyAsync("Auto", "new");
+
+            CollectionAssert.AreEqual(SelectionThenClose, handler.Operations.Take(2).ToArray());
+            Assert.AreEqual("new", runtime.Snapshot.ProxyGroups.Single(group => group.Name == "Auto").Current);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task FailedDisconnectReportsPartialSuccessWithoutChangingSelection()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using ProxySwitchHandler handler = new ProxySwitchHandler { FailCloseAll = true };
+        using HttpClient httpClient = new HttpClient(handler);
+        MihomoApiClient api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            await runtime.UpdateSettingsAsync(runtime.Settings with
+            {
+                DisconnectConnectionsAfterProxySwitch = true
+            });
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            await runtime.RefreshControllerDataForTestingAsync();
+
+            InvalidOperationException exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                runtime.SelectProxyAsync("Auto", "new"));
+
+            Assert.AreEqual("节点已切换，但未能断开旧连接。", exception.Message);
+            CollectionAssert.AreEqual(SelectionThenClose, handler.Operations.Take(2).ToArray());
+            Assert.AreEqual("new", runtime.Snapshot.ProxyGroups.Single(group => group.Name == "Auto").Current);
+            StringAssert.Contains(runtime.Snapshot.ErrorMessage, "节点已切换", StringComparison.Ordinal);
+            Assert.IsTrue(runtime.Snapshot.Logs.Any(log => log.Message.Contains("未能断开旧连接", StringComparison.Ordinal)));
         }
         finally
         {
@@ -547,6 +619,62 @@ public sealed class RuntimeStateTests
             Settings = settings;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class ProxySwitchHandler : HttpMessageHandler
+    {
+        public List<string> Operations { get; } = [];
+
+        public bool FailCloseAll { get; init; }
+
+        public string CurrentProxy { get; private set; } = "old";
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            string path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (request.Method == HttpMethod.Put && path.StartsWith("/proxies/", StringComparison.Ordinal))
+            {
+                Operations.Add("select");
+                CurrentProxy = "new";
+                return Task.FromResult(JsonResponse("{}"));
+            }
+
+            if (request.Method == HttpMethod.Delete && path == "/connections")
+            {
+                Operations.Add("close");
+                return Task.FromResult(FailCloseAll
+                    ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                    : new HttpResponseMessage(HttpStatusCode.NoContent));
+            }
+
+            if (request.Method == HttpMethod.Get && path == "/proxies")
+            {
+                string body = "{\"proxies\":{\"Auto\":{\"type\":\"Selector\",\"now\":\""
+                    + CurrentProxy
+                    + "\",\"all\":[\"old\",\"new\"]},\"old\":{\"type\":\"Direct\"},\"new\":{\"type\":\"Direct\"}}}";
+                return Task.FromResult(JsonResponse(body));
+            }
+
+            string responseBody = path switch
+            {
+                "/version" => "{\"version\":\"v1.19.30\"}",
+                "/configs" => "{\"mode\":\"rule\",\"tun\":{\"enable\":false}}",
+                "/traffic" => "{\"upTotal\":0,\"downTotal\":0,\"up\":0,\"down\":0}",
+                "/memory" => "{\"inuse\":0}",
+                "/connections" => "{\"connections\":[]}",
+                "/rules" => "{\"rules\":[]}",
+                "/providers/proxies" => "{\"providers\":{}}",
+                "/providers/rules" => "{\"providers\":{}}",
+                _ => "{}"
+            };
+            return Task.FromResult(JsonResponse(responseBody));
+        }
+
+        private static HttpResponseMessage JsonResponse(string body) =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body)
+            };
     }
 
     private sealed class RuntimeControllerHandler : HttpMessageHandler

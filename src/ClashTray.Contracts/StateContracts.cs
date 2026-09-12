@@ -166,6 +166,7 @@ public sealed record AppSettings(
     string Theme = "system",
     bool SystemProxyEnabled = false,
     bool TunEnabled = false,
+    bool DisconnectConnectionsAfterProxySwitch = false,
     bool NakhimovUnlocked = false);
 
 public enum ServiceCommand

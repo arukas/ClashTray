@@ -61,6 +61,7 @@ public sealed partial class SettingsPage : UserControl
                 AllowLan = AllowLanSwitch.IsOn,
                 Ipv6 = Ipv6Switch.IsOn,
                 TcpConcurrent = TcpConcurrentSwitch.IsOn,
+                DisconnectConnectionsAfterProxySwitch = DisconnectAfterProxySwitch.IsOn,
                 HttpPort = httpPort,
                 SocksPort = socksPort,
                 MixedPort = mixedPort,
@@ -221,6 +222,11 @@ public sealed partial class SettingsPage : UserControl
         if (ShouldRefresh(TcpConcurrentSwitch.IsOn, value => value.TcpConcurrent))
         {
             TcpConcurrentSwitch.IsOn = settings.TcpConcurrent;
+        }
+
+        if (ShouldRefresh(DisconnectAfterProxySwitch.IsOn, value => value.DisconnectConnectionsAfterProxySwitch))
+        {
+            DisconnectAfterProxySwitch.IsOn = settings.DisconnectConnectionsAfterProxySwitch;
         }
 
         if (ShouldRefresh(SubscriptionRefreshHoursBox.Value, value => (double)value.SubscriptionRefreshHours))
