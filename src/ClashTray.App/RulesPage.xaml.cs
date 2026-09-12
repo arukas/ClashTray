@@ -21,6 +21,11 @@ public sealed partial class RulesPage : UserControl
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (ReferenceEquals(_rules, snapshot.Rules))
+        {
+            return;
+        }
+
         _rules = snapshot.Rules;
         ApplyFilter();
     }

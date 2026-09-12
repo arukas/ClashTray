@@ -22,6 +22,11 @@ public sealed partial class LogsPage : UserControl
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (ReferenceEquals(_logs, snapshot.Logs))
+        {
+            return;
+        }
+
         _logs = snapshot.Logs;
         ApplyFilter();
     }

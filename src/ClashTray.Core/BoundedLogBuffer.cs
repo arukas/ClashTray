@@ -10,6 +10,8 @@ public sealed class BoundedLogBuffer
     private readonly object _gate = new();
     private readonly LinkedList<LogEntry> _items = new();
     private readonly int _capacity;
+    private IReadOnlyList<LogEntry> _snapshot = Array.Empty<LogEntry>();
+    private bool _snapshotDirty;
 
     public BoundedLogBuffer(int capacity)
     {
@@ -45,6 +47,8 @@ public sealed class BoundedLogBuffer
             {
                 _items.RemoveFirst();
             }
+
+            _snapshotDirty = true;
         }
     }
 
@@ -52,7 +56,13 @@ public sealed class BoundedLogBuffer
     {
         lock (_gate)
         {
-            return _items.ToArray();
+            if (_snapshotDirty)
+            {
+                _snapshot = _items.ToArray();
+                _snapshotDirty = false;
+            }
+
+            return _snapshot;
         }
     }
 
@@ -60,7 +70,13 @@ public sealed class BoundedLogBuffer
     {
         lock (_gate)
         {
+            if (_items.Count == 0)
+            {
+                return;
+            }
+
             _items.Clear();
+            _snapshotDirty = true;
         }
     }
 }

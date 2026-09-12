@@ -1541,6 +1541,27 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             (IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders) providerData = await providersTask;
             CoreStatus currentCore = _snapshot.Core;
             TrafficSnapshot? traffic = trafficData.Value;
+            IReadOnlyList<ProxyGroup> proxyGroups = proxyData.Succeeded
+                ? ReuseIfEqual(_snapshot.ProxyGroups, proxyData.Groups, ProxyGroupsEqual)
+                : _snapshot.ProxyGroups;
+            IReadOnlyList<ProxyNode> proxyNodes = proxyData.Succeeded
+                ? ReuseIfEqual(_snapshot.ProxyNodes, proxyData.Nodes, ProxyNodesEqual)
+                : _snapshot.ProxyNodes;
+            IReadOnlyList<ConnectionInfo> connections = connectionData.Succeeded
+                ? ReuseIfEqual(_snapshot.Connections, connectionData.Value, EqualityComparer<ConnectionInfo>.Default.Equals)
+                : _snapshot.Connections;
+            IReadOnlyList<RuleInfo> rules = ReuseIfEqual(
+                _snapshot.Rules,
+                rulesData,
+                EqualityComparer<RuleInfo>.Default.Equals);
+            IReadOnlyList<ProviderStatus> providers = ReuseIfEqual(
+                _snapshot.Providers,
+                providerData.Providers,
+                EqualityComparer<ProviderStatus>.Default.Equals);
+            IReadOnlyList<ProviderStatus> ruleProviders = ReuseIfEqual(
+                _snapshot.RuleProviders,
+                providerData.RuleProviders,
+                EqualityComparer<ProviderStatus>.Default.Equals);
 
             _snapshot = _snapshot with
             {
@@ -1555,12 +1576,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     MemoryBytes = memoryData.Value,
                     MemoryAvailable = memoryData.Succeeded
                 },
-                ProxyGroups = proxyData.Succeeded ? proxyData.Groups : _snapshot.ProxyGroups,
-                ProxyNodes = proxyData.Succeeded ? proxyData.Nodes : _snapshot.ProxyNodes,
-                Connections = connectionData.Succeeded ? connectionData.Value : _snapshot.Connections,
-                Rules = rulesData,
-                Providers = providerData.Providers,
-                RuleProviders = providerData.RuleProviders,
+                ProxyGroups = proxyGroups,
+                ProxyNodes = proxyNodes,
+                Connections = connections,
+                Rules = rules,
+                Providers = providers,
+                RuleProviders = ruleProviders,
                 Logs = _logBuffer.Snapshot()
             };
             _throttledPublisher.Request();
@@ -1581,6 +1602,41 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             await RefreshOptionalDataAsync(api, cancellationToken);
         }
     }
+
+    private static IReadOnlyList<T> ReuseIfEqual<T>(
+        IReadOnlyList<T> previous,
+        IReadOnlyList<T> current,
+        Func<T, T, bool> equals)
+    {
+        if (previous.Count != current.Count)
+        {
+            return current;
+        }
+
+        for (int index = 0; index < previous.Count; index++)
+        {
+            if (!equals(previous[index], current[index]))
+            {
+                return current;
+            }
+        }
+
+        return previous;
+    }
+
+    private static bool ProxyGroupsEqual(ProxyGroup left, ProxyGroup right) =>
+        string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+        && string.Equals(left.Type, right.Type, StringComparison.Ordinal)
+        && string.Equals(left.Current, right.Current, StringComparison.Ordinal)
+        && string.Equals(left.Delay, right.Delay, StringComparison.Ordinal)
+        && left.Members.SequenceEqual(right.Members, StringComparer.Ordinal);
+
+    private static bool ProxyNodesEqual(ProxyNode left, ProxyNode right) =>
+        string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+        && string.Equals(left.Type, right.Type, StringComparison.Ordinal)
+        && string.Equals(left.Delay, right.Delay, StringComparison.Ordinal)
+        && left.IsCurrent == right.IsCurrent
+        && left.Providers.SequenceEqual(right.Providers, StringComparer.Ordinal);
 
     private async Task RefreshCoreHealthWithRetryAsync(CancellationToken cancellationToken)
     {

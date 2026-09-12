@@ -65,6 +65,22 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public void BoundedLogBufferReusesSnapshotUntilChanged()
+    {
+        BoundedLogBuffer buffer = new BoundedLogBuffer(2);
+
+        IReadOnlyList<LogEntry> first = buffer.Snapshot();
+        IReadOnlyList<LogEntry> second = buffer.Snapshot();
+
+        Assert.AreSame(first, second);
+        buffer.Add(new LogEntry(DateTimeOffset.UtcNow, "mihomo", "info", "new"));
+        IReadOnlyList<LogEntry> changed = buffer.Snapshot();
+
+        Assert.AreNotSame(first, changed);
+        Assert.AreSame(changed, buffer.Snapshot());
+    }
+
+    [TestMethod]
     public void MihomoDataParserReadsMemoryAndTunState()
     {
         using JsonDocument document = JsonDocument.Parse(
@@ -128,6 +144,42 @@ public sealed class RuntimeStateTests
                 handler.RequestedPaths.Any(path => path is "/rules" or "/providers/proxies" or "/providers/rules"));
             Assert.IsTrue(handler.RequestedPaths.Any(path => path == "/traffic"));
             Assert.IsTrue(handler.RequestedPaths.Any(path => path == "/connections"));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task UnchangedControllerDataReusesListSnapshots()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using RuntimeControllerHandler handler = new RuntimeControllerHandler();
+        using HttpClient httpClient = new HttpClient(handler);
+        MihomoApiClient api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            await runtime.RefreshControllerDataForTestingAsync();
+            RuntimeSnapshot first = runtime.Snapshot;
+
+            await runtime.RefreshControllerDataForTestingAsync();
+            RuntimeSnapshot second = runtime.Snapshot;
+
+            Assert.AreSame(first.ProxyGroups, second.ProxyGroups);
+            Assert.AreSame(first.ProxyNodes, second.ProxyNodes);
+            Assert.AreSame(first.Connections, second.Connections);
+            Assert.AreSame(first.Rules, second.Rules);
+            Assert.AreSame(first.Providers, second.Providers);
+            Assert.AreSame(first.RuleProviders, second.RuleProviders);
+            Assert.AreSame(first.Logs, second.Logs);
         }
         finally
         {

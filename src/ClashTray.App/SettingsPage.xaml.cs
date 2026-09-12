@@ -10,6 +10,8 @@ public sealed partial class SettingsPage : UserControl
     private readonly ClashTrayRuntime _runtime;
     private AppSettings? _loadedSettings;
     private bool _saving;
+    private IReadOnlyList<ProviderStatus>? _providers;
+    private IReadOnlyList<ProviderStatus>? _ruleProviders;
 
     public SettingsPage(ClashTrayRuntime runtime)
     {
@@ -355,6 +357,14 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
+        if (ReferenceEquals(_providers, snapshot.Providers)
+            && ReferenceEquals(_ruleProviders, snapshot.RuleProviders))
+        {
+            return;
+        }
+
+        _providers = snapshot.Providers;
+        _ruleProviders = snapshot.RuleProviders;
         string? selectedName = (ProvidersListView.SelectedItem as ListViewItem)?.Tag is ValueTuple<ProviderStatus, bool> selected
             ? selected.Item1.Name
             : null;

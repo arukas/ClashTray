@@ -33,10 +33,19 @@ public sealed partial class ProxyPage : UserControl
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        bool proxyDataUnchanged = _snapshot is not null
+            && ReferenceEquals(_snapshot.ProxyGroups, snapshot.ProxyGroups)
+            && ReferenceEquals(_snapshot.ProxyNodes, snapshot.ProxyNodes)
+            && ReferenceEquals(_snapshot.Providers, snapshot.Providers);
         _snapshot = snapshot;
         // Traffic updates should not recreate controls or disturb keyboard focus.
-        string signature = System.Text.Json.JsonSerializer.Serialize(new { snapshot.ProxyGroups, snapshot.ProxyNodes, snapshot.Providers });
         EmptyTitle.Text = snapshot.Core.State == CoreState.Running ? "配置中没有代理组" : "还没有代理组";
+        if (proxyDataUnchanged)
+        {
+            return;
+        }
+
+        string signature = System.Text.Json.JsonSerializer.Serialize(new { snapshot.ProxyGroups, snapshot.ProxyNodes, snapshot.Providers });
         if (_signature == signature)
         {
             return;

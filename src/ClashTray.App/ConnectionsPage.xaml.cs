@@ -20,6 +20,11 @@ public sealed partial class ConnectionsPage : UserControl
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (ReferenceEquals(_connections, snapshot.Connections))
+        {
+            return;
+        }
+
         _connections = snapshot.Connections;
         ApplyFilter();
     }
