@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core;
@@ -18,7 +19,11 @@ public sealed class ConfigurationStore
     private readonly AppPaths _paths;
     private readonly HttpMessageHandler? _subscriptionHandler;
     private readonly IConfigurationCandidateValidator? _candidateValidator;
-    private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 
     public ConfigurationStore(
         AppPaths paths,
@@ -44,16 +49,39 @@ public sealed class ConfigurationStore
                     continue;
                 }
 
-                await using FileStream stream = File.OpenRead(path);
-                ConfigurationProfile? profile = await JsonSerializer.DeserializeAsync<ConfigurationProfile>(stream, _jsonOptions, cancellationToken);
+                byte[]? metadataBytes = await ReadExistingFileAsync(
+                    path,
+                    MaxMetadataBytes,
+                    cancellationToken);
+                if (metadataBytes is null)
+                {
+                    continue;
+                }
+
+                StoredConfigurationProfile? stored = JsonSerializer.Deserialize<StoredConfigurationProfile>(
+                    metadataBytes,
+                    _jsonOptions);
+                ConfigurationProfile? profile = CreateProfile(stored, out bool requiresMigration);
                 if (profile is not null
                     && IsValidProfileId(profile.Id)
                     && IsConfigurationPathAllowed(profile.Path))
                 {
-                    profiles.Add(profile with { Path = Path.GetFullPath(profile.Path) });
+                    ConfigurationProfile normalized = profile with { Path = Path.GetFullPath(profile.Path) };
+                    if (requiresMigration)
+                    {
+                        await SaveMetadataAsync(normalized, cancellationToken);
+                    }
+
+                    profiles.Add(normalized);
                 }
             }
             catch (JsonException)
+            {
+            }
+            catch (InvalidDataException)
+            {
+            }
+            catch (CryptographicException)
             {
             }
             catch (IOException)
@@ -217,7 +245,79 @@ public sealed class ConfigurationStore
 
     private async Task SaveMetadataAsync(ConfigurationProfile profile, CancellationToken cancellationToken)
     {
-        await AtomicFile.WriteJsonAsync(MetadataPath(profile.Id), profile, _jsonOptions, cancellationToken);
+        string? protectedSubscriptionUri = profile.SubscriptionUri is null
+            ? null
+            : WindowsDataProtection.ProtectString(profile.SubscriptionUri.AbsoluteUri);
+        PersistedConfigurationProfile persisted = new PersistedConfigurationProfile(
+            profile.Id,
+            profile.Name,
+            profile.Path,
+            protectedSubscriptionUri,
+            profile.LastRefreshed,
+            profile.IsActive);
+        await AtomicFile.WriteJsonAsync(MetadataPath(profile.Id), persisted, _jsonOptions, cancellationToken);
+    }
+
+    private static ConfigurationProfile? CreateProfile(
+        StoredConfigurationProfile? stored,
+        out bool requiresMigration)
+    {
+        requiresMigration = false;
+        if (stored is null
+            || string.IsNullOrWhiteSpace(stored.Id)
+            || string.IsNullOrWhiteSpace(stored.Name)
+            || string.IsNullOrWhiteSpace(stored.Path))
+        {
+            return null;
+        }
+
+        Uri? subscriptionUri = null;
+        if (!string.IsNullOrWhiteSpace(stored.SubscriptionUriProtected))
+        {
+            string decrypted;
+            try
+            {
+                decrypted = WindowsDataProtection.UnprotectString(stored.SubscriptionUriProtected);
+            }
+            catch (CryptographicException exception)
+            {
+                throw new InvalidDataException("订阅地址无法解密。", exception);
+            }
+
+            if (!Uri.TryCreate(decrypted, UriKind.Absolute, out subscriptionUri))
+            {
+                throw new InvalidDataException("订阅地址无效。");
+            }
+
+            ValidateSubscriptionUri(subscriptionUri);
+            requiresMigration = !string.IsNullOrWhiteSpace(stored.SubscriptionUri);
+        }
+        else if (!string.IsNullOrWhiteSpace(stored.SubscriptionUri))
+        {
+            if (!Uri.TryCreate(stored.SubscriptionUri, UriKind.Absolute, out subscriptionUri))
+            {
+                throw new InvalidDataException("订阅地址无效。");
+            }
+
+            ValidateSubscriptionUri(subscriptionUri);
+            requiresMigration = true;
+        }
+
+        return new ConfigurationProfile(
+            stored.Id,
+            stored.Name,
+            stored.Path,
+            subscriptionUri,
+            stored.LastRefreshed,
+            stored.IsActive);
+    }
+
+    private static void ValidateSubscriptionUri(Uri subscriptionUri)
+    {
+        if (!subscriptionUri.IsAbsoluteUri || subscriptionUri.Scheme is not ("https" or "http"))
+        {
+            throw new InvalidDataException("Subscription URL must be an absolute HTTP or HTTPS URL.");
+        }
     }
 
     private async Task ValidateCandidateBytesAsync(
@@ -410,4 +510,29 @@ public sealed class ConfigurationStore
         string sanitized = new string(name.Select(character => invalid.Contains(character) ? '_' : character).ToArray()).Trim();
         return string.IsNullOrWhiteSpace(sanitized) ? "未命名配置" : sanitized[..Math.Min(64, sanitized.Length)];
     }
+
+    private sealed class StoredConfigurationProfile
+    {
+        public string? Id { get; set; }
+
+        public string? Name { get; set; }
+
+        public string? Path { get; set; }
+
+        public string? SubscriptionUri { get; set; }
+
+        public string? SubscriptionUriProtected { get; set; }
+
+        public DateTimeOffset? LastRefreshed { get; set; }
+
+        public bool IsActive { get; set; }
+    }
+
+    private sealed record PersistedConfigurationProfile(
+        string Id,
+        string Name,
+        string Path,
+        string? SubscriptionUriProtected,
+        DateTimeOffset? LastRefreshed,
+        bool IsActive);
 }

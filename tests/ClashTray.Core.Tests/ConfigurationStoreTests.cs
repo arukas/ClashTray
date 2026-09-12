@@ -1,4 +1,5 @@
 using ClashTray.Contracts;
+using System.Text.Json;
 
 namespace ClashTray.Core.Tests;
 
@@ -6,6 +7,77 @@ namespace ClashTray.Core.Tests;
 public sealed class ConfigurationStoreTests
 {
     private static readonly int[] ExpectedNewestItems = [2, 3];
+
+    [TestMethod]
+    public async Task SubscriptionMetadataStoresUrlAsCurrentUserProtectedData()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        using SubscriptionHandler handler = new SubscriptionHandler();
+        try
+        {
+            AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            ConfigurationStore store = new ConfigurationStore(paths, handler);
+            Uri uri = new Uri("https://subscription.invalid/config?token=secret-value");
+
+            ConfigurationImportResult imported = await store.ImportSubscriptionWithResultAsync(uri);
+            string metadata = await File.ReadAllTextAsync(
+                Path.Combine(paths.ConfigurationsRoot, $"{imported.Profile.Id}.json"));
+
+            Assert.IsFalse(metadata.Contains(uri.AbsoluteUri, StringComparison.Ordinal));
+            Assert.IsFalse(metadata.Contains("secret-value", StringComparison.Ordinal));
+            StringAssert.Contains(metadata, "subscriptionUriProtected", StringComparison.Ordinal);
+            Assert.AreEqual(uri, (await store.ListAsync()).Single().SubscriptionUri);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task LegacyPlaintextSubscriptionMetadataMigratesToProtectedData()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string id = "0123456789abcdef";
+        Uri uri = new Uri("https://subscription.invalid/config?token=legacy-secret");
+        try
+        {
+            AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            ConfigurationStore store = new ConfigurationStore(paths);
+            string configurationPath = Path.Combine(paths.ConfigurationsRoot, $"{id}.yaml");
+            await File.WriteAllTextAsync(configurationPath, "mixed-port: 7890\n");
+            await File.WriteAllTextAsync(
+                Path.Combine(paths.ConfigurationsRoot, $"{id}.json"),
+                JsonSerializer.Serialize(new
+                {
+                    id,
+                    name = "Legacy",
+                    path = configurationPath,
+                    subscriptionUri = uri.AbsoluteUri,
+                    isActive = false
+                }));
+
+            IReadOnlyList<ConfigurationProfile> profiles = await store.ListAsync();
+            string migrated = await File.ReadAllTextAsync(
+                Path.Combine(paths.ConfigurationsRoot, $"{id}.json"));
+
+            Assert.AreEqual(uri, profiles.Single().SubscriptionUri);
+            Assert.IsFalse(migrated.Contains(uri.AbsoluteUri, StringComparison.Ordinal));
+            using JsonDocument document = JsonDocument.Parse(migrated);
+            Assert.IsFalse(document.RootElement.TryGetProperty("subscriptionUri", out _));
+            Assert.IsTrue(document.RootElement.TryGetProperty("subscriptionUriProtected", out _));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
 
     [TestMethod]
     [DataRow(1)]

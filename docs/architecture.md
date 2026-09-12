@@ -24,6 +24,8 @@ Settings loading distinguishes first run, successful load, corruption recovery, 
 
 Subscription refresh validates the downloaded YAML, compares its SHA-256 with the stored subscription content, and replaces the file only when the hash changes. An active Mihomo core is restarted only for changed content; an unchanged refresh updates metadata and skips the restart.
 
+Subscription metadata stores the URL as a Windows DPAPI CurrentUser blob rather than clear text. Loading a legacy v0.1.0 metadata file decrypts the URL in memory and atomically rewrites the metadata without the old clear-text property; an unreadable protected value is ignored instead of being exposed.
+
 Configuration imports, local reloads, and changed subscription content are first written to a temporary candidate. The candidate must pass strict UTF-8/basic checks and, when the trusted managed core is installed, a generated-runtime `mihomo -t` validation before the stored file and metadata are committed. A rejected candidate leaves the last accepted file and metadata unchanged; a commit failure restores both from their in-memory backups.
 
 Node switching is serialized with other core operations. The optional setting `DisconnectConnectionsAfterProxySwitch` is off by default; when enabled, ClashTray closes all current connections only after Mihomo confirms the new selection. A failed close keeps the confirmed node selection, reports the partial success, and records the sanitized error.
