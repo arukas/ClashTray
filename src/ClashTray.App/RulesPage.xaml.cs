@@ -7,11 +7,14 @@ namespace ClashTray.App;
 
 public sealed partial class RulesPage : UserControl
 {
+    private readonly ClashTrayRuntime _runtime;
     private IReadOnlyList<RuleInfo> _rules = [];
+    private bool _refreshing;
 
     public RulesPage(ClashTrayRuntime runtime)
     {
         ArgumentNullException.ThrowIfNull(runtime);
+        _runtime = runtime;
         InitializeComponent();
     }
 
@@ -25,6 +28,34 @@ public sealed partial class RulesPage : UserControl
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
 
     private void FilterBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplyFilter();
+
+    private async void RefreshRulesButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_refreshing)
+        {
+            return;
+        }
+
+        _refreshing = true;
+        RefreshRulesButton.IsEnabled = false;
+        try
+        {
+            await _runtime.RefreshDataAsync();
+            StatusText.Text = "规则和 Provider 状态已刷新。";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = $"刷新失败：{ErrorSanitizer.Sanitize(exception)}";
+        }
+        finally
+        {
+            _refreshing = false;
+            RefreshRulesButton.IsEnabled = true;
+        }
+    }
 
     private void ApplyFilter()
     {

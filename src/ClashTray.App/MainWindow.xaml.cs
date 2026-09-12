@@ -33,6 +33,7 @@ public sealed partial class MainWindow : Window
     private AppWindow? _appWindow;
     private bool _updatingSnapshot;
     private bool _updatingThemeControls;
+    private bool _pageRefreshInProgress;
     private readonly Queue<(double Up, double Down)> _trafficHistory = new();
     private DateTime _lastTrafficSample;
 
@@ -602,6 +603,37 @@ public sealed partial class MainWindow : Window
         ConnectionsPageButton.IsChecked = title == "连接";
         LogsPageButton.IsChecked = title == "日志";
         SettingsPageButton.IsChecked = title == "设置";
+        if (title is "规则" or "设置")
+        {
+            _ = RefreshPageDataAsync();
+        }
+    }
+
+    private async Task RefreshPageDataAsync()
+    {
+        if (_runtime is null
+            || _runtime.Snapshot.Core.State != CoreState.Running
+            || _pageRefreshInProgress)
+        {
+            return;
+        }
+
+        _pageRefreshInProgress = true;
+        try
+        {
+            await _runtime.RefreshDataAsync();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            ShowError(exception.Message);
+        }
+        finally
+        {
+            _pageRefreshInProgress = false;
+        }
     }
 
 

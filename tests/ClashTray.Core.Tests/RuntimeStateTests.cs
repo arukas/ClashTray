@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
 using ClashTray.Contracts;
@@ -93,6 +94,40 @@ public sealed class RuntimeStateTests
             Assert.IsTrue(handler.AllowLan);
             Assert.IsFalse(handler.Ipv6);
             Assert.AreEqual(1, handler.NetworkPatchCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task RefreshWithoutRuleAndProviderDataSkipsTheirEndpoints()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using RuntimeControllerHandler handler = new RuntimeControllerHandler();
+        using HttpClient httpClient = new HttpClient(handler);
+        MihomoApiClient api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            await runtime.RefreshControllerDataForTestingAsync();
+            while (handler.RequestedPaths.TryDequeue(out _))
+            {
+            }
+
+            await runtime.RefreshControllerDataForTestingAsync(includeRulesAndProviders: false);
+
+            Assert.IsFalse(
+                handler.RequestedPaths.Any(path => path is "/rules" or "/providers/proxies" or "/providers/rules"));
+            Assert.IsTrue(handler.RequestedPaths.Any(path => path == "/traffic"));
+            Assert.IsTrue(handler.RequestedPaths.Any(path => path == "/connections"));
         }
         finally
         {
@@ -849,6 +884,8 @@ public sealed class RuntimeStateTests
 
     private sealed class RuntimeControllerHandler : HttpMessageHandler
     {
+        public ConcurrentQueue<string> RequestedPaths { get; } = new ConcurrentQueue<string>();
+
         public bool FailMetrics { get; set; }
 
         public bool AllowLan { get; private set; }
@@ -860,6 +897,11 @@ public sealed class RuntimeStateTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             string? path = request.RequestUri?.AbsolutePath;
+            if (path is not null)
+            {
+                RequestedPaths.Enqueue(path);
+            }
+
             if (FailMetrics && path is "/traffic" or "/memory")
             {
                 return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)

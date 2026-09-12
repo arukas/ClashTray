@@ -29,13 +29,17 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBox x:Name="SearchBox" PlaceholderText="搜索规则、域名或策略" TextChanged="SearchBox_TextChanged" />
-                <ComboBox x:Name="FilterBox" Grid.Column="1" SelectedIndex="0" SelectionChanged="FilterBox_SelectionChanged" MinWidth="84">
-                    <ComboBoxItem Content="全部" />
-                    <ComboBoxItem Content="域名" />
-                    <ComboBoxItem Content="IP" />
-                </ComboBox>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <ComboBox x:Name="FilterBox" SelectedIndex="0" SelectionChanged="FilterBox_SelectionChanged" MinWidth="84">
+                        <ComboBoxItem Content="全部" />
+                        <ComboBoxItem Content="域名" />
+                        <ComboBoxItem Content="IP" />
+                    </ComboBox>
+                    <Button x:Name="RefreshRulesButton" Content="刷新" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="RefreshRulesButton_Click" />
+                </StackPanel>
             </Grid>
         </Border>
+        <TextBlock x:Name="StatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
 
         <Border Style="{StaticResource ClashTrayCardStyle}" Padding="8"><Grid MinHeight="80"><ListView x:Name="RulesListView" AutomationProperties.Name="规则列表" ScrollViewer.VerticalScrollMode="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled" /><TextBlock x:Name="EmptyListText" Text="没有可显示的规则" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></Grid></Border>
     </StackPanel>

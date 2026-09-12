@@ -15,7 +15,7 @@ ClashTray 是使用 C#、.NET 10 和 WinUI 3 独立实现的 Windows Mihomo 客�
 - 托盘优先：左键打开锚定在真实托盘图标旁的面板，右键提供快速操作，关闭面板回到托盘。
 - 配置管理：导入本地 `.yaml` / `.yml`，或添加订阅地址；支持选择、刷新、重载和删除。
 - Mihomo 控制：校验、启动、停止、重启、崩溃检测，以及 `Rule`、`Global`、`Direct` 模式切换。
-- 节点与 Provider：代理组选择、节点切换、延迟测试、Proxy Provider 和 Rule Provider 手动刷新。
+- 节点与 Provider：代理组选择、节点切换、延迟测试、Proxy Provider 和 Rule Provider 手动刷新；规则与 Provider 仅在核心/配置变化、进入对应页面或手动刷新时更新。
 - 网络开关：System Proxy 和 TUN 分开管理；System Proxy 保存并按所有权恢复原始 Windows 代理状态。
 - 可观测性：实时上下行速率、累计流量、连接数、内存、规则搜索、连接筛选和有界日志。
 - 设置与维护：HTTP / SOCKS / Mixed 端口、`allow-lan`、IPv6、TCP concurrent、日志级别、DNS/FakeIP 缓存、Geo 数据库、开机启动和定时订阅刷新。

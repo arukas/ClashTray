@@ -1369,6 +1369,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     internal Task RefreshControllerDataForTestingAsync(CancellationToken cancellationToken = default) =>
         RefreshFromApiAsync(cancellationToken);
 
+    internal Task RefreshControllerDataForTestingAsync(
+        bool includeRulesAndProviders,
+        CancellationToken cancellationToken = default) =>
+        RefreshFromApiAsync(cancellationToken, includeRulesAndProviders);
+
     internal Task RevokeSystemProxyForTestingAsync() =>
         RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
 
@@ -1445,7 +1450,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _runtimeCts.Dispose();
     }
 
-    private async Task RefreshFromApiAsync(CancellationToken cancellationToken)
+    private async Task RefreshFromApiAsync(
+        CancellationToken cancellationToken,
+        bool includeRulesAndProviders = true)
     {
         MihomoApiClient? api = _api;
         if (api is null)
@@ -1453,8 +1460,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             return;
         }
 
+        bool coreHealthWasUnconfirmed = !_coreHealthConfirmed;
         await RefreshCoreHealthAsync(api, cancellationToken);
-        await RefreshOptionalDataAsync(api, cancellationToken);
+        await RefreshOptionalDataAsync(
+            api,
+            cancellationToken,
+            includeRulesAndProviders || coreHealthWasUnconfirmed);
     }
 
     private async Task RefreshCoreHealthAsync(MihomoApiClient api, CancellationToken cancellationToken)
@@ -1490,7 +1501,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         EnsureLogStreamStarted();
     }
 
-    private async Task RefreshOptionalDataAsync(MihomoApiClient api, CancellationToken cancellationToken)
+    private async Task RefreshOptionalDataAsync(
+        MihomoApiClient api,
+        CancellationToken cancellationToken,
+        bool includeRulesAndProviders = true)
     {
         await _dataRefreshLock.WaitAsync(cancellationToken);
         try
@@ -1504,8 +1518,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             Task<TrafficDataResult> trafficTask = TryGetTrafficSnapshotAsync(api, cancellationToken);
             Task<MemoryDataResult> memoryTask = TryGetMemoryAsync(api, cancellationToken);
             Task<ConnectionDataResult> connectionsTask = TryGetConnectionDataAsync(api, cancellationToken);
-            Task<IReadOnlyList<RuleInfo>> rulesTask = TryGetRulesAsync(api, cancellationToken);
-            Task<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> providersTask = TryGetProvidersAsync(api, cancellationToken);
+            Task<IReadOnlyList<RuleInfo>> rulesTask = includeRulesAndProviders
+                ? TryGetRulesAsync(api, cancellationToken)
+                : Task.FromResult<IReadOnlyList<RuleInfo>>(_snapshot.Rules);
+            Task<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> providersTask =
+                includeRulesAndProviders
+                    ? TryGetProvidersAsync(api, cancellationToken)
+                    : Task.FromResult<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)>(
+                        (_snapshot.Providers, _snapshot.RuleProviders));
             await Task.WhenAll(proxyTask, trafficTask, memoryTask, connectionsTask, rulesTask, providersTask);
 
             if (!ReferenceEquals(_api, api))
@@ -1623,7 +1643,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     break;
                 }
 
-                await RefreshFromApiAsync(_runtimeCts.Token);
+                await RefreshFromApiAsync(
+                    _runtimeCts.Token,
+                    includeRulesAndProviders: false);
                 await ApplyProgramOverridesAsync(coreRunning: true, cancellationToken: _runtimeCts.Token);
                 retryDelay = TimeSpan.FromSeconds(2);
                 retryCount = 0;
