@@ -10,6 +10,13 @@ public static class MihomoDataParser
     private const int MaxConnectionEntries = 2_000;
     private const int MaxRuleEntries = 5_000;
     private const int MaxProviderEntries = 500;
+    private const int MaxLogEntries = 500;
+    private const int MaxIdentifierCharacters = 256;
+    private const int MaxConnectionFieldCharacters = 1_024;
+    private const int MaxRuleTextCharacters = 4_096;
+    private const int MaxLogMessageCharacters = 4_096;
+    private const int MaxGroupMemberEntries = 500;
+    private const int MaxChainEntries = 64;
 
     public static string? ParseVersion(JsonDocument document)
     {
@@ -55,17 +62,23 @@ public static class MihomoDataParser
             }
 
             string? delay = ReadLatestDelay(value);
-            string type = GetString(value, "type") ?? "Unknown";
-            string? current = GetString(value, "now");
-            string[] members = GetStringArray(value, "all");
+            string type = GetString(value, "type", MaxIdentifierCharacters) ?? "Unknown";
+            string? current = GetIdentifier(value, "now");
+            string[] members = GetStringArray(value, "all", MaxGroupMemberEntries, MaxIdentifierCharacters);
+            string name = property.Name;
+            if (name.Length > MaxIdentifierCharacters)
+            {
+                continue;
+            }
+
             bool isGroup = members.Length > 0 || type is "Selector" or "URLTest" or "Fallback" or "LoadBalance";
             if (isGroup)
             {
-                groups.Add(new ProxyGroup(property.Name, type, current, members, delay));
+                groups.Add(new ProxyGroup(name, type, current, members, delay));
             }
             else
             {
-                nodes.Add(new ProxyNode(property.Name, type, delay, false, []));
+                nodes.Add(new ProxyNode(name, type, delay, false, []));
             }
         }
 
@@ -99,6 +112,11 @@ public static class MihomoDataParser
         Dictionary<string, int?> delays = new Dictionary<string, int?>(StringComparer.Ordinal);
         foreach (JsonProperty property in document.RootElement.EnumerateObject().Take(MaxProxyEntries))
         {
+            if (property.Name.Length > MaxIdentifierCharacters)
+            {
+                continue;
+            }
+
             delays[property.Name] = property.Value.ValueKind == JsonValueKind.Number
                 && property.Value.TryGetInt32(out int value) && value >= 0 ? value : null;
         }
@@ -189,19 +207,30 @@ public static class MihomoDataParser
         List<ConnectionInfo> result = new List<ConnectionInfo>();
         foreach (JsonElement connection in connections.EnumerateArray().Take(MaxConnectionEntries))
         {
+            string? id = GetRawString(connection, "id");
+            if (id is { Length: > MaxIdentifierCharacters })
+            {
+                continue;
+            }
+
             JsonElement metadata = connection.TryGetProperty("metadata", out JsonElement metadataElement) ? metadataElement : default;
-            string[] chains = GetStringArray(connection, "chains");
+            string[] chains = GetStringArray(connection, "chains", MaxChainEntries, MaxConnectionFieldCharacters);
             result.Add(new ConnectionInfo(
-                GetString(connection, "id") ?? Guid.NewGuid().ToString("N"),
-                GetString(metadata, "network") ?? "-",
-                GetString(metadata, "sourceIP") ?? GetString(metadata, "source") ?? "-",
-                GetString(metadata, "destinationIP") ?? GetString(metadata, "host") ?? GetString(metadata, "destination") ?? "-",
-                GetString(connection, "rule") ?? "-",
+                id ?? Guid.NewGuid().ToString("N"),
+                GetString(metadata, "network", MaxConnectionFieldCharacters) ?? "-",
+                GetString(metadata, "sourceIP", MaxConnectionFieldCharacters)
+                    ?? GetString(metadata, "source", MaxConnectionFieldCharacters)
+                    ?? "-",
+                GetString(metadata, "destinationIP", MaxConnectionFieldCharacters)
+                    ?? GetString(metadata, "host", MaxConnectionFieldCharacters)
+                    ?? GetString(metadata, "destination", MaxConnectionFieldCharacters)
+                    ?? "-",
+                GetString(connection, "rule", MaxConnectionFieldCharacters) ?? "-",
                 string.Join(" → ", chains),
                 GetLong(connection, "upload"),
                 GetLong(connection, "download"),
                 ParseTimestamp(GetString(connection, "start")),
-                GetString(connection, "rulePayload") ?? "-"));
+                GetString(connection, "rulePayload", MaxConnectionFieldCharacters) ?? "-"));
         }
 
         return result;
@@ -222,9 +251,9 @@ public static class MihomoDataParser
             if (rule.ValueKind == JsonValueKind.Object)
             {
                 result.Add(new RuleInfo(
-                    GetString(rule, "type") ?? "-",
-                    GetString(rule, "payload") ?? "-",
-                    GetString(rule, "proxy") ?? "-",
+                    GetString(rule, "type", MaxIdentifierCharacters) ?? "-",
+                    GetString(rule, "payload", MaxRuleTextCharacters) ?? "-",
+                    GetString(rule, "proxy", MaxIdentifierCharacters) ?? "-",
                     GetInt(rule, "size")));
                 continue;
             }
@@ -234,9 +263,9 @@ public static class MihomoDataParser
                 continue;
             }
 
-            string type = GetText(rule[0]) ?? "-";
-            string payload = GetText(rule[1]) ?? "-";
-            string proxy = GetText(rule[2]) ?? "-";
+            string type = GetText(rule[0], MaxIdentifierCharacters) ?? "-";
+            string payload = GetText(rule[1], MaxRuleTextCharacters) ?? "-";
+            string proxy = GetText(rule[2], MaxIdentifierCharacters) ?? "-";
             result.Add(new RuleInfo(type, payload, proxy, GetInt(rule, 3)));
         }
 
@@ -256,13 +285,18 @@ public static class MihomoDataParser
         List<ProviderStatus> result = new List<ProviderStatus>();
         foreach (JsonProperty property in providers.EnumerateObject().Take(MaxProviderEntries))
         {
+            if (property.Name.Length > MaxIdentifierCharacters)
+            {
+                continue;
+            }
+
             JsonElement value = property.Value;
             result.Add(new ProviderStatus(
                 property.Name,
                 fallbackType,
-                GetString(value, "vehicleType") ?? "-",
+                GetString(value, "vehicleType", MaxIdentifierCharacters) ?? "-",
                 ParseTimestamp(GetString(value, "updatedAt")),
-                GetString(value, "message"),
+                GetString(value, "message", MaxConnectionFieldCharacters),
                 GetCount(value, "proxies") + GetCount(value, "rules")));
         }
 
@@ -276,14 +310,14 @@ public static class MihomoDataParser
         List<LogEntry> result = new List<LogEntry>();
         if (document.RootElement.ValueKind == JsonValueKind.Array)
         {
-            foreach (JsonElement item in document.RootElement.EnumerateArray())
+            foreach (JsonElement item in document.RootElement.EnumerateArray().Take(MaxLogEntries))
             {
                 result.Add(ParseLog(item, source));
             }
         }
         else if (document.RootElement.TryGetProperty("logs", out JsonElement logs) && logs.ValueKind == JsonValueKind.Array)
         {
-            foreach (JsonElement item in logs.EnumerateArray())
+            foreach (JsonElement item in logs.EnumerateArray().Take(MaxLogEntries))
             {
                 result.Add(ParseLog(item, source));
             }
@@ -299,8 +333,13 @@ public static class MihomoDataParser
     private static LogEntry ParseLog(JsonElement item, string source)
     {
         DateTimeOffset timestamp = ParseTimestamp(GetString(item, "time"));
-        string level = GetString(item, "type") ?? GetString(item, "level") ?? "info";
-        string message = GetString(item, "payload") ?? GetString(item, "message") ?? item.ToString();
+        string level = GetString(item, "type", MaxIdentifierCharacters)
+            ?? GetString(item, "level", MaxIdentifierCharacters)
+            ?? "info";
+        string message = GetString(item, "payload", MaxLogMessageCharacters)
+            ?? GetString(item, "message", MaxLogMessageCharacters)
+            ?? LimitText(item.ToString(), MaxLogMessageCharacters)
+            ?? "-";
         return new LogEntry(timestamp, source, level, message);
     }
 
@@ -316,14 +355,17 @@ public static class MihomoDataParser
             ? timestamp
             : DateTimeOffset.UtcNow;
 
-    private static string? GetString(JsonElement element, string property)
+    private static string? GetString(
+        JsonElement element,
+        string property,
+        int maxCharacters = MaxConnectionFieldCharacters)
     {
         if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out JsonElement value))
         {
             return null;
         }
 
-        return value.ValueKind == JsonValueKind.String ? value.GetString() : value.ToString();
+        return LimitText(GetRawString(value), maxCharacters);
     }
 
     private static bool? GetBoolean(JsonElement element, params string[] properties)
@@ -345,15 +387,21 @@ public static class MihomoDataParser
         return null;
     }
 
-    private static string? GetText(JsonElement element) =>
-        element.ValueKind switch
-        {
-            JsonValueKind.Null or JsonValueKind.Undefined => null,
-            JsonValueKind.String => element.GetString(),
-            _ => element.ToString()
-        };
+    private static string? GetText(JsonElement element, int maxCharacters = MaxConnectionFieldCharacters) =>
+        LimitText(
+            element.ValueKind switch
+            {
+                JsonValueKind.Null or JsonValueKind.Undefined => null,
+                JsonValueKind.String => element.GetString(),
+                _ => element.ToString()
+            },
+            maxCharacters);
 
-    private static string[] GetStringArray(JsonElement element, string property)
+    private static string[] GetStringArray(
+        JsonElement element,
+        string property,
+        int maxEntries,
+        int maxCharacters)
     {
         if (element.ValueKind != JsonValueKind.Object
             || !element.TryGetProperty(property, out JsonElement value)
@@ -363,11 +411,53 @@ public static class MihomoDataParser
         }
 
         return value.EnumerateArray()
+            .Take(maxEntries)
             .Where(item => item.ValueKind == JsonValueKind.String)
             .Select(item => item.GetString())
-            .Where(item => item is not null)
-            .Cast<string>()
+            .OfType<string>()
+            .Where(item => item.Length <= maxCharacters)
             .ToArray();
+    }
+
+    private static string? GetIdentifier(JsonElement element, string property)
+    {
+        string? value = GetRawString(element, property);
+        return value is { Length: <= MaxIdentifierCharacters } ? value : null;
+    }
+
+    private static string? GetRawString(JsonElement element, string property)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out JsonElement value))
+        {
+            return null;
+        }
+
+        return GetRawString(value);
+    }
+
+    private static string GetRawString(JsonElement value) =>
+        value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? string.Empty,
+            JsonValueKind.Null or JsonValueKind.Undefined => string.Empty,
+            _ => value.ToString()
+        };
+
+    private static string? LimitText(string? value, int maxCharacters)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (value.Length <= maxCharacters)
+        {
+            return value;
+        }
+
+        return maxCharacters <= 1
+            ? "…"
+            : value[..(maxCharacters - 1)] + "…";
     }
 
     private static long GetLong(JsonElement element, string property) =>

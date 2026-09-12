@@ -285,6 +285,81 @@ public sealed class MihomoApiCompatibilityTests
         Assert.AreEqual(5_000, MihomoDataParser.ParseRules(rulesDocument).Count);
     }
 
+    [TestMethod]
+    public void ParserBoundsUntrustedDisplayFieldsAndIdentifiers()
+    {
+        string longIdentifier = new string('n', 300);
+        string longText = new string('x', 5_000);
+        using JsonDocument proxies = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            proxies = new Dictionary<string, object>
+            {
+                [longIdentifier] = new { type = "Direct" },
+                ["Group"] = new { type = "Selector", all = new[] { longIdentifier, "Node" } }
+            }
+        }));
+        using JsonDocument connections = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            connections = new object[]
+            {
+                new
+                {
+                    id = longIdentifier,
+                    metadata = new { network = "tcp" }
+                },
+                new
+                {
+                    id = "connection-1",
+                    metadata = new { network = longText, sourceIP = longText, destinationIP = longText },
+                    chains = new[] { longText },
+                    rule = longText,
+                    rulePayload = longText
+                }
+            }
+        }));
+        using JsonDocument rules = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            rules = new object[]
+            {
+                new { type = "DOMAIN", payload = longText, proxy = longIdentifier },
+                new object[] { "MATCH", longText, longIdentifier }
+            }
+        }));
+        using JsonDocument providers = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            providers = new Dictionary<string, object>
+            {
+                [longIdentifier] = new { vehicleType = "HTTP" },
+                ["Provider"] = new { message = longText }
+            }
+        }));
+        using JsonDocument logs = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            logs = new[] { new { level = "warning", message = longText } }
+        }));
+
+        (IReadOnlyList<ProxyGroup> Groups, IReadOnlyList<ProxyNode> Nodes) proxyData =
+            MihomoDataParser.ParseProxies(proxies);
+        IReadOnlyList<ConnectionInfo> connectionData = MihomoDataParser.ParseConnections(connections);
+        IReadOnlyList<RuleInfo> ruleData = MihomoDataParser.ParseRules(rules);
+        IReadOnlyList<ProviderStatus> providerData = MihomoDataParser.ParseProviders(providers, "proxy");
+        IReadOnlyList<LogEntry> logData = MihomoDataParser.ParseLogs(logs, "mihomo");
+
+        Assert.AreEqual(1, proxyData.Groups.Count);
+        CollectionAssert.AreEqual(ExpectedProxyMembers, proxyData.Groups[0].Members.ToArray());
+        Assert.AreEqual(0, proxyData.Nodes.Count);
+        Assert.AreEqual(1, connectionData.Count);
+        Assert.IsTrue(connectionData[0].Network.Length <= 1_024);
+        Assert.IsTrue(connectionData[0].RulePayload.Length <= 1_024);
+        Assert.AreEqual(2, ruleData.Count);
+        Assert.IsTrue(ruleData[0].Payload.Length <= 4_096);
+        Assert.IsTrue(ruleData[1].Proxy.Length <= 256);
+        Assert.AreEqual(1, providerData.Count);
+        Assert.IsTrue(providerData[0].Error!.Length <= 1_024);
+        Assert.AreEqual(1, logData.Count);
+        Assert.IsTrue(logData[0].Message.Length <= 4_096);
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public HttpMethod? Method { get; private set; }
