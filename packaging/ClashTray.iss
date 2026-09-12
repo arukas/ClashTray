@@ -64,7 +64,7 @@ Source: "{#PayloadRoot}\Core\*"; DestDir: "{commonappdata}\ClashTray\core"; Flag
 #endif
 
 [Dirs]
-Name: "{commonappdata}\ClashTray\core"; Permissions: users-readexec, admins-full, system-full
+Name: "{commonappdata}\ClashTray\core"; Permissions: users-readexec admins-full system-full
 
 [InstallDelete]
 ; Remove the legacy C# installer layout when upgrading an existing install.
