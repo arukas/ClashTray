@@ -11,6 +11,8 @@ namespace ClashTray.Service;
 internal sealed class ServiceCommandHost : IAsyncDisposable
 {
     private const int MaxRequestCharacters = 64 * 1024;
+    private static readonly TimeSpan RequestIdleTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(5);
     private readonly string _userSid;
     private readonly CancellationTokenSource _cts = new();
     private readonly ServiceRuntimeController _controller;
@@ -56,12 +58,20 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                 string? line;
                 try
                 {
-                    line = await ReadLineLimitedAsync(reader, _cts.Token);
+                    using CancellationTokenSource requestTimeout = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
+                    requestTimeout.CancelAfter(RequestIdleTimeout);
+                    line = await ReadLineLimitedAsync(reader, requestTimeout.Token);
+                }
+                catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
+                {
+                    continue;
                 }
                 catch (InvalidDataException)
                 {
-                    await writer.WriteLineAsync(JsonSerializer.Serialize(
-                        new ServiceResponse(Guid.Empty, false, TunState.Failed, Error: "服务请求超过大小限制。", Core: _controller.CoreState)));
+                    await WriteResponseAsync(
+                        writer,
+                        new ServiceResponse(Guid.Empty, false, TunState.Failed, Error: "服务请求超过大小限制。", Core: _controller.CoreState),
+                        _cts.Token);
                     continue;
                 }
 
@@ -82,16 +92,28 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                     response = new ServiceResponse(Guid.Empty, false, TunState.Failed, Error: exception.Message, Core: _controller.CoreState);
                 }
 
-                await writer.WriteLineAsync(JsonSerializer.Serialize(response, _jsonOptions));
+                await WriteResponseAsync(writer, response, _cts.Token);
             }
             catch (OperationCanceledException) when (_cts.IsCancellationRequested)
             {
                 break;
             }
+            catch (TimeoutException) when (!_cts.IsCancellationRequested)
+            {
+            }
             catch (IOException) when (!_cts.IsCancellationRequested)
             {
             }
         }
+    }
+
+    private async Task WriteResponseAsync(
+        StreamWriter writer,
+        ServiceResponse response,
+        CancellationToken cancellationToken)
+    {
+        await writer.WriteLineAsync(JsonSerializer.Serialize(response, _jsonOptions))
+            .WaitAsync(ResponseWriteTimeout, cancellationToken);
     }
 
     private static async Task<string?> ReadLineLimitedAsync(StreamReader reader, CancellationToken cancellationToken)
