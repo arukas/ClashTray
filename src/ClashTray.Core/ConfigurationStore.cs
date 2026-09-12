@@ -17,13 +17,18 @@ public sealed class ConfigurationStore
     private static readonly string[] SupportedExtensions = [".yaml", ".yml"];
     private readonly AppPaths _paths;
     private readonly HttpMessageHandler? _subscriptionHandler;
+    private readonly IConfigurationCandidateValidator? _candidateValidator;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
-    public ConfigurationStore(AppPaths paths, HttpMessageHandler? subscriptionHandler = null)
+    public ConfigurationStore(
+        AppPaths paths,
+        HttpMessageHandler? subscriptionHandler = null,
+        IConfigurationCandidateValidator? candidateValidator = null)
     {
         _paths = paths;
         // An injected handler is owned by the caller; each download still has its own timeout/client.
         _subscriptionHandler = subscriptionHandler;
+        _candidateValidator = candidateValidator;
         _paths.EnsureDirectories();
     }
 
@@ -77,9 +82,9 @@ public sealed class ConfigurationStore
         string id = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()[..16];
         string safeName = SanitizeName(displayName ?? Path.GetFileNameWithoutExtension(sourcePath));
         string destination = Path.Combine(_paths.ConfigurationsRoot, $"{id}{extension.ToLowerInvariant()}");
-        await AtomicFile.WriteBytesAsync(destination, bytes, cancellationToken);
         ConfigurationProfile profile = new ConfigurationProfile(id, safeName, destination, null, DateTimeOffset.UtcNow, false);
-        await SaveMetadataAsync(profile, cancellationToken);
+        await ValidateCandidateBytesAsync(bytes, extension, cancellationToken);
+        await CommitProfileAsync(destination, bytes, profile, cancellationToken);
         return profile;
     }
 
@@ -119,11 +124,18 @@ public sealed class ConfigurationStore
             || !CryptographicOperations.FixedTimeEquals(previousHash, contentHash);
         if (contentChanged)
         {
-            await AtomicFile.WriteBytesAsync(destination, bytes, cancellationToken);
+            await ValidateCandidateBytesAsync(bytes, ".yaml", cancellationToken);
         }
 
         ConfigurationProfile profile = new ConfigurationProfile(id, safeName, destination, subscriptionUri, DateTimeOffset.UtcNow, false);
-        await SaveMetadataAsync(profile, cancellationToken);
+        if (contentChanged)
+        {
+            await CommitProfileAsync(destination, bytes, profile, cancellationToken);
+        }
+        else
+        {
+            await SaveMetadataAsync(profile, cancellationToken);
+        }
         return new ConfigurationImportResult(
             profile,
             contentChanged,
@@ -147,6 +159,7 @@ public sealed class ConfigurationStore
         await using FileStream source = File.OpenRead(path);
         byte[] bytes = await ReadBytesWithLimitAsync(source, cancellationToken);
         ValidateYaml(bytes);
+        await ValidateCandidateBytesAsync(bytes, Path.GetExtension(path), cancellationToken);
         ConfigurationProfile refreshed = profile with { LastRefreshed = DateTimeOffset.UtcNow };
         await SaveMetadataAsync(refreshed, cancellationToken);
         return refreshed;
@@ -177,7 +190,22 @@ public sealed class ConfigurationStore
             throw new InvalidDataException("Configuration is empty.");
         }
 
-        string text = Encoding.UTF8.GetString(content);
+        string text;
+        try
+        {
+            text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                .GetString(content);
+        }
+        catch (DecoderFallbackException exception)
+        {
+            throw new InvalidDataException("Configuration must be valid UTF-8.", exception);
+        }
+
+        if (text.Contains('\0', StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("Configuration contains an invalid null character.");
+        }
+
         if (!text.Contains("mixed-port:", StringComparison.OrdinalIgnoreCase)
             && !text.Contains("port:", StringComparison.OrdinalIgnoreCase)
             && !text.Contains("proxies:", StringComparison.OrdinalIgnoreCase)
@@ -190,6 +218,105 @@ public sealed class ConfigurationStore
     private async Task SaveMetadataAsync(ConfigurationProfile profile, CancellationToken cancellationToken)
     {
         await AtomicFile.WriteJsonAsync(MetadataPath(profile.Id), profile, _jsonOptions, cancellationToken);
+    }
+
+    private async Task ValidateCandidateBytesAsync(
+        byte[] bytes,
+        string extension,
+        CancellationToken cancellationToken)
+    {
+        if (_candidateValidator is null)
+        {
+            return;
+        }
+
+        string candidatePath = Path.Combine(
+            _paths.ConfigurationsRoot,
+            $".candidate-{Guid.NewGuid():N}{extension.ToLowerInvariant()}");
+        try
+        {
+            await AtomicFile.WriteBytesAsync(candidatePath, bytes, cancellationToken);
+            await _candidateValidator.ValidateAsync(candidatePath, cancellationToken);
+        }
+        finally
+        {
+            if (File.Exists(candidatePath))
+            {
+                File.Delete(candidatePath);
+            }
+        }
+    }
+
+    private async Task CommitProfileAsync(
+        string destination,
+        byte[] bytes,
+        ConfigurationProfile profile,
+        CancellationToken cancellationToken)
+    {
+        string metadataPath = MetadataPath(profile.Id);
+        byte[]? previousContent = await ReadExistingFileAsync(
+            destination,
+            MaxConfigurationBytes,
+            cancellationToken);
+        byte[]? previousMetadata = await ReadExistingFileAsync(
+            metadataPath,
+            MaxMetadataBytes,
+            cancellationToken);
+        try
+        {
+            await AtomicFile.WriteBytesAsync(destination, bytes, cancellationToken);
+            await SaveMetadataAsync(profile, cancellationToken);
+        }
+        catch (Exception commitException)
+        {
+            try
+            {
+                await RestoreFileAsync(destination, previousContent);
+                await RestoreFileAsync(metadataPath, previousMetadata);
+            }
+            catch (Exception rollbackException)
+            {
+                throw new IOException(
+                    "配置提交失败，且无法恢复上一个配置。",
+                    new AggregateException(commitException, rollbackException));
+            }
+
+            throw;
+        }
+    }
+
+    private static async Task<byte[]?> ReadExistingFileAsync(
+        string path,
+        int maxBytes,
+        CancellationToken cancellationToken)
+    {
+        FileInfo fileInfo = new FileInfo(path);
+        if (!fileInfo.Exists)
+        {
+            return null;
+        }
+
+        if (fileInfo.Length > maxBytes)
+        {
+            throw new InvalidDataException("Existing configuration data exceeds the supported size limit.");
+        }
+
+        return await File.ReadAllBytesAsync(path, cancellationToken);
+    }
+
+    private static async Task RestoreFileAsync(string path, byte[]? content)
+    {
+        if (content is null)
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+
+            return;
+        }
+
+        await AtomicFile.WriteBytesAsync(path, content, CancellationToken.None);
     }
 
     private string MetadataPath(string id)

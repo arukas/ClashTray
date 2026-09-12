@@ -19,13 +19,24 @@ public sealed class MihomoProcessManager : IAsyncDisposable
     public event Action<string, bool>? LogLineReceived;
 
     public async Task<bool> ValidateAsync(string executablePath, string configurationPath, CancellationToken cancellationToken = default)
+        => await ValidateAsync(executablePath, configurationPath, workingDirectory: null, cancellationToken);
+
+    public async Task<bool> ValidateAsync(
+        string executablePath,
+        string configurationPath,
+        string? workingDirectory,
+        CancellationToken cancellationToken = default)
     {
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
             State = CoreState.Validating;
             OnStateChanged();
-            int result = await RunOneShotAsync(executablePath, $"-t -f \"{configurationPath}\"", cancellationToken);
+            int result = await RunOneShotAsync(
+                executablePath,
+                $"-t -f \"{configurationPath}\"",
+                workingDirectory,
+                cancellationToken);
             State = result == 0 ? CoreState.Stopped : CoreState.Failed;
             OnStateChanged();
             return result == 0;
@@ -235,7 +246,11 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
     }
 
-    private static async Task<int> RunOneShotAsync(string executablePath, string arguments, CancellationToken cancellationToken)
+    private static async Task<int> RunOneShotAsync(
+        string executablePath,
+        string arguments,
+        string? workingDirectory,
+        CancellationToken cancellationToken)
     {
         ProcessStartInfo startInfo = new ProcessStartInfo
         {
@@ -246,12 +261,56 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            startInfo.WorkingDirectory = workingDirectory;
+        }
+
         using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("Unable to start Mihomo validation.");
-        Task<string> standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        Task<string> standardError = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
-        await Task.WhenAll(standardOutput, standardError);
-        return process.ExitCode;
+        Task standardOutput = DrainValidationOutputAsync(process.StandardOutput);
+        Task standardError = DrainValidationOutputAsync(process.StandardError);
+        bool completed = false;
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+            await Task.WhenAll(standardOutput, standardError);
+            completed = true;
+            return process.ExitCode;
+        }
+        finally
+        {
+            if (!completed)
+            {
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
+                try
+                {
+                    await process.WaitForExitAsync(CancellationToken.None);
+                }
+                catch (InvalidOperationException)
+                {
+                }
+
+                await Task.WhenAll(standardOutput, standardError);
+            }
+        }
+    }
+
+    private static async Task DrainValidationOutputAsync(StreamReader reader)
+    {
+        char[] buffer = new char[8 * 1024];
+        while (await reader.ReadAsync(buffer.AsMemory(), CancellationToken.None) > 0)
+        {
+        }
     }
 
     private async Task DrainAsync(StreamReader reader, bool isError, CancellationToken cancellationToken)

@@ -95,6 +95,48 @@ public sealed class ConfigurationStoreTests
         }
     }
 
+    [TestMethod]
+    public async Task RejectedSubscriptionCandidatePreservesLastAcceptedConfiguration()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        using SubscriptionHandler handler = new SubscriptionHandler();
+        CandidateValidator validator = new CandidateValidator();
+        try
+        {
+            AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            ConfigurationStore store = new ConfigurationStore(paths, handler, validator);
+            Uri uri = new Uri("https://subscription.invalid/config");
+
+            ConfigurationImportResult first = await store.ImportSubscriptionWithResultAsync(uri);
+            string previousContent = await File.ReadAllTextAsync(first.Profile.Path);
+            string previousMetadata = await File.ReadAllTextAsync(
+                Path.Combine(paths.ConfigurationsRoot, $"{first.Profile.Id}.json"));
+
+            validator.Reject = true;
+            handler.ResponseBody = "mixed-port: not-a-number\n";
+
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+                store.ImportSubscriptionWithResultAsync(uri));
+
+            Assert.AreEqual(previousContent, await File.ReadAllTextAsync(first.Profile.Path));
+            Assert.AreEqual(
+                previousMetadata,
+                await File.ReadAllTextAsync(Path.Combine(paths.ConfigurationsRoot, $"{first.Profile.Id}.json")));
+            ConfigurationProfile current = (await store.ListAsync()).Single();
+            Assert.AreEqual(first.Profile.LastRefreshed, current.LastRefreshed);
+            Assert.AreEqual(
+                0,
+                Directory.EnumerateFiles(paths.ConfigurationsRoot, ".candidate-*").Count());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private sealed class SubscriptionHandler : HttpMessageHandler
     {
         public List<string> UserAgents { get; } = [];
@@ -112,6 +154,21 @@ public sealed class ConfigurationStoreTests
         }
     }
 
+    private sealed class CandidateValidator : IConfigurationCandidateValidator
+    {
+        public bool Reject { get; set; }
+
+        public Task ValidateAsync(string candidatePath, CancellationToken cancellationToken = default)
+        {
+            if (Reject)
+            {
+                throw new InvalidDataException("candidate rejected");
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+
     [TestMethod]
     public void ValidateYamlAcceptsMihomoConfiguration()
     {
@@ -122,6 +179,17 @@ public sealed class ConfigurationStoreTests
     public void ValidateYamlRejectsEmptyContent()
     {
         Assert.ThrowsExactly<InvalidDataException>(() => ConfigurationStore.ValidateYaml(ReadOnlySpan<byte>.Empty));
+    }
+
+    [TestMethod]
+    public void ValidateYamlRejectsInvalidUtf8()
+    {
+        Assert.ThrowsExactly<InvalidDataException>(() =>
+            ConfigurationStore.ValidateYaml(new byte[]
+            {
+                (byte)'m', (byte)'i', (byte)'x', (byte)'e', (byte)'d',
+                (byte)'-', (byte)'p', (byte)'o', (byte)'r', (byte)'t', (byte)':', 0xFF
+            }));
     }
 
     [TestMethod]

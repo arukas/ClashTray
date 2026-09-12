@@ -65,13 +65,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         bool useDefaultEnvironment = paths is null;
         _paths = paths ?? new AppPaths();
         _paths.EnsureDirectories();
-        _configurationStore = new ConfigurationStore(_paths);
+        _coreDiscovery = new CoreDiscovery(_paths);
+        _configurationStore = new ConfigurationStore(
+            _paths,
+            candidateValidator: new MihomoConfigurationCandidateValidator(
+                _paths,
+                () => _settings,
+                () => _coreDiscovery.FindExecutable()));
         _settingsStore = settingsStore ?? new SettingsStore(_paths);
         _startupRegistration = startupRegistration
             ?? (useDefaultEnvironment ? new StartupManager() : new StartupManager(new InMemoryStartupRegistry()));
         _servicePipeClient = servicePipeClient
             ?? (useDefaultEnvironment ? new ServicePipeClient() : new IsolatedServicePipeClient());
-        _coreDiscovery = new CoreDiscovery(_paths);
         _systemProxy = systemProxy ?? new SystemProxyManager(_paths);
         _subscriptionScheduler = new SubscriptionScheduler(
             cancellation => _configurationStore.ListAsync(cancellation),
