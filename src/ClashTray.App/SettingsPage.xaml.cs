@@ -72,7 +72,7 @@ public sealed partial class SettingsPage : UserControl
                 SubscriptionRefreshHours = subscriptionRefreshHours
             }, reconcileStartup: true);
             UpdateStartupStatus(_runtime.Settings);
-            StatusText.Text = "设置已保存；允许局域网连接和 IPv6 由程序优先控制，端口等配置在核心重启后生效。";
+            StatusText.Text = "设置已保存；需要重启的核心参数会自动受控重启，系统代理会在核心健康后使用新端口。";
         }
         catch (ArgumentException exception)
         {

@@ -190,9 +190,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public async Task StartCoreAsync(CancellationToken cancellationToken = default)
+    public Task StartCoreAsync(CancellationToken cancellationToken = default) =>
+        StartCoreCoreAsync(operationLockHeld: false, cancellationToken);
+
+    private async Task StartCoreCoreAsync(
+        bool operationLockHeld,
+        CancellationToken cancellationToken)
     {
-        await _operationLock.WaitAsync(cancellationToken);
+        if (!operationLockHeld)
+        {
+            await _operationLock.WaitAsync(cancellationToken);
+        }
+
         try
         {
             if (_snapshot.Core.State == CoreState.Running)
@@ -313,13 +322,25 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         finally
         {
-            _operationLock.Release();
+            if (!operationLockHeld)
+            {
+                _operationLock.Release();
+            }
         }
     }
 
-    public async Task StopCoreAsync(CancellationToken cancellationToken = default)
+    public Task StopCoreAsync(CancellationToken cancellationToken = default) =>
+        StopCoreCoreAsync(operationLockHeld: false, cancellationToken);
+
+    private async Task StopCoreCoreAsync(
+        bool operationLockHeld,
+        CancellationToken cancellationToken)
     {
-        await _operationLock.WaitAsync(cancellationToken);
+        if (!operationLockHeld)
+        {
+            await _operationLock.WaitAsync(cancellationToken);
+        }
+
         try
         {
             UpdateCoreState(CoreState.Stopping, null);
@@ -386,15 +407,31 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         finally
         {
             await RevokeSystemProxyForCoreLossAsync(operationLockHeld: true);
-            _operationLock.Release();
+            if (!operationLockHeld)
+            {
+                _operationLock.Release();
+            }
         }
     }
 
     public async Task RestartCoreAsync(CancellationToken cancellationToken = default)
     {
+        await _operationLock.WaitAsync(cancellationToken);
+        try
+        {
+            await RestartCoreCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    private async Task RestartCoreCoreAsync(CancellationToken cancellationToken)
+    {
         UpdateCoreState(CoreState.Restarting, null);
-        await StopCoreAsync(cancellationToken);
-        await StartCoreAsync(cancellationToken);
+        await StopCoreCoreAsync(operationLockHeld: true, cancellationToken);
+        await StartCoreCoreAsync(operationLockHeld: true, cancellationToken);
     }
 
     public async Task<ConfigurationProfile> ImportLocalConfigurationAsync(string path, string? name = null, CancellationToken cancellationToken = default)
@@ -839,11 +876,17 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(settings);
         ValidateSettings(settings);
         await _operationLock.WaitAsync(cancellationToken);
+        AppSettings previousSettings = _settings;
+        bool networkSettingsChanged = settings.AllowLan != previousSettings.AllowLan
+            || settings.Ipv6 != previousSettings.Ipv6;
+        bool coreRestartRequired = RequiresCoreRestart(previousSettings, settings);
+        bool systemProxyBindingChanged = HasSystemProxyBindingChanged(previousSettings, settings);
+        bool coreWasRunning = IsCoreRunningForSettings();
+        bool settingsSaved = false;
+        bool restartStarted = false;
+        StartupRegistrationChange? startupChange = null;
         try
         {
-            bool networkSettingsChanged = settings.AllowLan != _settings.AllowLan
-                || settings.Ipv6 != _settings.Ipv6;
-            StartupRegistrationChange? startupChange = null;
             if (reconcileStartup)
             {
                 startupChange = _startupRegistration.Ensure(
@@ -851,30 +894,28 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     ResolveStartupExecutablePath(settings.StartWithWindows));
             }
 
-            try
-            {
-                await _settingsStore.SaveAsync(settings, cancellationToken);
-            }
-            catch (Exception saveException)
-            {
-                if (startupChange is { Changed: true })
-                {
-                    try
-                    {
-                        _startupRegistration.Rollback(startupChange);
-                    }
-                    catch (Exception rollbackException)
-                    {
-                        throw new InvalidOperationException(
-                            "设置保存失败，且 Windows 启动项回滚失败。",
-                            new AggregateException(saveException, rollbackException));
-                    }
-                }
-
-                throw;
-            }
+            await _settingsStore.SaveAsync(settings, cancellationToken);
+            settingsSaved = true;
             _settings = settings;
-            if (networkSettingsChanged && _api is not null)
+
+            if (systemProxyBindingChanged
+                && _systemProxy.State is SystemProxyState.On
+                    or SystemProxyState.RestoreRequired
+                    or SystemProxyState.Enabling)
+            {
+                await ReconcileSystemProxyAsync(coreRunning: false, cancellationToken);
+            }
+
+            if (coreRestartRequired && coreWasRunning)
+            {
+                restartStarted = true;
+                await RestartCoreCoreAsync(cancellationToken);
+                if (!IsCoreHealthy())
+                {
+                    throw new InvalidOperationException("运行中设置已保存，但核心重启健康检查失败。");
+                }
+            }
+            else if (networkSettingsChanged && _api is not null)
             {
                 try
                 {
@@ -892,10 +933,95 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                         ErrorMessage = $"程序局域网/IPv6 设置应用失败：{exception.Message}",
                         Logs = _logBuffer.Snapshot()
                     };
+                    throw new InvalidOperationException("运行中网络设置应用失败，正在恢复旧设置。", exception);
                 }
             }
 
+            if (systemProxyBindingChanged)
+            {
+                await ReconcileSystemProxyAsync(
+                    coreRunning: _snapshot.Core.State == CoreState.Running && _coreHealthConfirmed,
+                    cancellationToken);
+            }
+
             Publish();
+        }
+        catch (Exception exception)
+        {
+            if (!settingsSaved)
+            {
+                Exception? startupRollbackException = null;
+                if (startupChange is { Changed: true })
+                {
+                    try
+                    {
+                        _startupRegistration.Rollback(startupChange);
+                    }
+                    catch (Exception startupException)
+                    {
+                        startupRollbackException = startupException;
+                    }
+                }
+
+                if (startupRollbackException is not null)
+                {
+                    throw new InvalidOperationException(
+                        "设置保存失败，且 Windows 启动项回滚失败。",
+                        new AggregateException(exception, startupRollbackException));
+                }
+
+                throw;
+            }
+
+            Exception? rollbackException = null;
+            try
+            {
+                await RollbackSettingsChangeAsync(
+                    previousSettings,
+                    coreRestartRequired,
+                    coreWasRunning,
+                    networkSettingsChanged,
+                    systemProxyBindingChanged,
+                    restartStarted);
+            }
+            catch (Exception restoreException)
+            {
+                rollbackException = restoreException;
+            }
+
+            Exception? startupRollbackFailure = null;
+            if (startupChange is { Changed: true })
+            {
+                try
+                {
+                    _startupRegistration.Rollback(startupChange);
+                }
+                catch (Exception restoreException)
+                {
+                    startupRollbackFailure = restoreException;
+                }
+            }
+
+            Exception?[] rollbackFailures = [rollbackException, startupRollbackFailure];
+            Exception[] failures = rollbackFailures.OfType<Exception>().ToArray();
+            string message = failures.Length == 0
+                ? "设置应用失败，已恢复旧设置。"
+                : "设置应用失败，旧设置或核心状态恢复失败，请检查核心状态。";
+            _snapshot = _snapshot with
+            {
+                ErrorMessage = message,
+                Logs = _logBuffer.Snapshot()
+            };
+            Publish();
+
+            if (failures.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    message,
+                    new AggregateException(new[] { exception }.Concat(failures)));
+            }
+
+            throw;
         }
         finally
         {
@@ -1836,6 +1962,38 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    private async Task RollbackSettingsChangeAsync(
+        AppSettings previousSettings,
+        bool coreRestartRequired,
+        bool coreWasRunning,
+        bool networkSettingsChanged,
+        bool systemProxyBindingChanged,
+        bool restartStarted)
+    {
+        _settings = previousSettings;
+        await _settingsStore.SaveAsync(previousSettings, CancellationToken.None);
+
+        if (restartStarted)
+        {
+            await RestartCoreCoreAsync(CancellationToken.None);
+            if (coreWasRunning && !IsCoreHealthy())
+            {
+                throw new InvalidOperationException("旧设置已恢复，但核心未能恢复健康。");
+            }
+        }
+        else if (networkSettingsChanged && _api is not null)
+        {
+            await ApplyProgramNetworkPreferencesAsync(CancellationToken.None);
+        }
+
+        if (systemProxyBindingChanged)
+        {
+            await ReconcileSystemProxyAsync(
+                coreRunning: _snapshot.Core.State == CoreState.Running && _coreHealthConfirmed,
+                CancellationToken.None);
+        }
+    }
+
     private async Task SaveSettingsForOperationAsync(AppSettings settings, CancellationToken cancellationToken)
     {
         _settings = settings;
@@ -2448,6 +2606,23 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
         Publish();
     }
+
+    private bool IsCoreRunningForSettings() =>
+        _snapshot.Core.State == CoreState.Running
+        || _api is not null
+        || _usingServiceCore;
+
+    private static bool RequiresCoreRestart(AppSettings previous, AppSettings next) =>
+        previous.HttpPort != next.HttpPort
+        || previous.SocksPort != next.SocksPort
+        || previous.MixedPort != next.MixedPort
+        || previous.ControllerPort != next.ControllerPort
+        || previous.TcpConcurrent != next.TcpConcurrent
+        || !string.Equals(previous.LogLevel, next.LogLevel, StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasSystemProxyBindingChanged(AppSettings previous, AppSettings next) =>
+        previous.MixedPort != next.MixedPort
+        || !string.Equals(previous.BypassList, next.BypassList, StringComparison.Ordinal);
 
     private static void ValidateSettings(AppSettings settings)
         => SettingsValidator.Validate(settings);

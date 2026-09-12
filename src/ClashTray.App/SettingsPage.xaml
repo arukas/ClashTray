@@ -26,6 +26,7 @@
                 <ToggleSwitch x:Name="TcpConcurrentSwitch" Header="启用 TCP 并发" />
                 <ToggleSwitch x:Name="DisconnectAfterProxySwitch" Header="切换节点后断开现有连接" />
                 <TextBlock Text="开启后，节点切换成功会中断现有连接，让新连接立即使用所选节点。" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
+                <TextBlock Text="核心运行时修改端口、控制器端口、TCP 并发或日志级别会自动受控重启；修改 Mixed 端口会先恢复再重新应用系统代理。" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
                 <TextBlock Text="面板中的系统代理、TUN、允许局域网连接和 IPv6 设置由 ClashTray 保存并优先控制；配置文件中的对应选项不会覆盖程序选择。" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0" />
                 <TextBlock x:Name="StartupStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
                 <Button x:Name="SaveSettingsButton" Content="保存设置" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" HorizontalAlignment="Left" />

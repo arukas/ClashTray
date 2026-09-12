@@ -104,6 +104,78 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task FailedRunningCoreSettingsRestartRestoresPreviousSettings()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        TestSettingsStore settings = new TestSettingsStore(new AppSettings());
+        using RuntimeControllerHandler handler = new RuntimeControllerHandler();
+        using HttpClient httpClient = new HttpClient(handler);
+        MihomoApiClient api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, settings);
+
+        try
+        {
+            AppSettings previous = runtime.Settings;
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+
+            InvalidOperationException exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => runtime.UpdateSettingsAsync(previous with { HttpPort = previous.HttpPort + 1 }));
+
+            Assert.AreEqual(previous, runtime.Settings);
+            Assert.AreEqual(previous, settings.Settings);
+            StringAssert.Contains(exception.Message, "设置应用失败", StringComparison.Ordinal);
+
+            await runtime.UpdateSettingsAsync(previous with { Theme = "dark" });
+            Assert.AreEqual("dark", runtime.Settings.Theme);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task ChangingProxyBindingRestoresAndReappliesOwnedSystemProxy()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        TestSettingsStore settings = new TestSettingsStore(new AppSettings(
+            BypassList: "old",
+            SystemProxyEnabled: true));
+        FakeSystemProxyController proxy = new FakeSystemProxyController(SystemProxyState.On);
+        using RuntimeControllerHandler handler = new RuntimeControllerHandler();
+        using HttpClient httpClient = new HttpClient(handler);
+        MihomoApiClient api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, settings, proxy);
+
+        try
+        {
+            await runtime.InitializeAsync();
+            proxy.SetState(SystemProxyState.On);
+            int disableCountBeforeChange = proxy.DisableCount;
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+
+            await runtime.UpdateSettingsAsync(runtime.Settings with { BypassList = "new" });
+
+            Assert.AreEqual("new", runtime.Settings.BypassList);
+            Assert.AreEqual(disableCountBeforeChange + 1, proxy.DisableCount);
+            Assert.AreEqual(1, proxy.EnableCount);
+            Assert.AreEqual(SystemProxyState.On, proxy.State);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task EnablingSystemProxyBeforeCoreHealthOnlyStoresPreference()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
