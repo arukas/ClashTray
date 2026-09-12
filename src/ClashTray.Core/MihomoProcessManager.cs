@@ -7,8 +7,12 @@ namespace ClashTray.Core;
 public sealed class MihomoProcessManager : IAsyncDisposable
 {
     private const int MaxLogLineCharacters = 64 * 1024;
+    private static readonly TimeSpan DefaultValidationTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan DefaultStopTimeout = TimeSpan.FromSeconds(10);
     private readonly SemaphoreSlim _operationLock = new(1, 1);
     private readonly object _processGate = new();
+    private readonly TimeSpan _validationTimeout;
+    private readonly TimeSpan _stopTimeout;
     private Process? _process;
     private CancellationTokenSource? _lifetimeCts;
 
@@ -17,6 +21,20 @@ public sealed class MihomoProcessManager : IAsyncDisposable
     public event EventHandler<CoreState>? StateChanged;
 
     public event Action<string, bool>? LogLineReceived;
+
+    public MihomoProcessManager()
+        : this(DefaultValidationTimeout, DefaultStopTimeout)
+    {
+    }
+
+    internal MihomoProcessManager(TimeSpan validationTimeout, TimeSpan stopTimeout)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(validationTimeout, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(stopTimeout, TimeSpan.Zero);
+
+        _validationTimeout = validationTimeout;
+        _stopTimeout = stopTimeout;
+    }
 
     public async Task<bool> ValidateAsync(string executablePath, string configurationPath, CancellationToken cancellationToken = default)
         => await ValidateAsync(executablePath, configurationPath, workingDirectory: null, cancellationToken);
@@ -32,14 +50,37 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         {
             State = CoreState.Validating;
             OnStateChanged();
-            int result = await RunOneShotAsync(
-                executablePath,
-                $"-t -f \"{configurationPath}\"",
-                workingDirectory,
-                cancellationToken);
-            State = result == 0 ? CoreState.Stopped : CoreState.Failed;
-            OnStateChanged();
-            return result == 0;
+            using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(_validationTimeout);
+            try
+            {
+                int result = await RunOneShotAsync(
+                    executablePath,
+                    $"-t -f \"{configurationPath}\"",
+                    workingDirectory,
+                    timeout.Token);
+                State = result == 0 ? CoreState.Stopped : CoreState.Failed;
+                OnStateChanged();
+                return result == 0;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                State = CoreState.Failed;
+                OnStateChanged();
+                throw new TimeoutException($"Mihomo 配置验证超过 {_validationTimeout.TotalSeconds:0} 秒。");
+            }
+            catch (OperationCanceledException)
+            {
+                State = CoreState.Stopped;
+                OnStateChanged();
+                throw;
+            }
+            catch
+            {
+                State = CoreState.Failed;
+                OnStateChanged();
+                throw;
+            }
         }
         finally
         {
@@ -144,6 +185,9 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         {
             await lifetime.CancelAsync();
         }
+
+        bool stopped = process is null;
+        Exception? stopException = null;
         if (process is not null)
         {
             try
@@ -151,32 +195,55 @@ public sealed class MihomoProcessManager : IAsyncDisposable
                 if (!HasExited(process))
                 {
                     process.Kill(entireProcessTree: true);
-                    await process.WaitForExitAsync();
+                    await process.WaitForExitAsync().WaitAsync(_stopTimeout);
                 }
+
+                stopped = true;
             }
             catch (InvalidOperationException)
             {
                 // The process may have exited between HasExited and Kill.
+                stopped = true;
+            }
+            catch (TimeoutException exception)
+            {
+                stopException = exception;
+                stopped = HasExited(process);
+            }
+            catch (System.ComponentModel.Win32Exception exception)
+            {
+                stopException = exception;
+                stopped = HasExited(process);
             }
         }
 
         lock (_processGate)
         {
-            if (ReferenceEquals(_process, process))
+            if (stopped && ReferenceEquals(_process, process))
             {
                 _process = null;
             }
 
-            if (ReferenceEquals(_lifetimeCts, lifetime))
+            if (stopped && ReferenceEquals(_lifetimeCts, lifetime))
             {
                 _lifetimeCts = null;
             }
 
-            State = CoreState.Stopped;
+            State = stopped ? CoreState.Stopped : CoreState.Failed;
         }
 
-        DisposeProcess(process, lifetime);
+        if (stopped)
+        {
+            DisposeProcess(process, lifetime);
+        }
+
         OnStateChanged();
+        if (stopException is not null)
+        {
+            throw new TimeoutException(
+                $"停止 Mihomo 进程超过 {_stopTimeout.TotalSeconds:0} 秒，进程仍可重试停止。",
+                stopException);
+        }
     }
 
     private void StartProcess(string executablePath, string configurationPath, string workingDirectory)

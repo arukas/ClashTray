@@ -6,6 +6,25 @@ namespace ClashTray.Core.Tests;
 public sealed class MihomoProcessManagerTests
 {
     [TestMethod]
+    public async Task ValidationTimeoutLeavesManagerInFailedState()
+    {
+        string ping = Path.Combine(Environment.SystemDirectory, "ping.exe");
+        Assert.IsTrue(File.Exists(ping));
+        await using MihomoProcessManager manager = new MihomoProcessManager(
+            validationTimeout: TimeSpan.FromMilliseconds(100),
+            stopTimeout: TimeSpan.FromSeconds(1));
+
+        TimeoutException exception = await Assert.ThrowsExactlyAsync<TimeoutException>(() =>
+            manager.ValidateAsync(ping, "127.0.0.1"));
+
+        StringAssert.Contains(exception.Message, "配置验证超过", StringComparison.Ordinal);
+        Assert.AreEqual(CoreState.Failed, manager.State);
+
+        await manager.StopAsync();
+        Assert.AreEqual(CoreState.Stopped, manager.State);
+    }
+
+    [TestMethod]
     public async Task UnexpectedExitIsReportedAndStopRemainsRecoverable()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
