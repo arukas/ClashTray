@@ -24,6 +24,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly IStartupRegistration _startupRegistration;
     private readonly object _logStreamGate = new();
     private MihomoApiClient? _api;
+    private long _controllerGeneration;
     private Task? _pollingTask;
     private Task? _dataRefreshTask;
     private CancellationTokenSource? _logStreamCts;
@@ -144,7 +145,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (serviceStatus.Core == CoreState.Running)
             {
                 _usingServiceCore = true;
-                _api = CreateApiClient();
+                SetController(CreateApiClient());
                 try
                 {
                     await RefreshCoreHealthWithRetryAsync(cancellationToken);
@@ -272,7 +273,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             bool coreStarted = true;
-            _api = CreateApiClient();
+            SetController(CreateApiClient());
             SetCoreRunningPendingHealth(serviceResponse?.Tun ?? TunState.Unknown);
             try
             {
@@ -323,7 +324,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             UpdateCoreState(CoreState.Stopping, null);
             _coreHealthConfirmed = false;
-            _api = null;
+            SetController(null);
             await StopLogStreamAsync();
             if (_usingServiceCore)
             {
@@ -599,13 +600,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            if (_api is null)
-            {
-                throw new InvalidOperationException("Mihomo 核心尚未运行。");
-            }
+            (MihomoApiClient api, long generation) = CaptureControllerSession();
 
-            await _api.SetModeAsync(mode, cancellationToken);
+            await api.SetModeAsync(mode, cancellationToken);
+            EnsureControllerSession(api, generation, "模式切换期间核心会话已切换，请重试。");
             await RefreshFromApiAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "模式切换期间核心会话已切换，请重试。");
         }
         finally
         {
@@ -618,16 +618,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            MihomoApiClient api = _api ?? throw new InvalidOperationException("Mihomo 核心尚未运行。");
+            (MihomoApiClient api, long generation) = CaptureControllerSession();
             string? previousProxy = _snapshot.ProxyGroups
                 .FirstOrDefault(item => string.Equals(item.Name, group, StringComparison.Ordinal))
                 ?.Current;
 
             await api.SelectProxyAsync(group, proxy, cancellationToken);
-            if (!ReferenceEquals(_api, api))
-            {
-                throw new InvalidOperationException("节点切换期间核心已重启，请重新选择节点。");
-            }
+            EnsureControllerSession(api, generation, "节点切换期间核心会话已切换，请重新选择节点。");
 
             Exception? disconnectException = null;
             bool selectionChanged = previousProxy is not null
@@ -644,6 +641,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 }
                 catch (Exception exception)
                 {
+                    EnsureControllerSession(api, generation, "节点切换期间核心会话已切换，请重新选择节点。");
                     disconnectException = exception;
                     _logBuffer.Add(new LogEntry(
                         DateTimeOffset.UtcNow,
@@ -653,7 +651,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 }
             }
 
+            EnsureControllerSession(api, generation, "节点切换期间核心会话已切换，请重新选择节点。");
             await RefreshFromApiAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "节点切换期间核心会话已切换，请重新选择节点。");
             if (disconnectException is not null)
             {
                 const string message = "节点已切换，但未能断开旧连接。";
@@ -674,18 +674,29 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task<int?> TestProxyDelayAsync(string proxy, CancellationToken cancellationToken = default)
     {
-        if (_api is null)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            throw new InvalidOperationException("Mihomo 核心尚未运行。");
-        }
+            (MihomoApiClient api, long generation) = CaptureControllerSession();
 
-        using JsonDocument response = await _api.TestDelayAsync(proxy, new Uri("https://www.gstatic.com/generate_204"), 5000, cancellationToken);
-        if (response.RootElement.TryGetProperty("delay", out JsonElement delay) && delay.TryGetInt32(out int milliseconds))
+            using JsonDocument response = await api.TestDelayAsync(
+                proxy,
+                new Uri("https://www.gstatic.com/generate_204"),
+                5000,
+                cancellationToken);
+            EnsureControllerSession(api, generation, "测速期间核心会话已切换，请重新测速。");
+            if (response.RootElement.TryGetProperty("delay", out JsonElement delay)
+                && delay.TryGetInt32(out int milliseconds))
+            {
+                return milliseconds;
+            }
+
+            return null;
+        }
+        finally
         {
-            return milliseconds;
+            _operationLock.Release();
         }
-
-        return null;
     }
 
     public async Task<IReadOnlyDictionary<string, int?>> TestProxyGroupDelayAsync(
@@ -697,7 +708,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(token);
         try
         {
-            MihomoApiClient api = _api ?? throw new InvalidOperationException("Mihomo 核心尚未运行。");
+            (MihomoApiClient api, long generation) = CaptureControllerSession();
             using JsonDocument response = await api.TestGroupDelayAsync(group, new Uri("https://www.gstatic.com/generate_204"), 5000, token);
             IReadOnlyDictionary<string, int?> delays = MihomoDataParser.ParseGroupDelays(response);
             await _dataRefreshLock.WaitAsync(token);
@@ -705,10 +716,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 // Refresh now/history from the core and apply the confirmed batch result atomically.
                 ProxyDataResult proxies = await TryGetProxyDataAsync(api, token);
-                if (!ReferenceEquals(_api, api))
-                {
-                    throw new InvalidOperationException("测速期间核心已切换，请重新测速。");
-                }
+                EnsureControllerSession(api, generation, "测速期间核心会话已切换，请重新测速。");
 
                 string? LatestDelay(string name, string? previous) => delays.TryGetValue(name, out int? delay)
                     ? delay?.ToString(System.Globalization.CultureInfo.InvariantCulture) : previous;
@@ -727,43 +735,76 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task CloseConnectionAsync(string id, CancellationToken cancellationToken = default)
     {
-        if (_api is null)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            return;
-        }
+            if (_api is null)
+            {
+                return;
+            }
 
-        await _api.CloseConnectionAsync(id, cancellationToken);
-        await RefreshFromApiAsync(cancellationToken);
+            (MihomoApiClient api, long generation) = CaptureControllerSession();
+            await api.CloseConnectionAsync(id, cancellationToken);
+            EnsureControllerSession(api, generation, "关闭连接期间核心会话已切换，请重试。");
+            await RefreshFromApiAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "关闭连接期间核心会话已切换，请重试。");
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
     }
 
     public async Task CloseAllConnectionsAsync(CancellationToken cancellationToken = default)
     {
-        if (_api is null)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            return;
-        }
+            if (_api is null)
+            {
+                return;
+            }
 
-        await _api.CloseAllConnectionsAsync(cancellationToken);
-        await RefreshFromApiAsync(cancellationToken);
+            (MihomoApiClient api, long generation) = CaptureControllerSession();
+            await api.CloseAllConnectionsAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "关闭连接期间核心会话已切换，请重试。");
+            await RefreshFromApiAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "关闭连接期间核心会话已切换，请重试。");
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
     }
 
     public async Task RefreshProviderAsync(string name, bool rules, CancellationToken cancellationToken = default)
     {
-        if (_api is null)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            return;
-        }
+            if (_api is null)
+            {
+                return;
+            }
 
-        if (rules)
-        {
-            await _api.RefreshRuleProviderAsync(name, cancellationToken);
-        }
-        else
-        {
-            await _api.RefreshProviderAsync(name, cancellationToken);
-        }
+            (MihomoApiClient api, long generation) = CaptureControllerSession();
+            if (rules)
+            {
+                await api.RefreshRuleProviderAsync(name, cancellationToken);
+            }
+            else
+            {
+                await api.RefreshProviderAsync(name, cancellationToken);
+            }
 
-        await RefreshFromApiAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "刷新 Provider 期间核心会话已切换，请重试。");
+            await RefreshFromApiAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "刷新 Provider 期间核心会话已切换，请重试。");
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
     }
 
     public void ClearLogs()
@@ -775,9 +816,21 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task ClearFakeIpCacheAsync(CancellationToken cancellationToken = default)
     {
-        if (_api is not null)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            await _api.ClearFakeIpCacheAsync(cancellationToken);
+            if (_api is null)
+            {
+                return;
+            }
+
+            (MihomoApiClient api, long generation) = CaptureControllerSession();
+            await api.ClearFakeIpCacheAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "清理 FakeIP 缓存期间核心会话已切换，请重试。");
+        }
+        finally
+        {
+            _operationLock.Release();
         }
     }
 
@@ -1010,18 +1063,43 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task ClearDnsCacheAsync(CancellationToken cancellationToken = default)
     {
-        if (_api is not null)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            await _api.ClearDnsCacheAsync(cancellationToken);
+            if (_api is null)
+            {
+                return;
+            }
+
+            (MihomoApiClient api, long generation) = CaptureControllerSession();
+            await api.ClearDnsCacheAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "清理 DNS 缓存期间核心会话已切换，请重试。");
+        }
+        finally
+        {
+            _operationLock.Release();
         }
     }
 
     public async Task UpdateGeoAsync(CancellationToken cancellationToken = default)
     {
-        if (_api is not null)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            await _api.UpdateGeoAsync(cancellationToken);
+            if (_api is null)
+            {
+                return;
+            }
+
+            (MihomoApiClient api, long generation) = CaptureControllerSession();
+            await api.UpdateGeoAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "更新 Geo 数据库期间核心会话已切换，请重试。");
             await RefreshFromApiAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "更新 Geo 数据库期间核心会话已切换，请重试。");
+        }
+        finally
+        {
+            _operationLock.Release();
         }
     }
 
@@ -1145,7 +1223,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     internal void AttachControllerForTesting(MihomoApiClient api, bool usingServiceCore)
     {
         ArgumentNullException.ThrowIfNull(api);
-        _api = api;
+        SetController(api);
         _usingServiceCore = usingServiceCore;
         _coreHealthConfirmed = true;
         _snapshot = _snapshot with { Core = _snapshot.Core with { State = CoreState.Running } };
@@ -1193,7 +1271,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
 
         await _runtimeCts.CancelAsync();
-        _api = null;
+        SetController(null);
         await StopLogStreamAsync();
         if (_dataRefreshTask is not null)
         {
@@ -1452,7 +1530,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
                 if (serviceStatus is null)
                 {
-                    _api = null;
+                    SetController(null);
                     await StopLogStreamAsync();
                     await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
@@ -1463,7 +1541,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
                 if (serviceStatus.Core == CoreState.Running)
                 {
-                    _api = CreateApiClient();
+                    SetController(CreateApiClient());
                     await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
                     _snapshot = _snapshot with { Tun = serviceStatus.Tun };
                     MarkCoreHealthUnconfirmed("控制器重连", exception, retryCount);
@@ -1471,7 +1549,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     continue;
                 }
 
-                _api = null;
+                SetController(null);
                 await StopLogStreamAsync();
                 await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
                 _snapshot = _snapshot with { Tun = serviceStatus.Tun };
@@ -1527,6 +1605,30 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         Uri controllerUri = new Uri($"http://127.0.0.1:{_settings.ControllerPort}/");
         return new MihomoApiClient(_httpClient, controllerUri, string.Empty);
+    }
+
+    private void SetController(MihomoApiClient? api)
+    {
+        _api = api;
+        Interlocked.Increment(ref _controllerGeneration);
+    }
+
+    private (MihomoApiClient Api, long Generation) CaptureControllerSession()
+    {
+        MihomoApiClient api = _api ?? throw new InvalidOperationException("Mihomo 核心尚未运行。");
+        return (api, Volatile.Read(ref _controllerGeneration));
+    }
+
+    private void EnsureControllerSession(
+        MihomoApiClient api,
+        long generation,
+        string message)
+    {
+        if (!ReferenceEquals(_api, api)
+            || Volatile.Read(ref _controllerGeneration) != generation)
+        {
+            throw new InvalidOperationException(message);
+        }
     }
 
     private async Task ApplyProgramOverridesAsync(

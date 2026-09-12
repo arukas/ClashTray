@@ -20,6 +20,8 @@ Configuration imports, local reloads, and changed subscription content are first
 
 Node switching is serialized with other core operations. The optional setting `DisconnectConnectionsAfterProxySwitch` is off by default; when enabled, ClashTray closes all current connections only after Mihomo confirms the new selection. A failed close keeps the confirmed node selection, reports the partial success, and records the sanitized error.
 
+Controller mutations and latency probes use the same operation coordinator as mode and node switching. Each operation captures the current controller session generation and rejects its result if a core restart or service reconnect replaces that session, so stale responses cannot overwrite the current snapshot.
+
 When Mihomo is healthy, the header exposes a keyboard-accessible loopback controller link at `http://127.0.0.1:<controller-port>/ui/`. The link never includes the controller secret and is disabled while core health is not confirmed.
 
 The desktop process restores this state during normal quit and startup recovery. The System Proxy and TUN choices are persisted in the per-user ClashTray settings and reapplied after a core restart, configuration switch, or app restart; the cleanup path disables the active mechanism without erasing the saved preference. When the packaged service is stopping without a live desktop process, it also stops Mihomo, disables TUN, and restores matching ownership records for loaded user profiles before the service exits. This keeps uninstall and crash recovery from overwriting a competing proxy configuration.

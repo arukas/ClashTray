@@ -228,6 +228,77 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task ControllerOperationsAreSerialized()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using DelayControllerHandler handler = new DelayControllerHandler(holdFirstRequest: true);
+        using HttpClient httpClient = new HttpClient(handler);
+        MihomoApiClient api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            Task<int?> first = runtime.TestProxyDelayAsync("node");
+            await handler.FirstRequestEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+            Task<int?> second = runtime.TestProxyDelayAsync("node");
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+
+            Assert.AreEqual(1, handler.MaxInFlight);
+            handler.ReleaseFirstRequest();
+            int?[] results = await Task.WhenAll(first, second);
+
+            CollectionAssert.AreEqual(new int?[] { 10, 10 }, results);
+            Assert.AreEqual(1, handler.MaxInFlight);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task ControllerOperationRejectsResultFromReplacedSession()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using DelayControllerHandler oldHandler = new DelayControllerHandler(holdFirstRequest: false);
+        using DelayControllerHandler replacementHandler = new DelayControllerHandler(holdFirstRequest: false);
+        using HttpClient oldHttpClient = new HttpClient(oldHandler);
+        using HttpClient replacementHttpClient = new HttpClient(replacementHandler);
+        MihomoApiClient oldApi = new MihomoApiClient(oldHttpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        MihomoApiClient replacementApi = new MihomoApiClient(
+            replacementHttpClient,
+            new Uri("http://127.0.0.1:9090/"),
+            string.Empty);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            oldHandler.BeforeFirstRequest = () =>
+                runtime.AttachControllerForTesting(replacementApi, usingServiceCore: false);
+            runtime.AttachControllerForTesting(oldApi, usingServiceCore: false);
+
+            InvalidOperationException exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => runtime.TestProxyDelayAsync("node"));
+
+            Assert.AreEqual("测速期间核心会话已切换，请重新测速。", exception.Message);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public void MihomoDataParserPreservesZeroTrafficTotals()
     {
         using JsonDocument document = JsonDocument.Parse(
@@ -736,6 +807,85 @@ public sealed class RuntimeStateTests
             {
                 Content = new StringContent(body)
             };
+        }
+    }
+
+    private sealed class DelayControllerHandler : HttpMessageHandler
+    {
+        private readonly bool _holdFirstRequest;
+        private readonly TaskCompletionSource<bool> _releaseFirstRequest =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        private Action? _beforeFirstRequest;
+        private int _requestCount;
+        private int _inFlight;
+        private int _maxInFlight;
+
+        public DelayControllerHandler(bool holdFirstRequest)
+        {
+            _holdFirstRequest = holdFirstRequest;
+        }
+
+        public TaskCompletionSource<bool> FirstRequestEntered { get; } =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Action? BeforeFirstRequest
+        {
+            get => _beforeFirstRequest;
+            set => _beforeFirstRequest = value;
+        }
+
+        public int MaxInFlight => Volatile.Read(ref _maxInFlight);
+
+        public void ReleaseFirstRequest() => _releaseFirstRequest.TrySetResult(true);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri?.AbsolutePath.StartsWith("/proxies/", StringComparison.Ordinal) != true)
+            {
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+
+            int requestNumber = Interlocked.Increment(ref _requestCount);
+            if (requestNumber == 1)
+            {
+                Action? callback = Interlocked.Exchange(ref _beforeFirstRequest, null);
+                callback?.Invoke();
+            }
+
+            int current = Interlocked.Increment(ref _inFlight);
+            UpdateMaximum(current);
+            try
+            {
+                if (_holdFirstRequest && requestNumber == 1)
+                {
+                    FirstRequestEntered.TrySetResult(true);
+                    await _releaseFirstRequest.Task.WaitAsync(cancellationToken);
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"delay\":10}")
+                };
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _inFlight);
+            }
+        }
+
+        private void UpdateMaximum(int current)
+        {
+            while (true)
+            {
+                int previous = Volatile.Read(ref _maxInFlight);
+                if (current <= previous
+                    || Interlocked.CompareExchange(ref _maxInFlight, current, previous) == previous)
+                {
+                    return;
+                }
+            }
         }
     }
 }
