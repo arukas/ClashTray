@@ -272,7 +272,7 @@ public sealed partial class MainWindow : Window
 
     public void ShowError(string message)
     {
-        ErrorBanner.Message = message;
+        ErrorBanner.Message = ErrorSanitizer.Sanitize(message);
         ErrorBanner.IsOpen = true;
     }
 

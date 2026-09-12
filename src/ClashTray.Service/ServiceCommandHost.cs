@@ -89,7 +89,12 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                 }
                 catch (Exception exception)
                 {
-                    response = new ServiceResponse(Guid.Empty, false, TunState.Failed, Error: exception.Message, Core: _controller.CoreState);
+                    response = new ServiceResponse(
+                        Guid.Empty,
+                        false,
+                        TunState.Failed,
+                        Error: ErrorSanitizer.Sanitize(exception),
+                        Core: _controller.CoreState);
                 }
 
                 await WriteResponseAsync(writer, response, _cts.Token);

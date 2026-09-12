@@ -76,11 +76,11 @@ public sealed partial class SettingsPage : UserControl
         }
         catch (ArgumentException exception)
         {
-            StatusText.Text = exception.Message;
+            StatusText.Text = ErrorSanitizer.Sanitize(exception);
         }
         catch (Exception exception)
         {
-            StatusText.Text = $"设置保存失败：{exception.Message}";
+            StatusText.Text = $"设置保存失败：{ErrorSanitizer.Sanitize(exception)}";
         }
         finally
         {
@@ -98,7 +98,7 @@ public sealed partial class SettingsPage : UserControl
         }
         catch (Exception exception)
         {
-            StatusText.Text = exception.Message;
+            StatusText.Text = ErrorSanitizer.Sanitize(exception);
         }
     }
 
@@ -111,7 +111,7 @@ public sealed partial class SettingsPage : UserControl
         }
         catch (Exception exception)
         {
-            StatusText.Text = exception.Message;
+            StatusText.Text = ErrorSanitizer.Sanitize(exception);
         }
     }
 
@@ -124,7 +124,7 @@ public sealed partial class SettingsPage : UserControl
         }
         catch (Exception exception)
         {
-            StatusText.Text = exception.Message;
+            StatusText.Text = ErrorSanitizer.Sanitize(exception);
         }
     }
 
@@ -143,7 +143,7 @@ public sealed partial class SettingsPage : UserControl
         }
         catch (Exception exception)
         {
-            StatusText.Text = exception.Message;
+            StatusText.Text = ErrorSanitizer.Sanitize(exception);
         }
     }
 
@@ -151,7 +151,8 @@ public sealed partial class SettingsPage : UserControl
     {
         if (ProvidersListView.SelectedItem is ListViewItem { Tag: ValueTuple<ProviderStatus, bool> selected })
         {
-            StatusText.Text = selected.Item1.Error ?? $"{selected.Item1.Name} · {selected.Item1.Count} 项";
+            StatusText.Text = ErrorSanitizer.Sanitize(
+                selected.Item1.Error ?? $"{selected.Item1.Name} · {selected.Item1.Count} 项");
         }
     }
 
@@ -175,7 +176,7 @@ public sealed partial class SettingsPage : UserControl
         }
         catch (Exception exception)
         {
-            StatusText.Text = exception.Message;
+            StatusText.Text = ErrorSanitizer.Sanitize(exception);
         }
     }
 
@@ -290,7 +291,7 @@ public sealed partial class SettingsPage : UserControl
         StartupRegistrationStatus status = _runtime.GetStartupStatus();
         if (!string.IsNullOrWhiteSpace(status.Error))
         {
-            StartupStatusText.Text = $"无法读取 Windows 启动状态：{status.Error}";
+            StartupStatusText.Text = $"无法读取 Windows 启动状态：{ErrorSanitizer.Sanitize(status.Error)}";
             return;
         }
 

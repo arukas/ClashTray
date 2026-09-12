@@ -261,12 +261,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
             catch (ServiceRequestUnknownException exception)
             {
-                UpdateCoreState(CoreState.Failed, $"ClashTray 服务启动结果无法确认，请检查服务状态后重试：{exception.Message}");
+                UpdateCoreState(CoreState.Failed, $"ClashTray 服务启动结果无法确认，请检查服务状态后重试：{ErrorSanitizer.Sanitize(exception)}");
                 return;
             }
             catch (IOException exception)
             {
-                UpdateCoreState(CoreState.Failed, $"ClashTray 服务通信失败，启动结果无法确认：{exception.Message}");
+                UpdateCoreState(CoreState.Failed, $"ClashTray 服务通信失败，启动结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
                 return;
             }
 
@@ -327,7 +327,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             await RevokeSystemProxyForCoreLossAsync(operationLockHeld: true);
-            UpdateCoreState(CoreState.Failed, exception.Message);
+            UpdateCoreState(CoreState.Failed, ErrorSanitizer.Sanitize(exception));
         }
         finally
         {
@@ -376,31 +376,31 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 catch (TimeoutException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
-                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务不可用，停止结果无法确认：{exception.Message}");
+                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务不可用，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
                     return;
                 }
                 catch (ServiceUnavailableException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
-                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务不可用，停止结果无法确认：{exception.Message}");
+                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务不可用，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
                     return;
                 }
                 catch (UnauthorizedAccessException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
-                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务访问被拒绝，停止结果无法确认：{exception.Message}");
+                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务访问被拒绝，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
                     return;
                 }
                 catch (ServiceRequestUnknownException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
-                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务停止结果无法确认，请检查服务状态后重试：{exception.Message}");
+                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务停止结果无法确认，请检查服务状态后重试：{ErrorSanitizer.Sanitize(exception)}");
                     return;
                 }
                 catch (IOException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
-                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务通信失败，停止结果无法确认：{exception.Message}");
+                    UpdateCoreState(CoreState.Failed, $"ClashTray 服务通信失败，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
                     return;
                 }
 
@@ -465,7 +465,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
             catch (Exception exception)
             {
-                UpdateSubscriptionState(SubscriptionState.Failed, exception.Message);
+                UpdateSubscriptionState(SubscriptionState.Failed, ErrorSanitizer.Sanitize(exception));
                 throw;
             }
         }
@@ -549,7 +549,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            UpdateSubscriptionState(SubscriptionState.Failed, exception.Message);
+            UpdateSubscriptionState(SubscriptionState.Failed, ErrorSanitizer.Sanitize(exception));
             throw;
         }
     }
@@ -693,7 +693,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                         DateTimeOffset.UtcNow,
                         "ClashTray",
                         "error",
-                        $"节点已切换，但未能断开旧连接：{exception.Message}"));
+                        $"节点已切换，但未能断开旧连接：{ErrorSanitizer.Sanitize(exception)}"));
                 }
             }
 
@@ -939,7 +939,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     LogControllerFailure("程序局域网/IPv6 设置覆盖", "/configs", exception, 0);
                     _snapshot = _snapshot with
                     {
-                        ErrorMessage = $"程序局域网/IPv6 设置应用失败：{exception.Message}",
+                        ErrorMessage = $"程序局域网/IPv6 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
                         Logs = _logBuffer.Snapshot()
                     };
                     throw new InvalidOperationException("运行中网络设置应用失败，正在恢复旧设置。", exception);
@@ -1142,7 +1142,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
-            _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = exception.Message };
+            _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
@@ -1153,7 +1153,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
-            _snapshot = _snapshot with { Tun = TunState.Failed, ErrorMessage = exception.Message };
+            _snapshot = _snapshot with { Tun = TunState.Failed, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
             Publish();
             throw new InvalidOperationException("TUN 操作结果无法确认，请检查服务状态后重试。", exception);
         }
@@ -1164,7 +1164,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
-            _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = exception.Message };
+            _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
@@ -1175,7 +1175,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
-            _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = exception.Message };
+            _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
@@ -1806,7 +1806,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 LogControllerFailure("程序局域网/IPv6 设置覆盖", "/configs", exception, 0);
                 _snapshot = _snapshot with
                 {
-                    ErrorMessage = $"程序局域网/IPv6 设置应用失败：{exception.Message}",
+                    ErrorMessage = $"程序局域网/IPv6 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
                     Logs = _logBuffer.Snapshot()
                 };
                 Publish();
@@ -1825,7 +1825,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 LogControllerFailure("程序 TUN 设置覆盖", "/configs", exception, 0);
                 _snapshot = _snapshot with
                 {
-                    ErrorMessage = $"程序 TUN 设置应用失败：{exception.Message}",
+                    ErrorMessage = $"程序 TUN 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
                     Logs = _logBuffer.Snapshot()
                 };
                 Publish();
@@ -1842,11 +1842,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _logBuffer.Add(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", $"程序系统代理设置应用失败：{exception.Message}"));
+            _logBuffer.Add(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", $"程序系统代理设置应用失败：{ErrorSanitizer.Sanitize(exception)}"));
             _snapshot = _snapshot with
             {
                 SystemProxy = _systemProxy.State,
-                ErrorMessage = $"程序系统代理设置应用失败：{exception.Message}",
+                ErrorMessage = $"程序系统代理设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
                 Logs = _logBuffer.Snapshot()
             };
             Publish();
@@ -2515,7 +2515,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     DateTimeOffset.UtcNow,
                     "ClashTray",
                     "error",
-                    $"核心不可用时撤销系统代理失败：{exception.Message}"));
+                    $"核心不可用时撤销系统代理失败：{ErrorSanitizer.Sanitize(exception)}"));
                 _snapshot = _snapshot with
                 {
                     SystemProxy = _systemProxy.State,
@@ -2594,15 +2594,25 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private void OnScheduledSubscriptionRefreshFailed(ConfigurationProfile profile, Exception exception)
     {
-        UpdateSubscriptionState(SubscriptionState.Failed, $"订阅 {profile.Name} 定时刷新失败：{exception.Message}");
+        UpdateSubscriptionState(SubscriptionState.Failed, $"订阅 {profile.Name} 定时刷新失败：{ErrorSanitizer.Sanitize(exception)}");
     }
 
     private void OnScheduledSubscriptionCycleFailed(Exception exception)
     {
-        UpdateSubscriptionState(SubscriptionState.Failed, $"定时订阅任务失败：{exception.Message}");
+        UpdateSubscriptionState(SubscriptionState.Failed, $"定时订阅任务失败：{ErrorSanitizer.Sanitize(exception)}");
     }
 
-    private void Publish() => SnapshotChanged?.Invoke(this, _snapshot);
+    private void Publish()
+    {
+        string? error = ErrorSanitizer.SanitizeNullable(_snapshot.ErrorMessage);
+        string? coreError = ErrorSanitizer.SanitizeNullable(_snapshot.Core.ErrorMessage);
+        _snapshot = _snapshot with
+        {
+            Core = _snapshot.Core with { ErrorMessage = coreError },
+            ErrorMessage = error
+        };
+        SnapshotChanged?.Invoke(this, _snapshot);
+    }
 
     private void OnProcessLogLine(string line, bool isError)
     {

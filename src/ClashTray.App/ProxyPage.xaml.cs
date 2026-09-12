@@ -127,7 +127,7 @@ public sealed partial class ProxyPage : UserControl
                     int available = results.Count(result => result.Value > 0);
                     DelayText.Text = $"{group.Name} · 测速完成，{available} 个可用，{results.Count - available} 个未连通";
                 }
-                catch (Exception exception) { DelayText.Text = $"{group.Name} · 测速失败：{exception.Message}"; }
+                catch (Exception exception) { DelayText.Text = $"{group.Name} · 测速失败：{ErrorSanitizer.Sanitize(exception)}"; }
                 finally
                 {
                     _testingGroups.Remove(group.Name);
@@ -246,7 +246,7 @@ public sealed partial class ProxyPage : UserControl
                 list.SelectedItem = list.Items.OfType<ListViewItem>().FirstOrDefault(item => (string?)item.Tag == group.Current);
                 list.IsEnabled = false;
                 try { await _runtime.SelectProxyAsync(group.Name, name); }
-                catch (Exception exception) { DelayText.Text = exception.Message; }
+                catch (Exception exception) { DelayText.Text = ErrorSanitizer.Sanitize(exception); }
                 finally { selectionPending = false; list.IsEnabled = true; }
             };
 
@@ -329,7 +329,7 @@ public sealed partial class ProxyPage : UserControl
             {
                 refresh.IsEnabled = false;
                 try { await _runtime.RefreshProviderAsync(provider.Name, false); }
-                catch (Exception exception) { DelayText.Text = exception.Message; }
+                catch (Exception exception) { DelayText.Text = ErrorSanitizer.Sanitize(exception); }
                 finally { refresh.IsEnabled = true; }
             };
             Grid.SetColumn(refresh, 1);

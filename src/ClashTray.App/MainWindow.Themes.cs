@@ -130,7 +130,7 @@ public sealed partial class MainWindow
         }
         catch (Exception exception) when (exception is System.Security.SecurityException or UnauthorizedAccessException or IOException)
         {
-            System.Diagnostics.Debug.WriteLine($"Taskbar theme unavailable: {exception.Message}");
+            System.Diagnostics.Debug.WriteLine($"Taskbar theme unavailable: {ErrorSanitizer.Sanitize(exception)}");
         }
         if (_accessibilitySettings.HighContrast)
         {
@@ -192,7 +192,7 @@ public sealed partial class MainWindow
         {
             EasterEggTip.IsOpen = false;
             ApplyTheme(_runtime.Settings.Theme);
-            ShowError($"彩蛋主题保存失败：{exception.Message}");
+            ShowError($"彩蛋主题保存失败：{ErrorSanitizer.Sanitize(exception)}");
         }
         finally { _unlockInProgress = false; }
     }
@@ -214,7 +214,7 @@ public sealed partial class MainWindow
         catch (Exception exception)
         {
             ApplyTheme(_runtime.Settings.Theme);
-            ShowError($"主题切换失败：{exception.Message}");
+            ShowError($"主题切换失败：{ErrorSanitizer.Sanitize(exception)}");
         }
     }
 }

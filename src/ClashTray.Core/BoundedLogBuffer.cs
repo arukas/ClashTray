@@ -21,6 +21,7 @@ public sealed class BoundedLogBuffer
     public void Add(LogEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
+        entry = entry with { Message = ErrorSanitizer.Sanitize(entry.Message) };
         lock (_gate)
         {
             LogEntry? last = _items.Last?.Value;

@@ -94,7 +94,7 @@ public sealed class StartupManager : IStartupRegistration
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
         {
-            return new StartupRegistrationStatus(false, false, null, exception.Message);
+            return new StartupRegistrationStatus(false, false, null, ErrorSanitizer.Sanitize(exception));
         }
     }
 

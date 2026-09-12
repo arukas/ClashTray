@@ -54,7 +54,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            return Failure(request, exception.Message);
+            return Failure(request, ErrorSanitizer.Sanitize(exception));
         }
     }
 
@@ -160,7 +160,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
         catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
         {
-            return Failure(request, $"受管 Mihomo 核心校验失败：{exception.Message}", CoreState.Failed);
+            return Failure(request, $"受管 Mihomo 核心校验失败：{ErrorSanitizer.Sanitize(exception)}", CoreState.Failed);
         }
 
         string executablePath = _paths.ManagedCoreExecutable;
@@ -224,7 +224,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             or UnauthorizedAccessException
             or System.ComponentModel.Win32Exception)
         {
-            string message = $"核心安装失败：{exception.Message}";
+            string message = $"核心安装失败：{ErrorSanitizer.Sanitize(exception)}";
             if (installed)
             {
                 string? rollbackError = await TryRollbackInstalledCoreAsync();
@@ -260,7 +260,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             or IOException
             or UnauthorizedAccessException)
         {
-            return Failure(request, $"核心回滚失败：{exception.Message}", _processManager.State);
+            return Failure(request, $"核心回滚失败：{ErrorSanitizer.Sanitize(exception)}", _processManager.State);
         }
     }
 
@@ -312,7 +312,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             or IOException
             or UnauthorizedAccessException)
         {
-            error = exception.Message;
+            error = ErrorSanitizer.Sanitize(exception);
         }
 
         try
@@ -321,7 +321,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
-            error = error is null ? exception.Message : $"{error}；{exception.Message}";
+            string sanitized = ErrorSanitizer.Sanitize(exception);
+            error = error is null ? sanitized : $"{error}；{sanitized}";
         }
 
         return error;
@@ -430,7 +431,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 ? previousValue ? TunState.On : TunState.Off
                 : TunState.Unknown;
             string message = restored
-                ? $"TUN 操作失败，已恢复原状态：{exception.Message}"
+                ? $"TUN 操作失败，已恢复原状态：{ErrorSanitizer.Sanitize(exception)}"
                 : $"TUN 操作失败，且无法确认原状态：{DescribeControllerError(exception)}";
             return Failure(request, message, _processManager.State);
         }

@@ -78,7 +78,7 @@ public sealed partial class ConnectionsPage : UserControl
             }
             catch (Exception exception)
             {
-                DetailsText.Text = $"关闭连接失败：{exception.Message}";
+                DetailsText.Text = $"关闭连接失败：{ErrorSanitizer.Sanitize(exception)}";
             }
         }
     }
@@ -91,7 +91,7 @@ public sealed partial class ConnectionsPage : UserControl
         }
         catch (Exception exception)
         {
-            DetailsText.Text = $"关闭连接失败：{exception.Message}";
+            DetailsText.Text = $"关闭连接失败：{ErrorSanitizer.Sanitize(exception)}";
         }
     }
 }
