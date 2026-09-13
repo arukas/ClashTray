@@ -50,6 +50,28 @@ internal sealed class MihomoControllerSessionRegistry
             && current.Generation == generation;
     }
 
+    public void EnsureCommandAllowed(
+        MihomoApiClient api,
+        long generation,
+        EndpointCommand command,
+        string staleSessionMessage)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+        ArgumentException.ThrowIfNullOrWhiteSpace(staleSessionMessage);
+        MihomoControllerSession? current = Current;
+        if (current is null
+            || !ReferenceEquals(current.Api, api)
+            || current.Generation != generation)
+        {
+            throw new InvalidOperationException(staleSessionMessage);
+        }
+
+        EndpointCommandPolicy.EnsureAllowed(
+            current.Endpoint.Kind,
+            current.Capabilities,
+            command);
+    }
+
     private static void ValidateEndpoint(EndpointDescriptor endpoint)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint.Id.Value);

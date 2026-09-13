@@ -117,4 +117,36 @@ public sealed class MihomoControllerSessionTests
             EndpointCapabilityDefaults.Remote));
         Assert.IsNull(registry.Current);
     }
+
+    [TestMethod]
+    public void RemoteCommandGateDeniesLocalCommandBeforeAnyControllerRequest()
+    {
+        using HttpClient client = new HttpClient();
+        MihomoApiClient api = new MihomoApiClient(
+            client,
+            new Uri("https://controller.example/"),
+            string.Empty);
+        EndpointDescriptor endpoint = new EndpointDescriptor(
+            new EndpointId("remote"),
+            EndpointKind.Remote,
+            "Remote",
+            new Uri("https://controller.example/"),
+            EndpointTransportSecurity.HttpsSystemTrust);
+        MihomoControllerSessionRegistry registry = new MihomoControllerSessionRegistry();
+        MihomoControllerSession session = registry.Attach(
+            api,
+            endpoint,
+            EndpointCapabilityDefaults.Remote);
+
+        EndpointCommandDeniedException exception = Assert.ThrowsExactly<EndpointCommandDeniedException>(() =>
+            registry.EnsureCommandAllowed(
+                api,
+                session.Generation,
+                EndpointCommand.ControlTun,
+                "会话已切换，请重试。"));
+
+        Assert.AreEqual(ErrorCode.EndpointCommandDenied, exception.ErrorCode);
+        Assert.AreEqual(EndpointKind.Remote, exception.EndpointKind);
+        Assert.AreEqual(EndpointCommand.ControlTun, exception.Command);
+    }
 }

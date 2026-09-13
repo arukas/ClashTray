@@ -1130,6 +1130,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         try
         {
             (MihomoApiClient api, long generation) = CaptureControllerSession();
+            EnsureControllerCommand(
+                api,
+                generation,
+                EndpointCommand.SwitchMode,
+                "模式切换期间核心会话已切换，请重试。");
 
             await api.SetModeAsync(mode, cancellationToken);
             EnsureControllerSession(api, generation, "模式切换期间核心会话已切换，请重试。");
@@ -1148,6 +1153,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         try
         {
             (MihomoApiClient api, long generation) = CaptureControllerSession();
+            EnsureControllerCommand(
+                api,
+                generation,
+                EndpointCommand.SwitchProxy,
+                "节点切换期间核心会话已切换，请重新选择节点。");
             string? previousProxy = _snapshot.ProxyGroups
                 .FirstOrDefault(item => string.Equals(item.Name, group, StringComparison.Ordinal))
                 ?.Current;
@@ -1162,6 +1172,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 try
                 {
+                    EnsureControllerCommand(
+                        api,
+                        generation,
+                        EndpointCommand.CloseConnection,
+                        "节点切换期间核心会话已切换，请重新选择节点。");
                     await api.CloseAllConnectionsAsync(cancellationToken);
                 }
                 catch (OperationCanceledException)
@@ -1207,6 +1222,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         try
         {
             (MihomoApiClient api, long generation) = CaptureControllerSession();
+            EnsureControllerCommand(
+                api,
+                generation,
+                EndpointCommand.TestDelay,
+                "测速期间核心会话已切换，请重新测速。");
 
             using JsonDocument response = await api.TestDelayAsync(
                 proxy,
@@ -1238,6 +1258,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         try
         {
             (MihomoApiClient api, long generation) = CaptureControllerSession();
+            EnsureControllerCommand(
+                api,
+                generation,
+                EndpointCommand.TestDelay,
+                "测速期间核心会话已切换，请重新测速。");
             using JsonDocument response = await api.TestGroupDelayAsync(group, new Uri("https://www.gstatic.com/generate_204"), 5000, token);
             IReadOnlyDictionary<string, int?> delays = MihomoDataParser.ParseGroupDelays(response);
             await _dataRefreshLock.WaitAsync(token);
@@ -1273,6 +1298,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             (MihomoApiClient api, long generation) = CaptureControllerSession();
+            EnsureControllerCommand(
+                api,
+                generation,
+                EndpointCommand.CloseConnection,
+                "关闭连接期间核心会话已切换，请重试。");
             await api.CloseConnectionAsync(id, cancellationToken);
             EnsureControllerSession(api, generation, "关闭连接期间核心会话已切换，请重试。");
             await RefreshFromApiAsync(cancellationToken);
@@ -1295,6 +1325,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             (MihomoApiClient api, long generation) = CaptureControllerSession();
+            EnsureControllerCommand(
+                api,
+                generation,
+                EndpointCommand.CloseConnection,
+                "关闭连接期间核心会话已切换，请重试。");
             await api.CloseAllConnectionsAsync(cancellationToken);
             EnsureControllerSession(api, generation, "关闭连接期间核心会话已切换，请重试。");
             await RefreshFromApiAsync(cancellationToken);
@@ -1317,6 +1352,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             (MihomoApiClient api, long generation) = CaptureControllerSession();
+            EnsureControllerCommand(
+                api,
+                generation,
+                EndpointCommand.RefreshProvider,
+                "刷新 Provider 期间核心会话已切换，请重试。");
             if (rules)
             {
                 await api.RefreshRuleProviderAsync(name, cancellationToken);
@@ -1354,6 +1394,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             (MihomoApiClient api, long generation) = CaptureControllerSession();
+            EnsureControllerCommand(
+                api,
+                generation,
+                EndpointCommand.ClearCache,
+                "清理 FakeIP 缓存期间核心会话已切换，请重试。");
             await api.ClearFakeIpCacheAsync(cancellationToken);
             EnsureControllerSession(api, generation, "清理 FakeIP 缓存期间核心会话已切换，请重试。");
         }
@@ -1689,6 +1734,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             (MihomoApiClient api, long generation) = CaptureControllerSession();
+            EnsureControllerCommand(
+                api,
+                generation,
+                EndpointCommand.ClearCache,
+                "清理 DNS 缓存期间核心会话已切换，请重试。");
             await api.ClearDnsCacheAsync(cancellationToken);
             EnsureControllerSession(api, generation, "清理 DNS 缓存期间核心会话已切换，请重试。");
         }
@@ -1709,6 +1759,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             (MihomoApiClient api, long generation) = CaptureControllerSession();
+            EnsureControllerCommand(
+                api,
+                generation,
+                EndpointCommand.UpdateGeo,
+                "更新 Geo 数据库期间核心会话已切换，请重试。");
             await api.UpdateGeoAsync(cancellationToken);
             EnsureControllerSession(api, generation, "更新 Geo 数据库期间核心会话已切换，请重试。");
             await RefreshFromApiAsync(cancellationToken);
@@ -2328,6 +2383,17 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    private void EnsureControllerCommand(
+        MihomoApiClient api,
+        long generation,
+        EndpointCommand command,
+        string staleSessionMessage) =>
+        _controllerSessions.EnsureCommandAllowed(
+            api,
+            generation,
+            command,
+            staleSessionMessage);
+
     private async Task ApplyProgramOverridesAsync(
         bool coreRunning,
         CancellationToken cancellationToken,
@@ -2432,12 +2498,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task ApplyProgramNetworkPreferencesAsync(CancellationToken cancellationToken)
     {
-        MihomoApiClient? api = _api;
-        if (api is null)
+        MihomoControllerSession? session = _controllerSessions.Current;
+        if (session is null)
         {
             return;
         }
 
+        MihomoApiClient api = session.Api;
+        EnsureControllerCommand(
+            api,
+            session.Generation,
+            EndpointCommand.ControlLocalCore,
+            "程序局域网/IPv6 设置期间核心会话已切换，请重试。");
         using JsonDocument configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
         bool? currentAllowLan = MihomoDataParser.ParseAllowLan(configuration);
         bool? currentIpv6 = MihomoDataParser.ParseIpv6(configuration);
@@ -2481,12 +2553,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task ApplyProgramTunPreferenceAsync(CancellationToken cancellationToken)
     {
-        MihomoApiClient? api = _api;
-        if (api is null)
+        MihomoControllerSession? session = _controllerSessions.Current;
+        if (session is null)
         {
             return;
         }
 
+        MihomoApiClient api = session.Api;
+        EnsureControllerCommand(
+            api,
+            session.Generation,
+            EndpointCommand.ControlLocalCore,
+            "程序 TUN 设置期间核心会话已切换，请重试。");
         using JsonDocument configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
         bool? current = MihomoDataParser.ParseTunEnabled(configuration);
         if (current is not bool currentValue || currentValue == _settings.TunEnabled)
