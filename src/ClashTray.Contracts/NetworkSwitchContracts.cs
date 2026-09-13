@@ -51,7 +51,8 @@ public enum NetworkSwitchReason
     DuplicateRules,
     MissingTarget,
     InvalidDefault,
-    NoDefault
+    NoDefault,
+    ExecutionFailed
 }
 
 public sealed record NetworkContextSnapshot(
