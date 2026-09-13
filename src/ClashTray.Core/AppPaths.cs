@@ -42,6 +42,8 @@ public sealed class AppPaths
     public string ConfigurationSwitchBackupsRoot =>
         Path.Combine(LocalRoot, "configuration-switch-backups");
 
+    public string NetworkRulesFile => Path.Combine(LocalRoot, "network-rules.json");
+
     public string ProxyBackupFile => Path.Combine(LocalRoot, "system-proxy-backup.json");
 
     public string ProxyOwnershipFile => Path.Combine(LocalRoot, "system-proxy-ownership.json");

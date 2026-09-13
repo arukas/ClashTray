@@ -70,6 +70,11 @@ public sealed record NetworkSwitchRule(
     string ConfigurationId,
     bool Enabled = true);
 
+public sealed record NetworkSwitchRuleSet(
+    bool AutomaticSwitchingEnabled,
+    string? DefaultConfigurationId,
+    IReadOnlyList<NetworkSwitchRule> Rules);
+
 public sealed record NetworkSwitchPolicyInput(
     bool AutomaticSwitchingEnabled,
     NetworkContextSnapshot Context,
