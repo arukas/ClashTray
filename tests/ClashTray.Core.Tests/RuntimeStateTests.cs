@@ -873,6 +873,84 @@ public sealed class RuntimeStateTests
         }
     }
 
+    [TestMethod]
+    public async Task SelectingConfigurationWhileCoreIsStoppedCommitsWithoutStartingCore()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        Directory.CreateDirectory(paths.CoreRoot);
+        File.Copy(Environment.ProcessPath!, paths.ManagedCoreExecutable);
+        ManagedCoreMetadata metadata = new(
+            "v0.0.0-test",
+            new Uri("https://example.com/mihomo.zip"),
+            new string('0', 64),
+            new string('0', 64));
+        await File.WriteAllTextAsync(paths.ManagedCoreMetadata, JsonSerializer.Serialize(metadata));
+        ConfigurationStore store = new ConfigurationStore(paths);
+        ConfigurationProfile first = await store.ImportLocalAsync(
+            await WriteConfigAsync(root, "first.yaml"),
+            "first");
+        ConfigurationProfile second = await store.ImportLocalAsync(
+            await WriteConfigAsync(root, "second.yaml"),
+            "second");
+        TestSettingsStore settings = new TestSettingsStore(
+            new AppSettings(ActiveConfigurationId: first.Id));
+
+        try
+        {
+            await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, settings);
+            await runtime.InitializeAsync();
+
+            await runtime.SetActiveConfigurationAsync(second.Id);
+
+            Assert.AreEqual(second.Id, runtime.Settings.ActiveConfigurationId);
+            Assert.AreEqual(CoreState.Stopped, runtime.Snapshot.Core.State);
+            Assert.AreEqual("second", runtime.Snapshot.Core.ConfigurationName);
+            Assert.AreEqual(second.Id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
+            Assert.AreEqual(1, settings.SaveCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task SelectingUnknownConfigurationDoesNotPersistOrChangeActiveSelection()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationStore store = new ConfigurationStore(paths);
+        ConfigurationProfile first = await store.ImportLocalAsync(
+            await WriteConfigAsync(root, "first.yaml"),
+            "first");
+        TestSettingsStore settings = new TestSettingsStore(
+            new AppSettings(ActiveConfigurationId: first.Id));
+
+        try
+        {
+            await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, settings);
+            await runtime.InitializeAsync();
+
+            await Assert.ThrowsExactlyAsync<FileNotFoundException>(() =>
+                runtime.SetActiveConfigurationAsync("missing-configuration"));
+
+            Assert.AreEqual(first.Id, runtime.Settings.ActiveConfigurationId);
+            Assert.AreEqual(first.Id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
+            Assert.AreEqual(0, settings.SaveCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private static async Task<string> WriteConfigAsync(string root, string name)
     {
         string path = Path.Combine(root, name);
@@ -929,11 +1007,14 @@ public sealed class RuntimeStateTests
 
         public AppSettings Settings { get; private set; }
 
+        public int SaveCount { get; private set; }
+
         public Task<SettingsLoadResult> LoadWithStatusAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(new SettingsLoadResult(Settings, SettingsLoadStatus.Loaded, null));
 
         public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
         {
+            SaveCount++;
             Settings = settings;
             return Task.CompletedTask;
         }
