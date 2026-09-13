@@ -39,7 +39,7 @@
                     </Button.Flyout>
                 </Button>
                 <Button x:Name="PinButton" Style="{StaticResource ClashTrayIconButtonStyle}" Click="PinButton_Click" ToolTipService.ToolTip="固定窗口" AutomationProperties.Name="固定窗口"><FontIcon Glyph="&#xE718;" FontSize="16"/></Button>
-                <Button Style="{StaticResource ClashTrayIconButtonStyle}" Click="RefreshConfigurationButton_Click" ToolTipService.ToolTip="重新加载配置" AutomationProperties.Name="重新加载配置"><FontIcon Glyph="&#xE72C;" FontSize="16"/></Button>
+                <Button Style="{StaticResource ClashTrayIconButtonStyle}" Click="RefreshConfigurationButton_Click" ToolTipService.ToolTip="重新加载配置" AutomationProperties.Name="重新加载配置"><FontIcon Glyph="&#xE8F7;" FontSize="16"/></Button>
                 <Button x:Name="CoreActionButton" Style="{StaticResource ClashTrayAccentIconButtonStyle}" Click="CoreActionButton_Click" ToolTipService.ToolTip="启动核心" AutomationProperties.Name="启动或重启核心"><FontIcon Glyph="&#xE768;" FontSize="16"/></Button>
             </StackPanel>
         </Grid>

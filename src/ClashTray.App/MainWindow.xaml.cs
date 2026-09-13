@@ -166,7 +166,7 @@ public sealed partial class MainWindow : Window
         };
         CoreActionButton.Content = new FontIcon
         {
-            Glyph = core.State == CoreState.Running ? "\uE72C" : "\uE768",
+            Glyph = core.State == CoreState.Running ? "\uF305" : "\uE768",
             FontSize = 16
         };
         ToolTipService.SetToolTip(CoreActionButton, core.State == CoreState.Running ? "重启核心" : "启动核心");
