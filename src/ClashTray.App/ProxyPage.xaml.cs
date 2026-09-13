@@ -39,7 +39,9 @@ public sealed partial class ProxyPage : UserControl
             && ReferenceEquals(_snapshot.Providers, snapshot.Providers);
         _snapshot = snapshot;
         // Traffic updates should not recreate controls or disturb keyboard focus.
-        EmptyTitle.Text = snapshot.Core.State == CoreState.Running ? "配置中没有代理组" : "还没有代理组";
+        EmptyTitle.Text = snapshot.Core.State == CoreState.Running
+            ? LocalizationService.Get("ProxyEmptyTitleRunning")
+            : LocalizationService.Get("ProxyEmptyTitleStopped");
         if (proxyDataUnchanged)
         {
             return;
@@ -95,7 +97,7 @@ public sealed partial class ProxyPage : UserControl
             });
             labels.Children.Add(new TextBlock
             {
-                Text = group.Current ?? "尚未选择",
+                Text = group.Current ?? LocalizationService.Get("GroupNotSelected"),
                 FontSize = 12,
                 Style = (Style)Application.Current.Resources["ClashTrayAccentTextStyle"],
                 TextTrimming = TextTrimming.CharacterEllipsis
@@ -119,8 +121,8 @@ public sealed partial class ProxyPage : UserControl
                 Style = (Style)Application.Current.Resources["ClashTrayIconButtonStyle"],
                 IsEnabled = snapshot.Core.State == CoreState.Running && group.Members.Count > 0 && !_testingGroups.Contains(group.Name)
             };
-            ToolTipService.SetToolTip(test, "测试整组节点延迟");
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(test, $"测试 {group.Name} 整组节点延迟");
+            ToolTipService.SetToolTip(test, LocalizationService.Get("ToolTipTestGroup"));
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(test, LocalizationService.Format("AutomationTestGroupFormat", group.Name));
             test.Click += async (_, _) =>
             {
                 if (!_testingGroups.Add(group.Name))
@@ -129,14 +131,14 @@ public sealed partial class ProxyPage : UserControl
                 }
 
                 test.IsEnabled = false;
-                DelayText.Text = $"{group.Name} · 正在测试整组节点…";
+                DelayText.Text = LocalizationService.Format("TestingGroupFormat", group.Name);
                 try
                 {
                     IReadOnlyDictionary<string, int?> results = await _runtime.TestProxyGroupDelayAsync(group.Name);
                     int available = results.Count(result => result.Value > 0);
-                    DelayText.Text = $"{group.Name} · 测速完成，{available} 个可用，{results.Count - available} 个未连通";
+                    DelayText.Text = LocalizationService.Format("TestCompleteFormat", group.Name, available, results.Count - available);
                 }
-                catch (Exception exception) { DelayText.Text = $"{group.Name} · 测速失败：{ErrorSanitizer.Sanitize(exception)}"; }
+                catch (Exception exception) { DelayText.Text = LocalizationService.Format("TestFailedFormat", group.Name, ErrorSanitizer.Sanitize(exception)); }
                 finally
                 {
                     _testingGroups.Remove(group.Name);
@@ -160,10 +162,12 @@ public sealed partial class ProxyPage : UserControl
             ScrollViewer.SetVerticalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
             ScrollViewer.SetHorizontalScrollMode(list, ScrollMode.Disabled);
             ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(list, $"{group.Name} 节点");
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(list, LocalizationService.Format("AutomationNodeListFormat", group.Name));
             body.Children.Add(new TextBlock
             {
-                Text = searching ? $"{members.Length} / {group.Members.Count} 个节点" : $"{group.Members.Count} 个节点",
+                Text = searching
+                    ? LocalizationService.Format("NodeCountSearchFormat", members.Length, group.Members.Count)
+                    : LocalizationService.Format("NodeCountFormat", group.Members.Count),
                 FontSize = 11,
                 Style = SecondaryTextStyle,
                 Margin = new Thickness(10, 3, 10, 2)
@@ -208,7 +212,7 @@ public sealed partial class ProxyPage : UserControl
                     {
                         TextBlock currentLabel = new TextBlock
                         {
-                            Text = "当前",
+                            Text = LocalizationService.Get("CurrentLabel"),
                             FontSize = 11,
                             VerticalAlignment = VerticalAlignment.Center,
                             Style = (Style)Application.Current.Resources["ClashTrayAccentTextStyle"]
@@ -238,7 +242,9 @@ public sealed partial class ProxyPage : UserControl
                         CornerRadius = new CornerRadius(6)
                     };
                     ToolTipService.SetToolTip(item, member);
-                    Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, $"{member}，{detail.Text}{(selected ? "，当前节点" : "")}");
+                    Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item,
+                        LocalizationService.Format("AutomationNodeItemFormat", member, detail.Text,
+                            selected ? LocalizationService.Get("CurrentNodeSuffix") : string.Empty));
                     list.Items.Add(item);
                 }
                 list.SelectedItem = list.Items.OfType<ListViewItem>().FirstOrDefault(item => (string?)item.Tag == group.Current);
@@ -271,7 +277,7 @@ public sealed partial class ProxyPage : UserControl
                 MinHeight = 52,
                 Padding = new Thickness(10, 6, 8, 6)
             };
-            ToolTipService.SetToolTip(expand, $"{group.Name} · {group.Current ?? "尚未选择"}");
+            ToolTipService.SetToolTip(expand, LocalizationService.Format("ToolTipGroupHeaderFormat", group.Name, group.Current ?? LocalizationService.Get("GroupNotSelected")));
             void ShowExpanded(bool expanded)
             {
                 if (expanded)
@@ -282,7 +288,10 @@ public sealed partial class ProxyPage : UserControl
                 body.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
                 chevron.Glyph = expanded ? "\uE70E" : "\uE70D";
                 Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(expand,
-                    $"{(expanded ? "收起" : "展开")} {group.Name}，当前 {group.Current}");
+                    LocalizationService.Format("AutomationGroupHeaderFormat",
+                        expanded ? LocalizationService.Get("CollapseVerb") : LocalizationService.Get("ExpandVerb"),
+                        group.Name,
+                        group.Current ?? string.Empty));
             }
             ShowExpanded(searching || _expanded.Contains(group.Name));
             expand.Click += (_, _) =>
@@ -312,7 +321,9 @@ public sealed partial class ProxyPage : UserControl
                 Child = container
             });
         }
-        NodeCountText.Text = searching ? $"{GroupsPanel.Children.Count} / {snapshot.ProxyGroups.Count} 组" : $"{snapshot.ProxyGroups.Count} 组";
+        NodeCountText.Text = searching
+            ? LocalizationService.Format("GroupCountSearchFormat", GroupsPanel.Children.Count, snapshot.ProxyGroups.Count)
+            : LocalizationService.Format("GroupCountFormat", snapshot.ProxyGroups.Count);
         NoResultsText.Visibility = searching && GroupsPanel.Children.Count == 0 && snapshot.ProxyGroups.Count > 0
             ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -321,7 +332,7 @@ public sealed partial class ProxyPage : UserControl
     {
         ProvidersPanel.Children.Clear();
         ProviderSection.Visibility = snapshot.Providers.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        ProviderTitle.Text = $"代理提供者 · {snapshot.Providers.Count}";
+        ProviderTitle.Text = LocalizationService.Format("ProviderSectionTitleFormat", snapshot.Providers.Count);
         foreach (ProviderStatus provider in snapshot.Providers)
         {
             Grid row = new Grid { ColumnSpacing = 8 };
@@ -329,11 +340,19 @@ public sealed partial class ProxyPage : UserControl
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             StackPanel labels = new StackPanel { Spacing = 2 };
             labels.Children.Add(new TextBlock { Text = provider.Name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
-            labels.Children.Add(new TextBlock { Text = provider.Error ?? $"{provider.Count} 项 · {provider.UpdatedAt:MM-dd HH:mm}", Style = SecondaryTextStyle, FontSize = 12, TextWrapping = TextWrapping.Wrap });
+            labels.Children.Add(new TextBlock
+            {
+                Text = provider.Error ?? LocalizationService.Format("ProviderItemFormat",
+                    provider.Count,
+                    provider.UpdatedAt?.ToString("MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture) ?? string.Empty),
+                Style = SecondaryTextStyle,
+                FontSize = 12,
+                TextWrapping = TextWrapping.Wrap
+            });
             row.Children.Add(labels);
             Button refresh = new Button { Content = new FontIcon { Glyph = "\uE72C", FontSize = 15 }, Style = (Style)Application.Current.Resources["ClashTrayIconButtonStyle"] };
-            ToolTipService.SetToolTip(refresh, $"刷新 {provider.Name}");
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(refresh, $"刷新代理提供者 {provider.Name}");
+            ToolTipService.SetToolTip(refresh, LocalizationService.Format("ToolTipRefreshProviderFormat", provider.Name));
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(refresh, LocalizationService.Format("AutomationRefreshProviderFormat", provider.Name));
             refresh.Click += async (_, _) =>
             {
                 refresh.IsEnabled = false;
@@ -348,8 +367,8 @@ public sealed partial class ProxyPage : UserControl
     }
 
     private static string FormatDelay(string? delay) =>
-        string.IsNullOrWhiteSpace(delay) || delay == "—" ? "未测速" :
-        int.TryParse(delay, out int value) ? value > 0 ? $"{value} ms" : "超时" : delay;
+        string.IsNullOrWhiteSpace(delay) || delay == "—" ? LocalizationService.Get("DelayNotTested") :
+        int.TryParse(delay, out int value) ? value > 0 ? $"{value} ms" : LocalizationService.Get("DelayTimeout") : delay;
 
     private Style SecondaryTextStyle => (Style)Resources["ProxySecondaryText"];
 

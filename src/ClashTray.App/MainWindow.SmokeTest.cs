@@ -143,7 +143,7 @@ public sealed partial class MainWindow
             TrayToggle = "passed",
             DeactivationDismissal = "passed"
         }, DiagnosticJsonOptions));
-        foreach ((UIElement, string) page in new[] { ((UIElement)_rulesPage!, "规则"), ((UIElement)_connectionsPage!, "连接"), ((UIElement)_logsPage!, "日志"), ((UIElement)_settingsPage!, "设置") })
+        foreach ((UIElement, PanelPage) page in new[] { ((UIElement)_rulesPage!, PanelPage.Rules), ((UIElement)_connectionsPage!, PanelPage.Connections), ((UIElement)_logsPage!, PanelPage.Logs), ((UIElement)_settingsPage!, PanelPage.Settings) })
         {
             NavigateTo(page.Item1, page.Item2);
             await Task.Delay(100);
@@ -155,7 +155,7 @@ public sealed partial class MainWindow
 
             await SaveDiagnosticFrameAsync(directory, $"page-{page.Item2}");
         }
-        NavigateTo(_proxyPage, "代理");
+        NavigateTo(_proxyPage, PanelPage.Proxy);
     }
 
     private async Task VerifyNodeScrollingAsync(string directory, RuntimeSnapshot sample)
@@ -283,7 +283,7 @@ public sealed partial class MainWindow
     private async Task VerifySettingsDraftAsync(string directory)
     {
         SettingsPage page = _settingsPage!;
-        NavigateTo(page, "设置");
+        NavigateTo(page, PanelPage.Settings);
         await Task.Delay(100);
         ToggleSwitch windows = (ToggleSwitch)page.FindName("StartWithWindowsSwitch");
         ToggleSwitch core = (ToggleSwitch)page.FindName("StartCoreSwitch");
@@ -373,7 +373,7 @@ public sealed partial class MainWindow
             WindowsStartupRegistryChanged = false,
             ManualChecks = "Windows sign-in startup and automatic core launch after sign-in were not exercised."
         }, DiagnosticJsonOptions));
-        NavigateTo(_proxyPage, "代理");
+        NavigateTo(_proxyPage, PanelPage.Proxy);
     }
     private async Task VerifyProxyDelayDisplayAsync(string directory, RuntimeSnapshot sample)
     {
@@ -405,7 +405,7 @@ public sealed partial class MainWindow
             foreach (ListViewItem item in items)
             {
                 bool current = item.Tag?.ToString() == name;
-                if (VisualDescendants<TextBlock>(item).Any(text => text.Text == "当前") != current)
+                if (VisualDescendants<TextBlock>(item).Any(text => text.Text == LocalizationService.Get("CurrentLabel")) != current)
                 {
                     throw new InvalidOperationException("Current badge is missing or stale.");
                 }
@@ -425,7 +425,7 @@ public sealed partial class MainWindow
 
         AssertCurrent(lists[0], "A");
         AssertCurrent(lists[1], "B");
-        foreach (string expected in new[] { "42 ms", "超时", "未测速" })
+        foreach (string expected in new[] { "42 ms", LocalizationService.Get("DelayTimeout"), LocalizationService.Get("DelayNotTested") })
         {
             if (!VisualDescendants<TextBlock>(lists[0]).Any(text => text.Text == expected))
             {

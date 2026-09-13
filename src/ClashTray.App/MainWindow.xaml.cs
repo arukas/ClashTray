@@ -17,6 +17,15 @@ namespace ClashTray.App;
 
 public sealed partial class MainWindow : Window
 {
+    private enum PanelPage
+    {
+        Proxy,
+        Rules,
+        Connections,
+        Logs,
+        Settings
+    }
+
     private readonly App _app;
     private TrayIconService? _trayIcon;
     private ClashTrayRuntime? _runtime;
@@ -60,7 +69,7 @@ public sealed partial class MainWindow : Window
         _settingsPage = new SettingsPage(runtime);
         ProxyPageContent.Content = _proxyPage;
         ApplyTheme(runtime.Settings.Theme);
-        NavigateTo(_proxyPage, "代理");
+        NavigateTo(_proxyPage, PanelPage.Proxy);
         UpdateSnapshot(runtime.Snapshot);
     }
 
@@ -156,20 +165,23 @@ public sealed partial class MainWindow : Window
         DirectModeButton.IsChecked = coreRunning && core.Mode == ProxyMode.Direct;
         CoreStateText.Text = core.State switch
         {
-            CoreState.Running => "运行中",
-            CoreState.Starting => "启动中",
-            CoreState.Stopping => "停止中",
-            CoreState.Restarting => "重启中",
-            CoreState.Failed => "异常",
-            CoreState.Missing => "未安装",
-            _ => "已停止"
+            CoreState.Running => LocalizationService.Get("CoreStateRunning"),
+            CoreState.Starting => LocalizationService.Get("CoreStateStarting"),
+            CoreState.Stopping => LocalizationService.Get("CoreStateStopping"),
+            CoreState.Restarting => LocalizationService.Get("CoreStateRestarting"),
+            CoreState.Failed => LocalizationService.Get("CoreStateFailed"),
+            CoreState.Missing => LocalizationService.Get("CoreStateMissing"),
+            _ => LocalizationService.Get("CoreStateStopped")
         };
         CoreActionButton.Content = new FontIcon
         {
             Glyph = core.State == CoreState.Running ? "\uF305" : "\uE768",
             FontSize = 16
         };
-        ToolTipService.SetToolTip(CoreActionButton, core.State == CoreState.Running ? "重启核心" : "启动核心");
+        ToolTipService.SetToolTip(CoreActionButton,
+            core.State == CoreState.Running
+                ? LocalizationService.Get("ToolTipRestartCore")
+                : LocalizationService.Get("ToolTipStartCore"));
         StatusDot.Fill = new SolidColorBrush(core.State switch
         {
             CoreState.Running => Colors.Green,
@@ -183,58 +195,58 @@ public sealed partial class MainWindow : Window
             .InformationalVersion
             ?? "0.0.0-dev";
         CoreVersionText.Text = string.IsNullOrWhiteSpace(core.Version)
-            ? $"ClashTray {appVersion} · Mihomo 未启动"
-            : $"Mihomo {core.Version} · ClashTray {appVersion}";
+            ? LocalizationService.Format("CoreVersionIdleFormat", appVersion)
+            : LocalizationService.Format("CoreVersionRunningFormat", core.Version, appVersion);
         bool dashboardAvailable = coreRunning && _runtime?.DashboardAvailable == true;
         ControllerEndpointButton.Content = coreRunning
             ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}/ui/"
-            : "核心未运行";
+            : LocalizationService.Get("ControllerCoreNotRunning");
         ControllerEndpointButton.IsEnabled = coreRunning;
         ToolTipService.SetToolTip(
             ControllerEndpointButton,
             !coreRunning
-                ? "核心运行后可打开本机控制器"
+                ? LocalizationService.Get("ToolTipControllerNeedsCore")
                 : dashboardAvailable
-                    ? "在默认浏览器打开 MetaCubeXD"
-                    : "MetaCubeXD 资源缺失；点击复制本机控制器地址");
+                    ? LocalizationService.Get("ToolTipControllerOpenDashboard")
+                    : LocalizationService.Get("ToolTipControllerMissingDashboard"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
             ControllerEndpointButton,
-            dashboardAvailable ? "打开 MetaCubeXD" : "打开或复制本机控制器地址");
+            dashboardAvailable ? LocalizationService.Get("AutomationOpenDashboard") : LocalizationService.Get("AutomationOpenOrCopyController"));
         ConnectionCountText.Text = core.ConnectionCount.ToString(CultureInfo.InvariantCulture);
         TrafficText.Text = core.TrafficAvailable
             ? $"↑ {FormatRate(core.UploadBytesPerSecond)}  ↓ {FormatRate(core.DownloadBytesPerSecond)}"
-            : "↑ 暂不可用  ↓ 暂不可用";
-        MemoryText.Text = core.MemoryAvailable ? FormatBytes(core.MemoryBytes) : "暂不可用";
+            : LocalizationService.Get("TrafficUnavailable");
+        MemoryText.Text = core.MemoryAvailable ? FormatBytes(core.MemoryBytes) : LocalizationService.Get("MemoryUnavailable");
         SystemProxyStateText.Text = snapshot.SystemProxy switch
         {
-            SystemProxyState.On => "已开启",
-            SystemProxyState.Enabling => "开启中",
-            SystemProxyState.Disabling => "关闭中",
-            SystemProxyState.RestoreRequired => "需要恢复",
-            SystemProxyState.Failed => "操作失败",
-            _ => "已关闭"
+            SystemProxyState.On => LocalizationService.Get("SwitchStateOn"),
+            SystemProxyState.Enabling => LocalizationService.Get("SwitchStateEnabling"),
+            SystemProxyState.Disabling => LocalizationService.Get("SwitchStateDisabling"),
+            SystemProxyState.RestoreRequired => LocalizationService.Get("SwitchStateRestoreRequired"),
+            SystemProxyState.Failed => LocalizationService.Get("SwitchStateFailed"),
+            _ => LocalizationService.Get("SwitchStateOff")
         };
         SystemProxySwitch.IsOn = snapshot.SystemProxy == SystemProxyState.On;
         TunStateText.Text = snapshot.Tun switch
         {
-            TunState.On => "已开启",
-            TunState.Enabling => "开启中",
-            TunState.Disabling => "关闭中",
-            TunState.Unavailable => "服务未安装",
-            TunState.Unknown => "无法确认",
-            TunState.Failed => "操作失败",
-            _ => "已关闭"
+            TunState.On => LocalizationService.Get("SwitchStateOn"),
+            TunState.Enabling => LocalizationService.Get("SwitchStateEnabling"),
+            TunState.Disabling => LocalizationService.Get("SwitchStateDisabling"),
+            TunState.Unavailable => LocalizationService.Get("TunStateUnavailable"),
+            TunState.Unknown => LocalizationService.Get("TunStateUnknown"),
+            TunState.Failed => LocalizationService.Get("SwitchStateFailed"),
+            _ => LocalizationService.Get("SwitchStateOff")
         };
         TunSwitch.IsOn = snapshot.Tun == TunState.On;
         _updatingSnapshot = false;
-        ConfigurationText.Text = core.ConfigurationName ?? snapshot.Configurations.FirstOrDefault(c => c.IsActive)?.Name ?? "导入配置";
+        ConfigurationText.Text = core.ConfigurationName ?? snapshot.Configurations.FirstOrDefault(c => c.IsActive)?.Name ?? LocalizationService.Get("ConfigImportPrompt");
         ErrorBanner.Message = snapshot.ErrorMessage ?? core.ErrorMessage ?? string.Empty;
         ErrorBanner.IsOpen = !string.IsNullOrEmpty(ErrorBanner.Message);
         DownloadText.Text = FormatRate(core.DownloadBytesPerSecond);
         UploadText.Text = FormatRate(core.UploadBytesPerSecond);
         TotalTrafficText.Text = core.TrafficAvailable
-            ? $"累计 ↑ {FormatBytes(core.UploadBytes)}  ↓ {FormatBytes(core.DownloadBytes)}"
-            : "累计流量暂不可用";
+            ? LocalizationService.Format("TotalTrafficFormat", FormatBytes(core.UploadBytes), FormatBytes(core.DownloadBytes))
+            : LocalizationService.Get("TotalTrafficUnavailable");
         if (core.TrafficAvailable && DateTime.UtcNow - _lastTrafficSample >= TimeSpan.FromSeconds(1))
         {
             _lastTrafficSample = DateTime.UtcNow;
@@ -326,14 +338,14 @@ public sealed partial class MainWindow : Window
         }
 
         TextBox urlBox = new TextBox { PlaceholderText = "https://example.com/mihomo.yaml", MinWidth = 320 };
-        TextBox nameBox = new TextBox { PlaceholderText = "可选名称", Margin = new Thickness(0, 8, 0, 0) };
-        StackPanel content = new StackPanel { Children = { new TextBlock { Text = "订阅地址" }, urlBox, nameBox } };
+        TextBox nameBox = new TextBox { PlaceholderText = LocalizationService.Get("DialogOptionalNamePlaceholder"), Margin = new Thickness(0, 8, 0, 0) };
+        StackPanel content = new StackPanel { Children = { new TextBlock { Text = LocalizationService.Get("DialogSubscriptionUrlLabel") }, urlBox, nameBox } };
         ContentDialog dialog = new ContentDialog
         {
-            Title = "添加订阅",
+            Title = LocalizationService.Get("DialogAddSubscriptionTitle"),
             Content = content,
-            PrimaryButtonText = "添加",
-            CloseButtonText = "取消",
+            PrimaryButtonText = LocalizationService.Get("DialogAdd"),
+            CloseButtonText = LocalizationService.Get("DialogCancel"),
             XamlRoot = RootGrid.XamlRoot
         };
         if (await dialog.ShowAsync() != ContentDialogResult.Primary
@@ -431,7 +443,7 @@ public sealed partial class MainWindow : Window
             Glyph = "\uE718",
             FontSize = 16
         };
-        ToolTipService.SetToolTip(PinButton, _isPinned ? "取消固定" : "固定窗口");
+        ToolTipService.SetToolTip(PinButton, _isPinned ? LocalizationService.Get("ToolTipUnpinWindow") : LocalizationService.Get("ToolTipPinWindow"));
         ApplyWindowMode();
         if (!_isPinned)
         {
@@ -500,12 +512,12 @@ public sealed partial class MainWindow : Window
         {
             ContentDialog dialog = new ContentDialog
             {
-                Title = "删除配置",
+                Title = LocalizationService.Get("DialogDeleteConfigTitle"),
                 Content = selected.IsActive
-                    ? $"确定删除“{selected.Name}”吗？活动配置删除后，正在运行的核心也会停止。"
-                    : $"确定删除“{selected.Name}”吗？此操作会删除本地配置文件。",
-                PrimaryButtonText = "删除",
-                CloseButtonText = "取消",
+                    ? LocalizationService.Format("DialogDeleteConfigActiveFormat", selected.Name)
+                    : LocalizationService.Format("DialogDeleteConfigFormat", selected.Name),
+                PrimaryButtonText = LocalizationService.Get("DialogDelete"),
+                CloseButtonText = LocalizationService.Get("DialogCancel"),
                 DefaultButton = ContentDialogButton.Close,
                 XamlRoot = RootGrid.XamlRoot
             };
@@ -547,21 +559,21 @@ public sealed partial class MainWindow : Window
         return _runtime?.Snapshot.Configurations.FirstOrDefault(configuration => configuration.Id == id);
     }
 
-    private void RulesButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_rulesPage, "规则");
+    private void RulesButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_rulesPage, PanelPage.Rules);
 
-    private void ConnectionsButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_connectionsPage, "连接");
+    private void ConnectionsButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_connectionsPage, PanelPage.Connections);
 
-    private void LogsButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_logsPage, "日志");
+    private void LogsButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_logsPage, PanelPage.Logs);
 
-    private void ProxyPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_proxyPage, "代理");
+    private void ProxyPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_proxyPage, PanelPage.Proxy);
 
-    private void RulesPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_rulesPage, "规则");
+    private void RulesPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_rulesPage, PanelPage.Rules);
 
-    private void ConnectionsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_connectionsPage, "连接");
+    private void ConnectionsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_connectionsPage, PanelPage.Connections);
 
-    private void LogsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_logsPage, "日志");
+    private void LogsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_logsPage, PanelPage.Logs);
 
-    private void SettingsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_settingsPage, "设置");
+    private void SettingsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_settingsPage, PanelPage.Settings);
 
     private void QuitButton_Click(object sender, RoutedEventArgs e) => _app.RequestQuit();
 
@@ -590,14 +602,14 @@ public sealed partial class MainWindow : Window
             DataPackage package = new DataPackage();
             package.SetText(controllerUri.ToString());
             Clipboard.SetContent(package);
-            ShowMessage("MetaCubeXD 资源缺失，已复制本机控制器地址。", InfoBarSeverity.Informational);
+            ShowMessage(LocalizationService.Get("MessageDashboardMissingCopied"), InfoBarSeverity.Informational);
             return;
         }
 
         Uri dashboardUri = new Uri(controllerUri, "ui/");
         if (!await Launcher.LaunchUriAsync(dashboardUri))
         {
-            ShowError("无法打开默认浏览器中的本机控制器入口。");
+            ShowError(LocalizationService.Get("ErrorOpenDashboard"));
         }
     }
 
@@ -612,7 +624,7 @@ public sealed partial class MainWindow : Window
         HidePanel();
     }
 
-    private void NavigateTo(UIElement? page, string title)
+    private void NavigateTo(UIElement? page, PanelPage target)
     {
         bool isDashboard = page == _proxyPage;
         DashboardScrollViewer.Visibility = isDashboard ? Visibility.Visible : Visibility.Collapsed;
@@ -623,11 +635,11 @@ public sealed partial class MainWindow : Window
         }
 
         ProxyPageButton.IsChecked = isDashboard;
-        RulesPageButton.IsChecked = title == "规则";
-        ConnectionsPageButton.IsChecked = title == "连接";
-        LogsPageButton.IsChecked = title == "日志";
-        SettingsPageButton.IsChecked = title == "设置";
-        if (title is "规则" or "设置")
+        RulesPageButton.IsChecked = target == PanelPage.Rules;
+        ConnectionsPageButton.IsChecked = target == PanelPage.Connections;
+        LogsPageButton.IsChecked = target == PanelPage.Logs;
+        SettingsPageButton.IsChecked = target == PanelPage.Settings;
+        if (target is PanelPage.Rules or PanelPage.Settings)
         {
             _ = RefreshPageDataAsync();
         }

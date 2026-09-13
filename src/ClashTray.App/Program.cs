@@ -9,9 +9,20 @@ internal static class Program
     public static void Main(string[] args)
     {
         string? smokeDirectory = args.FirstOrDefault(arg => arg.StartsWith("--ui-smoke-test=", StringComparison.Ordinal))?["--ui-smoke-test=".Length..];
+        if (smokeDirectory is not null)
+        {
+            Directory.CreateDirectory(smokeDirectory);
+            File.AppendAllText(Path.Combine(smokeDirectory, "marker.log"), $"{DateTimeOffset.Now:O} entered Main{Environment.NewLine}");
+        }
+
         using SingleInstanceCoordinator? coordinator = SingleInstanceCoordinator.TryAcquire(smokeDirectory is not null);
         if (coordinator is null)
         {
+            if (smokeDirectory is not null)
+            {
+                File.AppendAllText(Path.Combine(smokeDirectory, "marker.log"), $"{DateTimeOffset.Now:O} coordinator null{Environment.NewLine}");
+            }
+
             return;
         }
 

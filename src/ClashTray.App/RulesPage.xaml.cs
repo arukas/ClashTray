@@ -46,14 +46,14 @@ public sealed partial class RulesPage : UserControl
         try
         {
             await _runtime.RefreshDataAsync();
-            StatusText.Text = "规则和 Provider 状态已刷新。";
+            StatusText.Text = LocalizationService.Get("RulesRefreshed");
         }
         catch (OperationCanceledException)
         {
         }
         catch (Exception exception)
         {
-            StatusText.Text = $"刷新失败：{ErrorSanitizer.Sanitize(exception)}";
+            StatusText.Text = LocalizationService.Format("RefreshFailedFormat", ErrorSanitizer.Sanitize(exception));
         }
         finally
         {
@@ -70,13 +70,13 @@ public sealed partial class RulesPage : UserControl
         }
 
         string search = SearchBox.Text.Trim();
-        string? filter = (FilterBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
+        string? filter = (FilterBox.SelectedItem as ComboBoxItem)?.Tag as string;
         RulesListView.Items.Clear();
         foreach (RuleInfo rule in _rules.Where(rule =>
                      (string.IsNullOrWhiteSpace(search) || $"{rule.Type} {rule.Payload} {rule.Proxy}".Contains(search, StringComparison.OrdinalIgnoreCase))
-                     && (filter is "全部" or null
-                         || filter == "域名" && rule.Type.Contains("DOMAIN", StringComparison.OrdinalIgnoreCase)
-                         || filter == "IP" && rule.Type.Contains("IP", StringComparison.OrdinalIgnoreCase))))
+                     && (filter is "all" or null
+                         || filter == "domain" && rule.Type.Contains("DOMAIN", StringComparison.OrdinalIgnoreCase)
+                         || filter == "ip" && rule.Type.Contains("IP", StringComparison.OrdinalIgnoreCase))))
         {
             RulesListView.Items.Add(new ListViewItem { Content = $"{rule.Type}  {rule.Payload}  → {rule.Proxy}" });
         }

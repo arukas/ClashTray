@@ -78,10 +78,10 @@ public sealed partial class MainWindow
             };
             ToolTipService.SetToolTip(ThemeButton, normalizedTheme switch
             {
-                "light" => "主题：浅色",
-                "dark" => "主题：深色",
-                "nakhimov" => "主题：Nakhimov",
-                _ => "主题：自动"
+                "light" => LocalizationService.Get("ThemeTooltipLight"),
+                "dark" => LocalizationService.Get("ThemeTooltipDark"),
+                "nakhimov" => LocalizationService.Get("ThemeTooltipNakhimov"),
+                _ => LocalizationService.Get("ThemeTooltipAuto")
             });
         }
         finally { _updatingThemeControls = false; }
@@ -172,8 +172,8 @@ public sealed partial class MainWindow
         {
             if (remaining <= 2)
             {
-                EasterEggTip.Title = $"再点击 {remaining} 次…";
-                EasterEggTip.Subtitle = "有一位特别的访客。";
+                EasterEggTip.Title = LocalizationService.Format("EasterEggMoreFormat", remaining);
+                EasterEggTip.Subtitle = LocalizationService.Get("EasterEggVisitor");
                 EasterEggTip.IsOpen = true;
             }
             return;
@@ -184,15 +184,15 @@ public sealed partial class MainWindow
             bool wasUnlocked = _runtime.Settings.NakhimovUnlocked;
             await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = "nakhimov", NakhimovUnlocked = true });
             ApplyTheme(_runtime.Settings.Theme);
-            EasterEggTip.Title = wasUnlocked ? "欢迎回来，Nakhimov" : "Nakhimov 已解锁";
-            EasterEggTip.Subtitle = "彩蛋主题已启用，可在主题菜单中自由切换。";
+            EasterEggTip.Title = wasUnlocked ? LocalizationService.Get("EasterEggWelcomeBack") : LocalizationService.Get("EasterEggUnlocked");
+            EasterEggTip.Subtitle = LocalizationService.Get("EasterEggEnabledHint");
             EasterEggTip.IsOpen = true;
         }
         catch (Exception exception)
         {
             EasterEggTip.IsOpen = false;
             ApplyTheme(_runtime.Settings.Theme);
-            ShowError($"彩蛋主题保存失败：{ErrorSanitizer.Sanitize(exception)}");
+            ShowError(LocalizationService.Format("EasterEggSaveFailedFormat", ErrorSanitizer.Sanitize(exception)));
         }
         finally { _unlockInProgress = false; }
     }
@@ -214,7 +214,7 @@ public sealed partial class MainWindow
         catch (Exception exception)
         {
             ApplyTheme(_runtime.Settings.Theme);
-            ShowError($"主题切换失败：{ErrorSanitizer.Sanitize(exception)}");
+            ShowError(LocalizationService.Format("ThemeSwitchFailedFormat", ErrorSanitizer.Sanitize(exception)));
         }
     }
 }

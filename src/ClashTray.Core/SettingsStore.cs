@@ -100,6 +100,47 @@ public sealed class SettingsStore : ISettingsStore
         await AtomicFile.WriteJsonAsync(_paths.SettingsFile, dto, _options, cancellationToken);
     }
 
+    /// <summary>
+    /// Best-effort synchronous read of the configured UI language, used before
+    /// any window, tray menu or notification exists. Returns null for missing,
+    /// unreadable or corrupt files; the full async load reports those states
+    /// with proper status later during initialization.
+    /// </summary>
+    public static string? ReadLanguageOverride(AppPaths paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        try
+        {
+            if (!File.Exists(paths.SettingsFile)
+                || new FileInfo(paths.SettingsFile).Length > MaxSettingsBytes)
+            {
+                return null;
+            }
+
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(paths.SettingsFile));
+            if (document.RootElement.TryGetProperty("language", out JsonElement language)
+                && language.ValueKind == JsonValueKind.String)
+            {
+                string? value = language.GetString();
+                return value is "zh-CN" or "en-US" ? value : null;
+            }
+
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
     private SettingsLoadResult RecoverCorruptSettings()
     {
         string backupPath = $"{_paths.SettingsFile}.corrupt-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}";

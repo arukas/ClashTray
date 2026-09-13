@@ -19,11 +19,11 @@
             </Grid.ColumnDefinitions>
             <FontIcon Glyph="&#xE8A5;" FontSize="20" Foreground="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
             <StackPanel Grid.Column="1" Margin="10,0,8,0" Spacing="1">
-                <TextBlock Text="日志" FontSize="20" FontWeight="SemiBold" />
-                <TextBlock Text="实时查看 ClashTray 与 Mihomo 运行记录" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
+                <TextBlock x:Uid="LogsTitle" FontSize="20" FontWeight="SemiBold" />
+                <TextBlock x:Uid="LogsSubtitle" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
             </StackPanel>
-            <Button Grid.Column="2" Content="复制" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="CopyButton_Click" Margin="4,0,0,0" />
-            <Button Grid.Column="3" Content="清空" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearButton_Click" Margin="4,0,0,0" />
+            <Button Grid.Column="2" x:Uid="CopyLogsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="CopyButton_Click" Margin="4,0,0,0" />
+            <Button Grid.Column="3" x:Uid="ClearLogsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearButton_Click" Margin="4,0,0,0" />
         </Grid>
 
         <Border Style="{StaticResource ClashTrayCardStyle}">
@@ -33,21 +33,21 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBox x:Name="SearchBox" PlaceholderText="搜索日志内容" TextChanged="SearchBox_TextChanged" />
+                <TextBox x:Name="SearchBox" x:Uid="LogsSearchBox" TextChanged="SearchBox_TextChanged" />
                 <ComboBox x:Name="LevelBox" Grid.Column="1" SelectedIndex="0" SelectionChanged="LevelBox_SelectionChanged" MinWidth="84">
-                    <ComboBoxItem Content="全部" />
-                    <ComboBoxItem Content="info" />
-                    <ComboBoxItem Content="warning" />
-                    <ComboBoxItem Content="error" />
+                    <ComboBoxItem x:Uid="LevelAllItem" Tag="all" />
+                    <ComboBoxItem Content="info" Tag="info" />
+                    <ComboBoxItem Content="warning" Tag="warning" />
+                    <ComboBoxItem Content="error" Tag="error" />
                 </ComboBox>
                 <ComboBox x:Name="SourceBox" Grid.Column="2" SelectedIndex="0" SelectionChanged="SourceBox_SelectionChanged" MinWidth="100">
-                    <ComboBoxItem Content="全部来源" />
-                    <ComboBoxItem Content="ClashTray" />
-                    <ComboBoxItem Content="mihomo" />
+                    <ComboBoxItem x:Uid="SourceAllItem" Tag="all" />
+                    <ComboBoxItem Content="ClashTray" Tag="ClashTray" />
+                    <ComboBoxItem Content="mihomo" Tag="mihomo" />
                 </ComboBox>
             </Grid>
         </Border>
 
-        <Border Style="{StaticResource ClashTrayCardStyle}" Padding="8"><Grid MinHeight="80"><ListView x:Name="LogsListView" AutomationProperties.Name="日志列表" ScrollViewer.VerticalScrollMode="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled" /><TextBlock x:Name="EmptyListText" Text="暂无匹配的日志" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></Grid></Border>
+        <Border Style="{StaticResource ClashTrayCardStyle}" Padding="8"><Grid MinHeight="80"><ListView x:Name="LogsListView" x:Uid="LogsListView" ScrollViewer.VerticalScrollMode="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled" /><TextBlock x:Name="EmptyListText" x:Uid="LogsEmptyListText" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></Grid></Border>
     </StackPanel>
 </UserControl>

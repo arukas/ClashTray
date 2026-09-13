@@ -10,32 +10,32 @@
             </Grid.ColumnDefinitions>
             <FontIcon Glyph="&#xE713;" FontSize="20" Foreground="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
             <StackPanel Grid.Column="1" Margin="10,0,0,0" Spacing="1">
-                <TextBlock Text="设置" FontSize="20" FontWeight="SemiBold" />
-                <TextBlock Text="调整启动、代理端口和 Mihomo 运行参数" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
-                <TextBlock Text="修改后请点击下方“保存设置”生效。" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap"/>
+                <TextBlock x:Uid="SettingsTitle" FontSize="20" FontWeight="SemiBold" />
+                <TextBlock x:Uid="SettingsSubtitle" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
+                <TextBlock x:Uid="SettingsSaveHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap"/>
             </StackPanel>
         </Grid>
 
         <Border Style="{StaticResource ClashTrayCardStyle}">
             <StackPanel Spacing="2">
-                <TextBlock Text="运行方式" FontWeight="SemiBold" Margin="0,0,0,4" />
-                <ToggleSwitch x:Name="StartWithWindowsSwitch" Header="随 Windows 启动" />
-                <ToggleSwitch x:Name="StartCoreSwitch" Header="启动后自动启动核心" />
-                <ToggleSwitch x:Name="AllowLanSwitch" Header="允许局域网连接" />
-                <ToggleSwitch x:Name="Ipv6Switch" Header="启用 IPv6" />
-                <ToggleSwitch x:Name="TcpConcurrentSwitch" Header="启用 TCP 并发" />
-                <ToggleSwitch x:Name="DisconnectAfterProxySwitch" Header="切换节点后断开现有连接" />
-                <TextBlock Text="开启后，节点切换成功会中断现有连接，让新连接立即使用所选节点。" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
-                <TextBlock Text="核心运行时修改端口、控制器端口、TCP 并发或日志级别会自动受控重启；修改 Mixed 端口会先恢复再重新应用系统代理。" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
-                <TextBlock Text="面板中的系统代理、TUN、允许局域网连接和 IPv6 设置由 ClashTray 保存并优先控制；配置文件中的对应选项不会覆盖程序选择。" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0" />
+                <TextBlock x:Uid="RunModeHeader" FontWeight="SemiBold" Margin="0,0,0,4" />
+                <ToggleSwitch x:Name="StartWithWindowsSwitch" x:Uid="StartWithWindowsSwitch" />
+                <ToggleSwitch x:Name="StartCoreSwitch" x:Uid="StartCoreSwitch" />
+                <ToggleSwitch x:Name="AllowLanSwitch" x:Uid="AllowLanSwitch" />
+                <ToggleSwitch x:Name="Ipv6Switch" x:Uid="Ipv6Switch" />
+                <ToggleSwitch x:Name="TcpConcurrentSwitch" x:Uid="TcpConcurrentSwitch" />
+                <ToggleSwitch x:Name="DisconnectAfterProxySwitch" x:Uid="DisconnectAfterProxySwitch" />
+                <TextBlock x:Uid="DisconnectAfterProxySwitchHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
+                <TextBlock x:Uid="RestartOnChangeHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
+                <TextBlock x:Uid="ProgramOverridesHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0" />
                 <TextBlock x:Name="StartupStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
-                <Button x:Name="SaveSettingsButton" Content="保存设置" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" HorizontalAlignment="Left" />
+                <Button x:Name="SaveSettingsButton" x:Uid="SaveSettingsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" HorizontalAlignment="Left" />
             </StackPanel>
         </Border>
 
         <Border Style="{StaticResource ClashTrayCardStyle}">
             <StackPanel Spacing="8">
-                <TextBlock Text="端口与代理" FontWeight="SemiBold" />
+                <TextBlock x:Uid="PortsHeader" FontWeight="SemiBold" />
                 <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -50,11 +50,11 @@
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <NumberBox x:Name="MixedPortBox" Header="Mixed" Minimum="1" Maximum="65535" />
-                    <NumberBox x:Name="ControllerPortBox" Grid.Column="1" Header="控制器" Minimum="1" Maximum="65535" />
+                    <NumberBox x:Name="ControllerPortBox" Grid.Column="1" x:Uid="ControllerPortBox" Minimum="1" Maximum="65535" />
                 </Grid>
-                <TextBox x:Name="BypassListBox" Header="系统代理绕过列表" PlaceholderText="使用分号分隔，例如 localhost;127.*" />
-                <TextBlock Text="订阅刷新间隔" FontWeight="SemiBold" Margin="0,2,0,0" />
-                <NumberBox x:Name="SubscriptionRefreshHoursBox" Header="小时" Minimum="1" Maximum="168" SmallChange="1" Value="24" />
+                <TextBox x:Name="BypassListBox" x:Uid="BypassListBox" />
+                <TextBlock x:Uid="SubscriptionRefreshHeader" FontWeight="SemiBold" Margin="0,2,0,0" />
+                <NumberBox x:Name="SubscriptionRefreshHoursBox" x:Uid="SubscriptionRefreshHoursBox" Minimum="1" Maximum="168" SmallChange="1" Value="24" />
             </StackPanel>
         </Border>
 
@@ -65,42 +65,47 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <ComboBox x:Name="LogLevelBox" Header="日志级别" SelectedIndex="0">
-                        <ComboBoxItem Content="info" />
-                        <ComboBoxItem Content="warning" />
-                        <ComboBoxItem Content="error" />
-                        <ComboBoxItem Content="debug" />
+                    <ComboBox x:Name="LogLevelBox" x:Uid="LogLevelBox" SelectedIndex="0">
+                        <ComboBoxItem Content="info" Tag="info" />
+                        <ComboBoxItem Content="warning" Tag="warning" />
+                        <ComboBoxItem Content="error" Tag="error" />
+                        <ComboBoxItem Content="debug" Tag="debug" />
                     </ComboBox>
-                    <ComboBox x:Name="ThemeBox" Grid.Column="1" Header="主题">
-                        <ComboBoxItem Content="跟随系统" Tag="system" />
-                        <ComboBoxItem Content="浅色" Tag="light" />
-                        <ComboBoxItem Content="深色" Tag="dark" />
+                    <ComboBox x:Name="ThemeBox" Grid.Column="1" x:Uid="ThemeBox">
+                        <ComboBoxItem x:Uid="ThemeSystemItem" Tag="system" />
+                        <ComboBoxItem x:Uid="ThemeLightItem" Tag="light" />
+                        <ComboBoxItem x:Uid="ThemeDarkItem" Tag="dark" />
                     </ComboBox>
                 </Grid>
+                <ComboBox x:Name="LanguageBox" x:Uid="LanguageBox">
+                    <ComboBoxItem x:Uid="LanguageSystemItem" Tag="system" />
+                    <ComboBoxItem x:Uid="LanguageZhCNItem" Tag="zh-CN" />
+                    <ComboBoxItem x:Uid="LanguageEnUSItem" Tag="en-US" />
+                </ComboBox>
                 <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Left">
 
-                    <Button Content="清理 DNS" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearDnsButton_Click" />
-                    <Button Content="清理 FakeIP" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearFakeIpButton_Click" />
-                    <Button Content="更新 Geo" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="UpdateGeoButton_Click" />
+                    <Button x:Uid="ClearDnsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearDnsButton_Click" />
+                    <Button x:Uid="ClearFakeIpButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearFakeIpButton_Click" />
+                    <Button x:Uid="UpdateGeoButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="UpdateGeoButton_Click" />
                 </StackPanel>
             </StackPanel>
         </Border>
 
         <Border Style="{StaticResource ClashTrayCardStyle}">
             <StackPanel Spacing="8">
-                <TextBlock Text="Provider" FontWeight="SemiBold" />
-                <ListView x:Name="ProvidersListView" SelectionChanged="ProvidersListView_SelectionChanged" AutomationProperties.Name="Provider 状态列表" ScrollViewer.VerticalScrollMode="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
-                <Button Content="刷新选中的 Provider" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="RefreshProviderButton_Click" HorizontalAlignment="Left" />
+                <TextBlock x:Uid="ProvidersHeader" FontWeight="SemiBold" />
+                <ListView x:Name="ProvidersListView" x:Uid="ProvidersListView" SelectionChanged="ProvidersListView_SelectionChanged" ScrollViewer.VerticalScrollMode="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
+                <Button x:Uid="RefreshProviderButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="RefreshProviderButton_Click" HorizontalAlignment="Left" />
             </StackPanel>
         </Border>
 
         <Border Style="{StaticResource ClashTrayCardStyle}">
-            <Expander Header="核心更新">
+            <Expander x:Uid="CoreUpdateExpander">
                 <StackPanel Spacing="8" Padding="0,8,0,0">
-                    <TextBox x:Name="CoreVersionBox" Header="版本" PlaceholderText="例如 v1.19.30" />
-                    <TextBox x:Name="CoreDownloadUriBox" Header="官方 GitHub 下载地址" PlaceholderText="https://github.com/MetaCubeX/mihomo/releases/download/..." />
-                    <TextBox x:Name="CoreSha256Box" Header="ZIP SHA-256" PlaceholderText="64 位十六进制校验值" />
-                    <Button Content="校验并安装核心" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="InstallCoreButton_Click" HorizontalAlignment="Left" />
+                    <TextBox x:Name="CoreVersionBox" x:Uid="CoreVersionBox" />
+                    <TextBox x:Name="CoreDownloadUriBox" x:Uid="CoreDownloadUriBox" />
+                    <TextBox x:Name="CoreSha256Box" x:Uid="CoreSha256Box" />
+                    <Button x:Uid="InstallCoreButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="InstallCoreButton_Click" HorizontalAlignment="Left" />
                 </StackPanel>
             </Expander>
         </Border>

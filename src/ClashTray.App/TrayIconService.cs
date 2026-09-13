@@ -116,13 +116,13 @@ internal sealed class TrayIconService : IDisposable
 
         _data.Tip = state switch
         {
-            TrayState.Connecting => "ClashTray · 连接中",
-            TrayState.Running => "ClashTray · 运行中",
-            TrayState.SystemProxy => "ClashTray · 系统代理已开启",
-            TrayState.Tun => "ClashTray · TUN 已开启",
-            TrayState.Paused => "ClashTray · 已暂停",
-            TrayState.Error => "ClashTray · 需要注意",
-            _ => "ClashTray · 已断开"
+            TrayState.Connecting => LocalizationService.Get("TrayTooltipConnecting"),
+            TrayState.Running => LocalizationService.Get("TrayTooltipRunning"),
+            TrayState.SystemProxy => LocalizationService.Get("TrayTooltipSystemProxy"),
+            TrayState.Tun => LocalizationService.Get("TrayTooltipTun"),
+            TrayState.Paused => LocalizationService.Get("TrayTooltipPaused"),
+            TrayState.Error => LocalizationService.Get("TrayTooltipError"),
+            _ => LocalizationService.Get("TrayTooltipStopped")
         };
         NativeMethods.Shell_NotifyIcon(NativeMethods.NIM_MODIFY, ref _data);
     }

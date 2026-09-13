@@ -1,0 +1,294 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+
+  <!-- MainWindow chrome -->
+  <data name="LogoButton.AutomationProperties.Name" xml:space="preserve"><value>ClashTray logo</value></data>
+  <data name="CoreStateText.Text" xml:space="preserve"><value>Stopped</value></data>
+  <data name="ControllerEndpointButton.Content" xml:space="preserve"><value>Core not running</value></data>
+  <data name="ControllerEndpointButton.AutomationProperties.Name" xml:space="preserve"><value>Open the local controller</value></data>
+  <data name="ThemeButton.ToolTipService.ToolTip" xml:space="preserve"><value>Change theme</value></data>
+  <data name="ThemeButton.AutomationProperties.Name" xml:space="preserve"><value>Change theme</value></data>
+  <data name="ThemeFlyoutTitle.Text" xml:space="preserve"><value>Theme</value></data>
+  <data name="SystemThemeOption.Content" xml:space="preserve"><value>Auto (follow system)</value></data>
+  <data name="LightThemeOption.Content" xml:space="preserve"><value>Light</value></data>
+  <data name="DarkThemeOption.Content" xml:space="preserve"><value>Dark</value></data>
+  <data name="PinButton.ToolTipService.ToolTip" xml:space="preserve"><value>Pin window</value></data>
+  <data name="PinButton.AutomationProperties.Name" xml:space="preserve"><value>Pin window</value></data>
+  <data name="ReloadConfigurationButton.ToolTipService.ToolTip" xml:space="preserve"><value>Reload configuration</value></data>
+  <data name="ReloadConfigurationButton.AutomationProperties.Name" xml:space="preserve"><value>Reload configuration</value></data>
+  <data name="CoreActionButton.ToolTipService.ToolTip" xml:space="preserve"><value>Start core</value></data>
+  <data name="CoreActionButton.AutomationProperties.Name" xml:space="preserve"><value>Start or restart the core</value></data>
+  <data name="RuleModeText.Text" xml:space="preserve"><value>Rule</value></data>
+  <data name="GlobalModeText.Text" xml:space="preserve"><value>Global</value></data>
+  <data name="DirectModeText.Text" xml:space="preserve"><value>Direct</value></data>
+  <data name="ProxyPageButton.Content" xml:space="preserve"><value>Proxy</value></data>
+  <data name="RulesPageButton.Content" xml:space="preserve"><value>Rules</value></data>
+  <data name="ConnectionsPageButton.Content" xml:space="preserve"><value>Connections</value></data>
+  <data name="LogsPageButton.Content" xml:space="preserve"><value>Logs</value></data>
+  <data name="SettingsPageButton.Content" xml:space="preserve"><value>Settings</value></data>
+  <data name="ConnectionsUnitText.Text" xml:space="preserve"><value>connections</value></data>
+  <data name="TrafficGraph.AutomationProperties.Name" xml:space="preserve"><value>Upload and download speed over the last minute</value></data>
+  <data name="TotalTrafficText.Text" xml:space="preserve"><value>Total ↑ 0 KB  ↓ 0 KB</value></data>
+  <data name="ConfigButton.AutomationProperties.Name" xml:space="preserve"><value>Switch and manage configurations</value></data>
+  <data name="ConfigManagementTitle.Text" xml:space="preserve"><value>Configurations</value></data>
+  <data name="ConfigurationsComboBox.PlaceholderText" xml:space="preserve"><value>Select a configuration</value></data>
+  <data name="ImportLocalButton.Content" xml:space="preserve"><value>Import YAML</value></data>
+  <data name="ImportSubscriptionButton.Content" xml:space="preserve"><value>Add subscription</value></data>
+  <data name="ReloadConfigButton.Content" xml:space="preserve"><value>Reload</value></data>
+  <data name="DeleteConfigButton.Content" xml:space="preserve"><value>Delete</value></data>
+  <data name="ConfigRowLabel.Text" xml:space="preserve"><value>Configuration</value></data>
+  <data name="ConfigurationText.Text" xml:space="preserve"><value>Import a configuration</value></data>
+  <data name="SystemProxyLabel.Text" xml:space="preserve"><value>System proxy</value></data>
+  <data name="SystemProxyStateText.Text" xml:space="preserve"><value>Off</value></data>
+  <data name="SystemProxySwitch.AutomationProperties.Name" xml:space="preserve"><value>System proxy</value></data>
+  <data name="TunLabel.Text" xml:space="preserve"><value>TUN mode</value></data>
+  <data name="TunStateText.Text" xml:space="preserve"><value>Off</value></data>
+  <data name="TunSwitch.AutomationProperties.Name" xml:space="preserve"><value>TUN mode</value></data>
+  <data name="ProxyPortsLabel.Text" xml:space="preserve"><value>Proxy ports</value></data>
+  <data name="HttpEndpointButton.ToolTipService.ToolTip" xml:space="preserve"><value>Copy the HTTP proxy address</value></data>
+  <data name="MixedEndpointButton.ToolTipService.ToolTip" xml:space="preserve"><value>Copy the Mixed proxy address</value></data>
+  <data name="QuitButton.Content" xml:space="preserve"><value>Quit</value></data>
+
+  <!-- ProxyPage -->
+  <data name="ProxyGroupsTitle.Text" xml:space="preserve"><value>Proxy groups</value></data>
+  <data name="NodeCountText.Text" xml:space="preserve"><value>0 groups</value></data>
+  <data name="NodeSearchBox.PlaceholderText" xml:space="preserve"><value>Search groups or nodes</value></data>
+  <data name="NodeSearchBox.AutomationProperties.Name" xml:space="preserve"><value>Search proxy groups or nodes</value></data>
+  <data name="ProviderTitle.Text" xml:space="preserve"><value>Proxy providers</value></data>
+  <data name="NoResultsText.Text" xml:space="preserve"><value>No matching nodes. Try different keywords.</value></data>
+  <data name="EmptyTitle.Text" xml:space="preserve"><value>No proxy groups yet</value></data>
+  <data name="EmptyHint.Text" xml:space="preserve"><value>Import a YAML file or subscription from “Configurations” above.
+Start the core to see proxy groups and nodes here.</value></data>
+
+  <!-- RulesPage -->
+  <data name="RulesTitle.Text" xml:space="preserve"><value>Rules</value></data>
+  <data name="RulesSubtitle.Text" xml:space="preserve"><value>See which Mihomo rules the current connections match</value></data>
+  <data name="RulesSearchBox.PlaceholderText" xml:space="preserve"><value>Search rules, domains or policies</value></data>
+  <data name="RulesFilterAllItem.Content" xml:space="preserve"><value>All</value></data>
+  <data name="RulesFilterDomainItem.Content" xml:space="preserve"><value>Domain</value></data>
+  <data name="RulesFilterIpItem.Content" xml:space="preserve"><value>IP</value></data>
+  <data name="RefreshRulesButton.Content" xml:space="preserve"><value>Refresh</value></data>
+  <data name="RulesListView.AutomationProperties.Name" xml:space="preserve"><value>Rule list</value></data>
+  <data name="RulesEmptyListText.Text" xml:space="preserve"><value>No rules to show</value></data>
+
+  <!-- ConnectionsPage -->
+  <data name="ConnectionsTitle.Text" xml:space="preserve"><value>Connections</value></data>
+  <data name="ConnectionsSubtitle.Text" xml:space="preserve"><value>View and manage active connections</value></data>
+  <data name="CloseAllButton.Content" xml:space="preserve"><value>Close all</value></data>
+  <data name="ConnectionsSearchBox.PlaceholderText" xml:space="preserve"><value>Search addresses, rules or policies</value></data>
+  <data name="SortNewestItem.Content" xml:space="preserve"><value>Newest</value></data>
+  <data name="SortUploadItem.Content" xml:space="preserve"><value>Upload</value></data>
+  <data name="SortDownloadItem.Content" xml:space="preserve"><value>Download</value></data>
+  <data name="ConnectionsEmptyListText.Text" xml:space="preserve"><value>No matching connections</value></data>
+  <data name="ConnectionDetailsTitle.Text" xml:space="preserve"><value>Connection details</value></data>
+  <data name="CloseSelectedButton.Content" xml:space="preserve"><value>Close selected</value></data>
+  <data name="ConnectionDetailsText.Text" xml:space="preserve"><value>Select a connection to see details</value></data>
+
+  <!-- LogsPage -->
+  <data name="LogsTitle.Text" xml:space="preserve"><value>Logs</value></data>
+  <data name="LogsSubtitle.Text" xml:space="preserve"><value>Live ClashTray and Mihomo logs</value></data>
+  <data name="CopyLogsButton.Content" xml:space="preserve"><value>Copy</value></data>
+  <data name="ClearLogsButton.Content" xml:space="preserve"><value>Clear</value></data>
+  <data name="LogsSearchBox.PlaceholderText" xml:space="preserve"><value>Search log messages</value></data>
+  <data name="LevelAllItem.Content" xml:space="preserve"><value>All</value></data>
+  <data name="SourceAllItem.Content" xml:space="preserve"><value>All sources</value></data>
+  <data name="LogsListView.AutomationProperties.Name" xml:space="preserve"><value>Log list</value></data>
+  <data name="LogsEmptyListText.Text" xml:space="preserve"><value>No matching log entries</value></data>
+
+  <!-- SettingsPage -->
+  <data name="SettingsTitle.Text" xml:space="preserve"><value>Settings</value></data>
+  <data name="SettingsSubtitle.Text" xml:space="preserve"><value>Adjust startup, proxy ports and Mihomo runtime options</value></data>
+  <data name="SettingsSaveHint.Text" xml:space="preserve"><value>Select “Save settings” below to apply your changes.</value></data>
+  <data name="RunModeHeader.Text" xml:space="preserve"><value>Behavior</value></data>
+  <data name="StartWithWindowsSwitch.Header" xml:space="preserve"><value>Start with Windows</value></data>
+  <data name="StartCoreSwitch.Header" xml:space="preserve"><value>Start the core automatically</value></data>
+  <data name="AllowLanSwitch.Header" xml:space="preserve"><value>Allow LAN connections</value></data>
+  <data name="Ipv6Switch.Header" xml:space="preserve"><value>Enable IPv6</value></data>
+  <data name="TcpConcurrentSwitch.Header" xml:space="preserve"><value>Enable TCP concurrency</value></data>
+  <data name="DisconnectAfterProxySwitch.Header" xml:space="preserve"><value>Close existing connections after switching nodes</value></data>
+  <data name="DisconnectAfterProxySwitchHint.Text" xml:space="preserve"><value>When enabled, a successful node switch closes existing connections so new connections use the selected node immediately.</value></data>
+  <data name="RestartOnChangeHint.Text" xml:space="preserve"><value>Changing ports, the controller port, TCP concurrency or the log level restarts the core in a controlled way while it is running; changing the Mixed port restores and then reapplies the system proxy.</value></data>
+  <data name="ProgramOverridesHint.Text" xml:space="preserve"><value>System proxy, TUN, allow-LAN and IPv6 options in this panel are saved and controlled by ClashTray; matching options in configuration files do not override these choices.</value></data>
+  <data name="SaveSettingsButton.Content" xml:space="preserve"><value>Save settings</value></data>
+  <data name="PortsHeader.Text" xml:space="preserve"><value>Ports and proxy</value></data>
+  <data name="ControllerPortBox.Header" xml:space="preserve"><value>Controller</value></data>
+  <data name="ControllerPortLabel" xml:space="preserve"><value>Controller</value></data>
+  <data name="BypassListBox.Header" xml:space="preserve"><value>System proxy bypass list</value></data>
+  <data name="BypassListBox.PlaceholderText" xml:space="preserve"><value>Separate with semicolons, e.g. localhost;127.*</value></data>
+  <data name="SubscriptionRefreshHeader.Text" xml:space="preserve"><value>Subscription refresh interval</value></data>
+  <data name="SubscriptionRefreshHoursBox.Header" xml:space="preserve"><value>Hours</value></data>
+  <data name="LogLevelBox.Header" xml:space="preserve"><value>Log level</value></data>
+  <data name="ThemeBox.Header" xml:space="preserve"><value>Theme</value></data>
+  <data name="ThemeSystemItem.Content" xml:space="preserve"><value>Follow system</value></data>
+  <data name="ThemeLightItem.Content" xml:space="preserve"><value>Light</value></data>
+  <data name="ThemeDarkItem.Content" xml:space="preserve"><value>Dark</value></data>
+  <data name="LanguageBox.Header" xml:space="preserve"><value>Language</value></data>
+  <data name="LanguageSystemItem.Content" xml:space="preserve"><value>Follow system</value></data>
+  <data name="LanguageZhCNItem.Content" xml:space="preserve"><value>简体中文</value></data>
+  <data name="LanguageEnUSItem.Content" xml:space="preserve"><value>English</value></data>
+  <data name="ClearDnsButton.Content" xml:space="preserve"><value>Clear DNS</value></data>
+  <data name="ClearFakeIpButton.Content" xml:space="preserve"><value>Clear FakeIP</value></data>
+  <data name="UpdateGeoButton.Content" xml:space="preserve"><value>Update Geo</value></data>
+  <data name="ProvidersHeader.Text" xml:space="preserve"><value>Providers</value></data>
+  <data name="ProvidersListView.AutomationProperties.Name" xml:space="preserve"><value>Provider status list</value></data>
+  <data name="RefreshProviderButton.Content" xml:space="preserve"><value>Refresh selected provider</value></data>
+  <data name="CoreUpdateExpander.Header" xml:space="preserve"><value>Core update</value></data>
+  <data name="CoreVersionBox.Header" xml:space="preserve"><value>Version</value></data>
+  <data name="CoreVersionBox.PlaceholderText" xml:space="preserve"><value>For example v1.19.30</value></data>
+  <data name="CoreDownloadUriBox.Header" xml:space="preserve"><value>Official GitHub download URL</value></data>
+  <data name="CoreSha256Box.Header" xml:space="preserve"><value>ZIP SHA-256</value></data>
+  <data name="CoreSha256Box.PlaceholderText" xml:space="preserve"><value>64-digit hexadecimal checksum</value></data>
+  <data name="InstallCoreButton.Content" xml:space="preserve"><value>Verify and install core</value></data>
+
+  <!-- Runtime text: core states and header -->
+  <data name="CoreStateRunning" xml:space="preserve"><value>Running</value></data>
+  <data name="CoreStateStarting" xml:space="preserve"><value>Starting</value></data>
+  <data name="CoreStateStopping" xml:space="preserve"><value>Stopping</value></data>
+  <data name="CoreStateRestarting" xml:space="preserve"><value>Restarting</value></data>
+  <data name="CoreStateFailed" xml:space="preserve"><value>Failed</value></data>
+  <data name="CoreStateMissing" xml:space="preserve"><value>Not installed</value></data>
+  <data name="CoreStateStopped" xml:space="preserve"><value>Stopped</value></data>
+  <data name="ToolTipStartCore" xml:space="preserve"><value>Start core</value></data>
+  <data name="ToolTipRestartCore" xml:space="preserve"><value>Restart core</value></data>
+  <data name="CoreVersionIdleFormat" xml:space="preserve"><value>ClashTray {0} · Mihomo not running</value></data>
+  <data name="CoreVersionRunningFormat" xml:space="preserve"><value>Mihomo {0} · ClashTray {1}</value></data>
+  <data name="ControllerCoreNotRunning" xml:space="preserve"><value>Core not running</value></data>
+  <data name="ToolTipControllerNeedsCore" xml:space="preserve"><value>Open the local controller once the core is running</value></data>
+  <data name="ToolTipControllerOpenDashboard" xml:space="preserve"><value>Open MetaCubeXD in the default browser</value></data>
+  <data name="ToolTipControllerMissingDashboard" xml:space="preserve"><value>MetaCubeXD assets are missing; select to copy the local controller address</value></data>
+  <data name="AutomationOpenDashboard" xml:space="preserve"><value>Open MetaCubeXD</value></data>
+  <data name="AutomationOpenOrCopyController" xml:space="preserve"><value>Open or copy the local controller address</value></data>
+  <data name="TrafficUnavailable" xml:space="preserve"><value>↑ unavailable  ↓ unavailable</value></data>
+  <data name="MemoryUnavailable" xml:space="preserve"><value>Unavailable</value></data>
+  <data name="TotalTrafficFormat" xml:space="preserve"><value>Total ↑ {0}  ↓ {1}</value></data>
+  <data name="TotalTrafficUnavailable" xml:space="preserve"><value>Total traffic unavailable</value></data>
+  <data name="SwitchStateOn" xml:space="preserve"><value>On</value></data>
+  <data name="SwitchStateEnabling" xml:space="preserve"><value>Turning on</value></data>
+  <data name="SwitchStateDisabling" xml:space="preserve"><value>Turning off</value></data>
+  <data name="SwitchStateRestoreRequired" xml:space="preserve"><value>Restore required</value></data>
+  <data name="SwitchStateFailed" xml:space="preserve"><value>Failed</value></data>
+  <data name="SwitchStateOff" xml:space="preserve"><value>Off</value></data>
+  <data name="TunStateUnavailable" xml:space="preserve"><value>Service not installed</value></data>
+  <data name="TunStateUnknown" xml:space="preserve"><value>Cannot confirm</value></data>
+  <data name="ConfigImportPrompt" xml:space="preserve"><value>Import a configuration</value></data>
+  <data name="ToolTipPinWindow" xml:space="preserve"><value>Pin window</value></data>
+  <data name="ToolTipUnpinWindow" xml:space="preserve"><value>Unpin</value></data>
+
+  <!-- Dialogs -->
+  <data name="DialogAddSubscriptionTitle" xml:space="preserve"><value>Add subscription</value></data>
+  <data name="DialogSubscriptionUrlLabel" xml:space="preserve"><value>Subscription URL</value></data>
+  <data name="DialogOptionalNamePlaceholder" xml:space="preserve"><value>Optional name</value></data>
+  <data name="DialogAdd" xml:space="preserve"><value>Add</value></data>
+  <data name="DialogCancel" xml:space="preserve"><value>Cancel</value></data>
+  <data name="DialogDelete" xml:space="preserve"><value>Delete</value></data>
+  <data name="DialogDeleteConfigTitle" xml:space="preserve"><value>Delete configuration</value></data>
+  <data name="DialogDeleteConfigActiveFormat" xml:space="preserve"><value>Delete “{0}”? The active configuration is in use, so the running core will also stop.</value></data>
+  <data name="DialogDeleteConfigFormat" xml:space="preserve"><value>Delete “{0}”? This removes the local configuration file.</value></data>
+  <data name="MessageDashboardMissingCopied" xml:space="preserve"><value>MetaCubeXD assets are missing; the local controller address was copied.</value></data>
+  <data name="ErrorOpenDashboard" xml:space="preserve"><value>Could not open the local controller in the default browser.</value></data>
+
+  <!-- Proxy page runtime text -->
+  <data name="ProxyEmptyTitleRunning" xml:space="preserve"><value>No proxy groups in the configuration</value></data>
+  <data name="ProxyEmptyTitleStopped" xml:space="preserve"><value>No proxy groups yet</value></data>
+  <data name="GroupNotSelected" xml:space="preserve"><value>Not selected</value></data>
+  <data name="ToolTipTestGroup" xml:space="preserve"><value>Test latency for the whole group</value></data>
+  <data name="AutomationTestGroupFormat" xml:space="preserve"><value>Test latency for the whole {0} group</value></data>
+  <data name="TestingGroupFormat" xml:space="preserve"><value>{0} · Testing the group…</value></data>
+  <data name="TestCompleteFormat" xml:space="preserve"><value>{0} · Test finished: {1} reachable, {2} unreachable</value></data>
+  <data name="TestFailedFormat" xml:space="preserve"><value>{0} · Test failed: {1}</value></data>
+  <data name="AutomationNodeListFormat" xml:space="preserve"><value>{0} nodes</value></data>
+  <data name="AutomationNodeItemFormat" xml:space="preserve"><value>{0}, {1}{2}</value></data>
+  <data name="NodeCountFormat" xml:space="preserve"><value>{0} nodes</value></data>
+  <data name="NodeCountSearchFormat" xml:space="preserve"><value>{0} of {1} nodes</value></data>
+  <data name="CurrentLabel" xml:space="preserve"><value>Current</value></data>
+  <data name="CurrentNodeSuffix" xml:space="preserve"><value>, current node</value></data>
+  <data name="ExpandVerb" xml:space="preserve"><value>Expand</value></data>
+  <data name="CollapseVerb" xml:space="preserve"><value>Collapse</value></data>
+  <data name="AutomationGroupHeaderFormat" xml:space="preserve"><value>{0} {1}, current {2}</value></data>
+  <data name="ToolTipGroupHeaderFormat" xml:space="preserve"><value>{0} · {1}</value></data>
+  <data name="GroupCountFormat" xml:space="preserve"><value>{0} groups</value></data>
+  <data name="GroupCountSearchFormat" xml:space="preserve"><value>{0} of {1} groups</value></data>
+  <data name="ProviderSectionTitleFormat" xml:space="preserve"><value>Proxy providers · {0}</value></data>
+  <data name="ProviderItemFormat" xml:space="preserve"><value>{0} items · {1}</value></data>
+  <data name="ToolTipRefreshProviderFormat" xml:space="preserve"><value>Refresh {0}</value></data>
+  <data name="AutomationRefreshProviderFormat" xml:space="preserve"><value>Refresh proxy provider {0}</value></data>
+  <data name="DelayNotTested" xml:space="preserve"><value>Not tested</value></data>
+  <data name="DelayTimeout" xml:space="preserve"><value>Timeout</value></data>
+
+  <!-- Rules page runtime text -->
+  <data name="RulesRefreshed" xml:space="preserve"><value>Rules and provider status refreshed.</value></data>
+  <data name="RefreshFailedFormat" xml:space="preserve"><value>Refresh failed: {0}</value></data>
+
+  <!-- Connections page runtime text -->
+  <data name="SelectConnectionHint" xml:space="preserve"><value>Select a connection to see details</value></data>
+  <data name="ConnectionDetailsFormat" xml:space="preserve"><value>{0} · {1}
+Rule: {2} {3}
+Upload {4} B · Download {5} B</value></data>
+  <data name="CloseConnectionFailedFormat" xml:space="preserve"><value>Failed to close the connection: {0}</value></data>
+
+  <!-- Settings page runtime text -->
+  <data name="ErrorInvalidRefreshHours" xml:space="preserve"><value>The subscription refresh interval must be a whole number of hours between 1 and 168.</value></data>
+  <data name="SettingsSaved" xml:space="preserve"><value>Settings saved. Core options that require it restart the core in a controlled way, and the system proxy picks up the new port once the core is healthy.</value></data>
+  <data name="SettingsSaveFailedFormat" xml:space="preserve"><value>Failed to save settings: {0}</value></data>
+  <data name="FakeIpCleared" xml:space="preserve"><value>FakeIP cache cleared.</value></data>
+  <data name="DnsCleared" xml:space="preserve"><value>DNS cache cleared.</value></data>
+  <data name="GeoUpdateSent" xml:space="preserve"><value>Geo database update requested.</value></data>
+  <data name="SelectProviderFirst" xml:space="preserve"><value>Select a provider first.</value></data>
+  <data name="ProviderRefreshRequestedFormat" xml:space="preserve"><value>Refresh requested for {0}.</value></data>
+  <data name="ProviderStatusSummaryFormat" xml:space="preserve"><value>{0} · {1} items</value></data>
+  <data name="CoreUpdateFieldsRequired" xml:space="preserve"><value>Enter the official HTTPS download URL, the version and the 64-digit SHA-256.</value></data>
+  <data name="CoreUpdateDone" xml:space="preserve"><value>The core was verified and atomically replaced.</value></data>
+  <data name="ErrorPortRangeFormat" xml:space="preserve"><value>The {0} port must be a whole number between 1 and 65535.</value></data>
+  <data name="StartupStatusReadFailedFormat" xml:space="preserve"><value>Could not read the Windows startup state: {0}</value></data>
+  <data name="StartupRegisteredButDisabled" xml:space="preserve"><value>Startup is registered but Windows disabled it; enable it in Task Manager → Startup apps.</value></data>
+  <data name="StartupNeedsRepair" xml:space="preserve"><value>Startup is on, but the registered command changed; select “Save settings” to repair it.</value></data>
+  <data name="StartupRegistered" xml:space="preserve"><value>Startup is registered.</value></data>
+  <data name="StartupMissing" xml:space="preserve"><value>Startup is on, but the entry is missing; select “Save settings” to repair it.</value></data>
+  <data name="StartupOffForeignItem" xml:space="preserve"><value>Startup is off; an entry with the same name exists, and saving keeps the other program's command.</value></data>
+  <data name="StartupOff" xml:space="preserve"><value>Startup is off.</value></data>
+  <data name="ProviderItemKindRule" xml:space="preserve"><value>Rule</value></data>
+  <data name="ProviderItemKindProxy" xml:space="preserve"><value>Proxy</value></data>
+  <data name="ProviderListItemFormat" xml:space="preserve"><value>{0} · {1} · {2} items · {3}</value></data>
+  <data name="LanguageRestartPrompt" xml:space="preserve"><value>The language change takes effect the next time ClashTray starts.</value></data>
+
+  <!-- Tray icon tooltips -->
+  <data name="TrayTooltipConnecting" xml:space="preserve"><value>ClashTray · Connecting</value></data>
+  <data name="TrayTooltipRunning" xml:space="preserve"><value>ClashTray · Running</value></data>
+  <data name="TrayTooltipSystemProxy" xml:space="preserve"><value>ClashTray · System proxy on</value></data>
+  <data name="TrayTooltipTun" xml:space="preserve"><value>ClashTray · TUN on</value></data>
+  <data name="TrayTooltipPaused" xml:space="preserve"><value>ClashTray · Paused</value></data>
+  <data name="TrayTooltipError" xml:space="preserve"><value>ClashTray · Needs attention</value></data>
+  <data name="TrayTooltipStopped" xml:space="preserve"><value>ClashTray · Disconnected</value></data>
+
+  <!-- Tray context menu -->
+  <data name="MenuOpenPanel" xml:space="preserve"><value>Open control panel</value></data>
+  <data name="MenuStartCore" xml:space="preserve"><value>Start core</value></data>
+  <data name="MenuRestartCore" xml:space="preserve"><value>Restart core</value></data>
+  <data name="MenuStopCore" xml:space="preserve"><value>Stop core</value></data>
+  <data name="MenuEnableSystemProxy" xml:space="preserve"><value>Turn on system proxy</value></data>
+  <data name="MenuDisableSystemProxy" xml:space="preserve"><value>Turn off system proxy</value></data>
+  <data name="MenuRestoreSystemProxy" xml:space="preserve"><value>Restore system proxy</value></data>
+  <data name="MenuEnableTun" xml:space="preserve"><value>Turn on TUN</value></data>
+  <data name="MenuDisableTun" xml:space="preserve"><value>Turn off TUN</value></data>
+  <data name="MenuModeRule" xml:space="preserve"><value>Rule mode</value></data>
+  <data name="MenuModeGlobal" xml:space="preserve"><value>Global mode</value></data>
+  <data name="MenuModeDirect" xml:space="preserve"><value>Direct mode</value></data>
+  <data name="MenuQuit" xml:space="preserve"><value>Quit ClashTray</value></data>
+
+  <!-- Theme flyout and easter egg -->
+  <data name="ThemeTooltipAuto" xml:space="preserve"><value>Theme: Auto</value></data>
+  <data name="ThemeTooltipLight" xml:space="preserve"><value>Theme: Light</value></data>
+  <data name="ThemeTooltipDark" xml:space="preserve"><value>Theme: Dark</value></data>
+  <data name="ThemeTooltipNakhimov" xml:space="preserve"><value>Theme: Nakhimov</value></data>
+  <data name="EasterEggMoreFormat" xml:space="preserve"><value>{0} more clicks…</value></data>
+  <data name="EasterEggVisitor" xml:space="preserve"><value>A special guest is waiting.</value></data>
+  <data name="EasterEggWelcomeBack" xml:space="preserve"><value>Welcome back, Nakhimov</value></data>
+  <data name="EasterEggUnlocked" xml:space="preserve"><value>Nakhimov unlocked</value></data>
+  <data name="EasterEggEnabledHint" xml:space="preserve"><value>The bonus theme is on; switch freely in the theme menu.</value></data>
+  <data name="EasterEggSaveFailedFormat" xml:space="preserve"><value>Failed to save the bonus theme: {0}</value></data>
+  <data name="ThemeSwitchFailedFormat" xml:space="preserve"><value>Failed to switch theme: {0}</value></data>
+</root>

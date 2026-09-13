@@ -41,13 +41,13 @@ public sealed partial class ConnectionsPage : UserControl
         }
 
         string search = SearchBox.Text.Trim();
-        string? sort = (SortBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
+        string? sort = (SortBox.SelectedItem as ComboBoxItem)?.Tag as string;
         IEnumerable<ConnectionInfo> filtered = _connections.Where(connection => string.IsNullOrWhiteSpace(search)
             || $"{connection.Source} {connection.Destination} {connection.Rule} {connection.RulePayload} {connection.Chain}".Contains(search, StringComparison.OrdinalIgnoreCase));
         filtered = sort switch
         {
-            "上传" => filtered.OrderByDescending(connection => connection.UploadBytes),
-            "下载" => filtered.OrderByDescending(connection => connection.DownloadBytes),
+            "upload" => filtered.OrderByDescending(connection => connection.UploadBytes),
+            "download" => filtered.OrderByDescending(connection => connection.DownloadBytes),
             _ => filtered.OrderByDescending(connection => connection.StartTime)
         };
         ConnectionsListView.Items.Clear();
@@ -66,11 +66,12 @@ public sealed partial class ConnectionsPage : UserControl
     {
         if (ConnectionsListView.SelectedItem is not ListViewItem { Tag: ConnectionInfo connection })
         {
-            DetailsText.Text = "选择连接查看详情";
+            DetailsText.Text = LocalizationService.Get("SelectConnectionHint");
             return;
         }
 
-        DetailsText.Text = $"{connection.Network} · {connection.Chain}\n规则：{connection.Rule} {connection.RulePayload}\n上传 {connection.UploadBytes} B · 下载 {connection.DownloadBytes} B";
+        DetailsText.Text = LocalizationService.Format("ConnectionDetailsFormat",
+            connection.Network, connection.Chain, connection.Rule, connection.RulePayload, connection.UploadBytes, connection.DownloadBytes);
     }
 
     private async void CloseSelectedButton_Click(object sender, RoutedEventArgs e)
@@ -83,7 +84,7 @@ public sealed partial class ConnectionsPage : UserControl
             }
             catch (Exception exception)
             {
-                DetailsText.Text = $"关闭连接失败：{ErrorSanitizer.Sanitize(exception)}";
+                DetailsText.Text = LocalizationService.Format("CloseConnectionFailedFormat", ErrorSanitizer.Sanitize(exception));
             }
         }
     }
@@ -96,7 +97,7 @@ public sealed partial class ConnectionsPage : UserControl
         }
         catch (Exception exception)
         {
-            DetailsText.Text = $"关闭连接失败：{ErrorSanitizer.Sanitize(exception)}";
+            DetailsText.Text = LocalizationService.Format("CloseConnectionFailedFormat", ErrorSanitizer.Sanitize(exception));
         }
     }
 }

@@ -6,6 +6,7 @@ internal static class SettingsValidator
 {
     private static readonly string[] AllowedLogLevels = ["info", "warning", "error", "debug"];
     private static readonly string[] AllowedThemes = ["system", "light", "dark", "nakhimov"];
+    private static readonly string[] AllowedLanguages = ["system", "zh-CN", "en-US"];
 
     public static void Validate(AppSettings settings)
     {
@@ -47,6 +48,11 @@ internal static class SettingsValidator
             || settings.BypassList.Contains('\n', StringComparison.Ordinal))
         {
             throw new ArgumentException("系统代理绕过列表包含无效内容。", nameof(settings));
+        }
+
+        if (!AllowedLanguages.Contains(settings.Language?.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("语言必须是 system、zh-CN 或 en-US。", nameof(settings));
         }
     }
 }

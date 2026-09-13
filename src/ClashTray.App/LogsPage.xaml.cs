@@ -45,13 +45,13 @@ public sealed partial class LogsPage : UserControl
         }
 
         string search = SearchBox.Text.Trim();
-        string? level = (LevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
-        string? source = (SourceBox.SelectedItem as ComboBoxItem)?.Content?.ToString();
+        string? level = (LevelBox.SelectedItem as ComboBoxItem)?.Tag as string;
+        string? source = (SourceBox.SelectedItem as ComboBoxItem)?.Tag as string;
         LogsListView.Items.Clear();
         foreach (LogEntry log in _logs.Where(log =>
                      (string.IsNullOrWhiteSpace(search) || log.Message.Contains(search, StringComparison.OrdinalIgnoreCase))
-                     && (level is "全部" or null || string.Equals(log.Level, level, StringComparison.OrdinalIgnoreCase))
-                     && (source is "全部来源" or null || string.Equals(log.Source, source, StringComparison.OrdinalIgnoreCase))))
+                     && (level is "all" or null || string.Equals(log.Level, level, StringComparison.OrdinalIgnoreCase))
+                     && (source is "all" or null || string.Equals(log.Source, source, StringComparison.OrdinalIgnoreCase))))
         {
             string folded = log.RepeatCount > 1 ? $" ×{log.RepeatCount}" : string.Empty;
             LogsListView.Items.Add(new ListViewItem { Content = $"{log.Timestamp:HH:mm:ss} [{log.Source}/{log.Level}] {log.Message}{folded}", Tag = log });

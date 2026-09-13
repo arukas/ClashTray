@@ -26,6 +26,17 @@ public partial class App : Application, IAsyncDisposable
             Directory.CreateDirectory(directory);
             File.AppendAllText(Path.Combine(directory, "startup-error.log"), $"{DateTimeOffset.Now:O} {e.Exception}\n");
         };
+
+        // Set the Windows App SDK language override after the Application object
+        // exists but before InitializeComponent loads MRT resources.
+        LocalizationService.ApplyStartupLanguage(
+            smokeDirectory is null
+                ? new AppPaths()
+                : new AppPaths(
+                    Path.Combine(smokeDirectory, "user"),
+                    Path.Combine(smokeDirectory, "service")),
+            forceChineseForDiagnostics: smokeDirectory is not null);
+
         InitializeComponent();
     }
 
@@ -219,18 +230,18 @@ public partial class App : Application, IAsyncDisposable
         {
             _trayIcon?.ShowContextMenu(
             [
-                (1001, "打开控制面板"),
-                (1002, _runtime.Snapshot.Core.State == CoreState.Running ? "重启核心" : "启动核心"),
-                (1003, "停止核心"),
+                (1001, LocalizationService.Get("MenuOpenPanel")),
+                (1002, _runtime.Snapshot.Core.State == CoreState.Running ? LocalizationService.Get("MenuRestartCore") : LocalizationService.Get("MenuStartCore")),
+                (1003, LocalizationService.Get("MenuStopCore")),
                 (0, string.Empty),
-                (1004, _runtime.Snapshot.SystemProxy == SystemProxyState.On ? "关闭系统代理" : _runtime.Snapshot.SystemProxy == SystemProxyState.RestoreRequired ? "恢复系统代理" : "开启系统代理"),
-                (1005, _runtime.Snapshot.Tun == TunState.On ? "关闭 TUN" : "开启 TUN"),
+                (1004, _runtime.Snapshot.SystemProxy == SystemProxyState.On ? LocalizationService.Get("MenuDisableSystemProxy") : _runtime.Snapshot.SystemProxy == SystemProxyState.RestoreRequired ? LocalizationService.Get("MenuRestoreSystemProxy") : LocalizationService.Get("MenuEnableSystemProxy")),
+                (1005, _runtime.Snapshot.Tun == TunState.On ? LocalizationService.Get("MenuDisableTun") : LocalizationService.Get("MenuEnableTun")),
                 (0, string.Empty),
-                (1006, "规则模式"),
-                (1007, "全局模式"),
-                (1008, "直连模式"),
+                (1006, LocalizationService.Get("MenuModeRule")),
+                (1007, LocalizationService.Get("MenuModeGlobal")),
+                (1008, LocalizationService.Get("MenuModeDirect")),
                 (0, string.Empty),
-                (1009, "退出 ClashTray")
+                (1009, LocalizationService.Get("MenuQuit"))
             ]);
         }
     }

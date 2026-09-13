@@ -54,6 +54,8 @@ internal sealed class SettingsFileDto
 
     public bool NakhimovUnlocked { get; set; }
 
+    public string Language { get; set; } = "system";
+
     [JsonExtensionData]
     public IDictionary<string, JsonElement>? AdditionalFields { get; set; }
 
@@ -83,6 +85,7 @@ internal sealed class SettingsFileDto
             TunEnabled = settings.TunEnabled,
             DisconnectConnectionsAfterProxySwitch = settings.DisconnectConnectionsAfterProxySwitch,
             NakhimovUnlocked = settings.NakhimovUnlocked,
+            Language = settings.Language,
             AdditionalFields = preservedFields is null
                 ? null
                 : new Dictionary<string, JsonElement>(preservedFields)
@@ -107,5 +110,6 @@ internal sealed class SettingsFileDto
         SystemProxyEnabled: SystemProxyEnabled,
         TunEnabled: TunEnabled,
         DisconnectConnectionsAfterProxySwitch: DisconnectConnectionsAfterProxySwitch,
-        NakhimovUnlocked: NakhimovUnlocked);
+        NakhimovUnlocked: NakhimovUnlocked,
+        Language: Language);
 }

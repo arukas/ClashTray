@@ -38,20 +38,21 @@ public sealed partial class SettingsPage : UserControl
         if (!TryReadPort(HttpPortBox, "HTTP", out int httpPort)
             || !TryReadPort(SocksPortBox, "SOCKS", out int socksPort)
             || !TryReadPort(MixedPortBox, "Mixed", out int mixedPort)
-            || !TryReadPort(ControllerPortBox, "控制器", out int controllerPort))
+            || !TryReadPort(ControllerPortBox, LocalizationService.Get("ControllerPortLabel"), out int controllerPort))
         {
             return;
         }
 
         if (!TryReadSubscriptionRefreshHours(out int subscriptionRefreshHours))
         {
-            StatusText.Text = "订阅刷新间隔必须是 1 到 168 之间的整数小时。";
+            StatusText.Text = LocalizationService.Get("ErrorInvalidRefreshHours");
             return;
         }
 
         AppSettings current = _runtime.Settings;
-        string logLevel = (LogLevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? current.LogLevel;
+        string logLevel = (LogLevelBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.LogLevel;
         string theme = (ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Theme;
+        string language = (LanguageBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Language;
         _saving = true;
         SaveSettingsButton.IsEnabled = false;
         try
@@ -70,11 +71,16 @@ public sealed partial class SettingsPage : UserControl
                 ControllerPort = controllerPort,
                 LogLevel = logLevel,
                 Theme = theme,
+                Language = language,
                 BypassList = BypassListBox.Text.Trim(),
                 SubscriptionRefreshHours = subscriptionRefreshHours
             }, reconcileStartup: true);
             UpdateStartupStatus(_runtime.Settings);
-            StatusText.Text = "设置已保存；需要重启的核心参数会自动受控重启，系统代理会在核心健康后使用新端口。";
+            // The language override is applied before the first window exists, so
+            // changing it only takes effect on the next app start; the core keeps running.
+            StatusText.Text = string.Equals(language, current.Language, StringComparison.OrdinalIgnoreCase)
+                ? LocalizationService.Get("SettingsSaved")
+                : $"{LocalizationService.Get("SettingsSaved")} {LocalizationService.Get("LanguageRestartPrompt")}";
         }
         catch (ArgumentException exception)
         {
@@ -82,7 +88,7 @@ public sealed partial class SettingsPage : UserControl
         }
         catch (Exception exception)
         {
-            StatusText.Text = $"设置保存失败：{ErrorSanitizer.Sanitize(exception)}";
+            StatusText.Text = LocalizationService.Format("SettingsSaveFailedFormat", ErrorSanitizer.Sanitize(exception));
         }
         finally
         {
@@ -96,7 +102,7 @@ public sealed partial class SettingsPage : UserControl
         try
         {
             await _runtime.ClearFakeIpCacheAsync();
-            StatusText.Text = "FakeIP 缓存已清理。";
+            StatusText.Text = LocalizationService.Get("FakeIpCleared");
         }
         catch (Exception exception)
         {
@@ -109,7 +115,7 @@ public sealed partial class SettingsPage : UserControl
         try
         {
             await _runtime.ClearDnsCacheAsync();
-            StatusText.Text = "DNS 缓存已清理。";
+            StatusText.Text = LocalizationService.Get("DnsCleared");
         }
         catch (Exception exception)
         {
@@ -122,7 +128,7 @@ public sealed partial class SettingsPage : UserControl
         try
         {
             await _runtime.UpdateGeoAsync();
-            StatusText.Text = "Geo 数据库更新请求已发送。";
+            StatusText.Text = LocalizationService.Get("GeoUpdateSent");
         }
         catch (Exception exception)
         {
@@ -134,14 +140,14 @@ public sealed partial class SettingsPage : UserControl
     {
         if (ProvidersListView.SelectedItem is not ListViewItem { Tag: ValueTuple<ProviderStatus, bool> selected })
         {
-            StatusText.Text = "先选择一个 Provider。";
+            StatusText.Text = LocalizationService.Get("SelectProviderFirst");
             return;
         }
 
         try
         {
             await _runtime.RefreshProviderAsync(selected.Item1.Name, selected.Item2);
-            StatusText.Text = $"已请求刷新 {selected.Item1.Name}。";
+            StatusText.Text = LocalizationService.Format("ProviderRefreshRequestedFormat", selected.Item1.Name);
         }
         catch (Exception exception)
         {
@@ -154,7 +160,7 @@ public sealed partial class SettingsPage : UserControl
         if (ProvidersListView.SelectedItem is ListViewItem { Tag: ValueTuple<ProviderStatus, bool> selected })
         {
             StatusText.Text = ErrorSanitizer.Sanitize(
-                selected.Item1.Error ?? $"{selected.Item1.Name} · {selected.Item1.Count} 项");
+                selected.Item1.Error ?? LocalizationService.Format("ProviderStatusSummaryFormat", selected.Item1.Name, selected.Item1.Count));
         }
     }
 
@@ -167,14 +173,14 @@ public sealed partial class SettingsPage : UserControl
             || CoreSha256Box.Text.Trim().Length != 64
             || CoreSha256Box.Text.Trim().Any(character => !Uri.IsHexDigit(character)))
         {
-            StatusText.Text = "请填写官方 HTTPS 下载地址、版本和 64 位 SHA-256。";
+            StatusText.Text = LocalizationService.Get("CoreUpdateFieldsRequired");
             return;
         }
 
         try
         {
             await _runtime.InstallCoreUpdateAsync(new CoreUpdateManifest(CoreVersionBox.Text.Trim(), uri, CoreSha256Box.Text.Trim()));
-            StatusText.Text = "核心已完成校验并原子替换。";
+            StatusText.Text = LocalizationService.Get("CoreUpdateDone");
         }
         catch (Exception exception)
         {
@@ -262,10 +268,16 @@ public sealed partial class SettingsPage : UserControl
             BypassListBox.Text = settings.BypassList;
         }
 
-        if (ShouldRefresh((LogLevelBox.SelectedItem as ComboBoxItem)?.Content?.ToString(), value => value.LogLevel))
+        if (ShouldRefresh((LogLevelBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.LogLevel))
         {
-            LogLevelBox.SelectedItem = LogLevelBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Content?.ToString() == settings.LogLevel)
+            LogLevelBox.SelectedItem = LogLevelBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.LogLevel)
                 ?? LogLevelBox.Items.FirstOrDefault();
+        }
+
+        if (ShouldRefresh((LanguageBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.Language))
+        {
+            LanguageBox.SelectedItem = LanguageBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.Language)
+                ?? LanguageBox.Items.FirstOrDefault();
         }
 
         bool refreshTheme = ShouldRefresh((ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.Theme);
@@ -293,25 +305,25 @@ public sealed partial class SettingsPage : UserControl
         StartupRegistrationStatus status = _runtime.GetStartupStatus();
         if (!string.IsNullOrWhiteSpace(status.Error))
         {
-            StartupStatusText.Text = $"无法读取 Windows 启动状态：{ErrorSanitizer.Sanitize(status.Error)}";
+            StartupStatusText.Text = LocalizationService.Format("StartupStatusReadFailedFormat", ErrorSanitizer.Sanitize(status.Error));
             return;
         }
 
         if (settings.StartWithWindows)
         {
             StartupStatusText.Text = status.IsDisabledByOperatingSystem
-                ? "开机启动已注册，但 Windows 已禁用；请在任务管理器的“启动应用”中启用。"
+                ? LocalizationService.Get("StartupRegisteredButDisabled")
                 : status.RequiresRepair
-                    ? "开机启动已打开，但启动项命令已变化；点击“保存设置”修复。"
+                    ? LocalizationService.Get("StartupNeedsRepair")
                     : status.IsRegistered
-                        ? "开机启动已注册。"
-                        : "开机启动已打开，但启动项缺失；点击“保存设置”修复。";
+                        ? LocalizationService.Get("StartupRegistered")
+                        : LocalizationService.Get("StartupMissing");
             return;
         }
 
         StartupStatusText.Text = status.IsRegistered && !status.IsOwnedByClashTray
-            ? "开机启动已关闭；检测到同名启动项，保存时会保留其他程序的命令。"
-            : "开机启动已关闭。";
+            ? LocalizationService.Get("StartupOffForeignItem")
+            : LocalizationService.Get("StartupOff");
     }
 
     private bool TryReadSubscriptionRefreshHours(out int hours)
@@ -340,7 +352,7 @@ public sealed partial class SettingsPage : UserControl
             || value > 65535
             || value != Math.Truncate(value))
         {
-            StatusText.Text = $"{name} 端口必须是 1 到 65535 之间的整数。";
+            StatusText.Text = LocalizationService.Format("ErrorPortRangeFormat", name);
             port = 0;
             return false;
         }
@@ -387,7 +399,11 @@ public sealed partial class SettingsPage : UserControl
     private static ListViewItem CreateProviderItem(ProviderStatus provider, bool rules) =>
         new()
         {
-            Content = $"{(rules ? "规则" : "代理")} · {provider.Name} · {provider.Count} 项 · {provider.UpdatedAt:MM-dd HH:mm}",
+            Content = LocalizationService.Format("ProviderListItemFormat",
+                LocalizationService.Get(rules ? "ProviderItemKindRule" : "ProviderItemKindProxy"),
+                provider.Name,
+                provider.Count,
+                provider.UpdatedAt?.ToString("MM-dd HH:mm", System.Globalization.CultureInfo.CurrentCulture) ?? string.Empty),
             Tag = (provider, rules)
         };
 }
