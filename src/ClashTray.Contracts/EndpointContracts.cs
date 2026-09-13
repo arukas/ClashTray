@@ -32,7 +32,10 @@ public enum ErrorCode
     EndpointCommandDenied = 1000,
     EndpointCapabilityUnavailable = 1001,
     UnsupportedEndpointCommand = 1002,
-    ConfigurationSwitchJournalCorrupt = 1100
+    ConfigurationSwitchJournalCorrupt = 1100,
+    ConfigurationSwitchTargetNotFound = 1101,
+    ConfigurationSwitchFailed = 1102,
+    ConfigurationSwitchRollbackFailed = 1103
 }
 
 [Flags]

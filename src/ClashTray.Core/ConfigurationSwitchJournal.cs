@@ -52,9 +52,32 @@ public sealed record ConfigurationSwitchJournal(
         bool previousTunPreference,
         TunState previousTunState,
         long previousControllerGeneration) =>
+        Create(
+            Guid.NewGuid(),
+            source,
+            previousConfigurationId,
+            candidateConfigurationId,
+            previousCoreWasRunning,
+            previousSystemProxyPreference,
+            previousSystemProxyState,
+            previousTunPreference,
+            previousTunState,
+            previousControllerGeneration);
+
+    public static ConfigurationSwitchJournal Create(
+        Guid operationId,
+        ConfigurationSwitchSource source,
+        string? previousConfigurationId,
+        string candidateConfigurationId,
+        bool previousCoreWasRunning,
+        bool previousSystemProxyPreference,
+        SystemProxyState previousSystemProxyState,
+        bool previousTunPreference,
+        TunState previousTunState,
+        long previousControllerGeneration) =>
         new(
             CurrentSchemaVersion,
-            Guid.NewGuid(),
+            operationId,
             source,
             ConfigurationSwitchStage.Prepared,
             previousConfigurationId,
