@@ -19,6 +19,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly ConfigurationSwitchJournalStore _configurationSwitchJournalStore;
     private readonly ConfigurationSwitchCoordinator _configurationSwitchCoordinator;
     private readonly RuntimeConfigurationSwitchOperations _configurationSwitchOperations;
+    private readonly MihomoControllerSessionRegistry _controllerSessions = new();
     private readonly ISettingsStore _settingsStore;
     private readonly CoreDiscovery _coreDiscovery;
     private readonly ISystemProxyController _systemProxy;
@@ -27,8 +28,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly MihomoProcessManager _processManager = new();
     private readonly IStartupRegistration _startupRegistration;
     private readonly object _logStreamGate = new();
-    private MihomoApiClient? _api;
-    private long _controllerGeneration;
+    private MihomoApiClient? _api => _controllerSessions.Current?.Api;
+    private long ControllerGeneration => _controllerSessions.Generation;
     private Task? _pollingTask;
     private Task? _dataRefreshTask;
     private CancellationTokenSource? _logStreamCts;
@@ -2303,14 +2304,22 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private void SetController(MihomoApiClient? api)
     {
-        _api = api;
-        Interlocked.Increment(ref _controllerGeneration);
+        if (api is null)
+        {
+            _controllerSessions.Detach();
+            return;
+        }
+
+        _controllerSessions.Attach(
+            api,
+            ControllerEndpointFactory.CreateLocal(_settings.ControllerPort),
+            EndpointCapabilityDefaults.Local);
     }
 
     private (MihomoApiClient Api, long Generation) CaptureControllerSession()
     {
-        MihomoApiClient api = _api ?? throw new InvalidOperationException("Mihomo 核心尚未运行。");
-        return (api, Volatile.Read(ref _controllerGeneration));
+        MihomoControllerSession session = _controllerSessions.Capture();
+        return (session.Api, session.Generation);
     }
 
     private void EnsureControllerSession(
@@ -2318,8 +2327,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         long generation,
         string message)
     {
-        if (!ReferenceEquals(_api, api)
-            || Volatile.Read(ref _controllerGeneration) != generation)
+        if (!_controllerSessions.IsCurrent(api, generation))
         {
             throw new InvalidOperationException(message);
         }
@@ -3263,7 +3271,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 _runtime._snapshot.SystemProxy,
                 _runtime._settings.TunEnabled,
                 _runtime._snapshot.Tun,
-                _runtime._controllerGeneration,
+                _runtime.ControllerGeneration,
                 _runtime._settings));
         }
 
