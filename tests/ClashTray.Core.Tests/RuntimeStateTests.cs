@@ -998,6 +998,53 @@ public sealed class RuntimeStateTests
         }
     }
 
+    [TestMethod]
+    public async Task StartupRecoversIncompleteSwitchBeforeUsingCandidateConfiguration()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationStore store = new ConfigurationStore(paths);
+        ConfigurationProfile first = await store.ImportLocalAsync(
+            await WriteConfigAsync(root, "first.yaml"),
+            "first");
+        ConfigurationProfile second = await store.ImportLocalAsync(
+            await WriteConfigAsync(root, "second.yaml"),
+            "second");
+        TestSettingsStore settings = new TestSettingsStore(
+            new AppSettings(ActiveConfigurationId: second.Id));
+        ConfigurationSwitchJournalStore journalStore = new ConfigurationSwitchJournalStore(paths);
+        ConfigurationSwitchJournal journal = ConfigurationSwitchJournal.Create(
+            Guid.NewGuid(),
+            ConfigurationSwitchSource.Manual,
+            first.Id,
+            second.Id,
+            previousCoreWasRunning: false,
+            previousSystemProxyPreference: false,
+            previousSystemProxyState: SystemProxyState.Off,
+            previousTunPreference: false,
+            previousTunState: TunState.Unavailable,
+            previousControllerGeneration: 0).WithStage(ConfigurationSwitchStage.RuntimePromoted);
+        await journalStore.SaveAsync(journal);
+
+        try
+        {
+            await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, settings);
+            await runtime.InitializeAsync();
+
+            Assert.AreEqual(first.Id, runtime.Settings.ActiveConfigurationId);
+            Assert.AreEqual(first.Id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
+            Assert.AreEqual(1, settings.SaveCount);
+            Assert.IsFalse(File.Exists(paths.ConfigurationSwitchJournalFile));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private static async Task<string> WriteConfigAsync(string root, string name)
     {
         string path = Path.Combine(root, name);

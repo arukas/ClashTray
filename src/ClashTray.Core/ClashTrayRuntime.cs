@@ -16,6 +16,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly SnapshotPublishThrottle _throttledPublisher;
     private readonly AppPaths _paths;
     private readonly ConfigurationStore _configurationStore;
+    private readonly ConfigurationSwitchJournalStore _configurationSwitchJournalStore;
     private readonly ConfigurationSwitchCoordinator _configurationSwitchCoordinator;
     private readonly IConfigurationSwitchOperations _configurationSwitchOperations;
     private readonly ISettingsStore _settingsStore;
@@ -77,8 +78,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 _paths,
                 () => _settings,
                 () => _coreDiscovery.FindExecutable()));
+        _configurationSwitchJournalStore = new ConfigurationSwitchJournalStore(_paths);
         _configurationSwitchCoordinator = new ConfigurationSwitchCoordinator(
-            new ConfigurationSwitchJournalStore(_paths));
+            _configurationSwitchJournalStore);
         _configurationSwitchOperations = new RuntimeConfigurationSwitchOperations(this);
         _settingsStore = settingsStore ?? new SettingsStore(_paths);
         _startupRegistration = startupRegistration
@@ -120,6 +122,35 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         SettingsLoadResult settingsLoad = await _settingsStore.LoadWithStatusAsync(cancellationToken);
         _settings = settingsLoad.Settings;
         IReadOnlyList<ConfigurationProfile> storedConfigurations = await _configurationStore.ListAsync(cancellationToken);
+        ConfigurationSwitchJournalLoadResult journalLoad =
+            await _configurationSwitchJournalStore.LoadAsync(cancellationToken);
+        ConfigurationSwitchJournal? recoveryJournal = journalLoad.Journal;
+        string? journalRecoveryMessage = journalLoad.Message;
+        if (recoveryJournal is { Stage: ConfigurationSwitchStage.Committed })
+        {
+            try
+            {
+                await _configurationSwitchJournalStore.ClearAsync();
+                recoveryJournal = null;
+            }
+            catch (Exception exception)
+            {
+                journalRecoveryMessage = $"配置切换已完成，但无法清理恢复记录：{ErrorSanitizer.Sanitize(exception)}";
+                recoveryJournal = null;
+            }
+        }
+        else if (recoveryJournal is not null)
+        {
+            string? restoreMessage = await RestoreConfigurationFromJournalAsync(
+                recoveryJournal,
+                storedConfigurations,
+                cancellationToken);
+            if (!string.IsNullOrWhiteSpace(restoreMessage))
+            {
+                journalRecoveryMessage = restoreMessage;
+            }
+        }
+
         string? activeConfigurationId = _settings.ActiveConfigurationId
             ?? storedConfigurations.FirstOrDefault(configuration => configuration.IsActive)?.Id;
         ConfigurationProfile[] configurations = storedConfigurations
@@ -175,27 +206,95 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     cancellationToken: cancellationToken);
                 StartPolling();
                 StartOptionalRefreshInBackground(_api);
+
+                if (recoveryJournal is not null)
+                {
+                    (bool completed, string? message) = await CompleteConfigurationSwitchRecoveryAsync(
+                        recoveryJournal,
+                        serviceStatus.Core,
+                        cancellationToken);
+                    if (!completed)
+                    {
+                        journalRecoveryMessage = message;
+                    }
+                    else
+                    {
+                        recoveryJournal = null;
+                    }
+                }
+            }
+            else if (recoveryJournal is not null)
+            {
+                (bool completed, string? message) = await CompleteConfigurationSwitchRecoveryAsync(
+                    recoveryJournal,
+                    serviceStatus.Core,
+                    cancellationToken);
+                if (!completed)
+                {
+                    journalRecoveryMessage = message;
+                }
+                else
+                {
+                    recoveryJournal = null;
+                }
             }
         }
         catch (TimeoutException)
         {
             _snapshot = _snapshot with { Tun = TunState.Unavailable };
+            if (recoveryJournal is not null)
+            {
+                if (!recoveryJournal.PreviousCoreWasRunning)
+                {
+                    await _configurationSwitchJournalStore.ClearAsync();
+                    recoveryJournal = null;
+                }
+                else
+                {
+                    journalRecoveryMessage = "配置切换恢复记录仍未完成，服务状态暂时无法确认。";
+                }
+            }
         }
         catch (IOException)
         {
             _snapshot = _snapshot with { Tun = TunState.Unavailable };
+            if (recoveryJournal is not null)
+            {
+                if (!recoveryJournal.PreviousCoreWasRunning)
+                {
+                    await _configurationSwitchJournalStore.ClearAsync();
+                    recoveryJournal = null;
+                }
+                else
+                {
+                    journalRecoveryMessage = "配置切换恢复记录仍未完成，服务状态暂时无法确认。";
+                }
+            }
         }
         catch (UnauthorizedAccessException)
         {
             _snapshot = _snapshot with { Tun = TunState.Unavailable };
+            if (recoveryJournal is not null)
+            {
+                if (!recoveryJournal.PreviousCoreWasRunning)
+                {
+                    await _configurationSwitchJournalStore.ClearAsync();
+                    recoveryJournal = null;
+                }
+                else
+                {
+                    journalRecoveryMessage = "配置切换恢复记录仍未完成，服务状态暂时无法确认。";
+                }
+            }
         }
         Publish();
         _subscriptionScheduler.Start();
 
-        if (ShouldAutomaticallyStartCore(
-            _settings,
-            configurations.Any(configuration => configuration.IsActive),
-            _snapshot.Core.State))
+        if (recoveryJournal is null
+            && ShouldAutomaticallyStartCore(
+                _settings,
+                configurations.Any(configuration => configuration.IsActive),
+                _snapshot.Core.State))
         {
             await StartCoreAsync(cancellationToken);
         }
@@ -205,6 +304,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             or SettingsLoadStatus.RecoveryFailed)
         {
             _snapshot = _snapshot with { ErrorMessage = settingsLoad.Message };
+            Publish();
+        }
+
+        if (!string.IsNullOrWhiteSpace(journalRecoveryMessage))
+        {
+            _snapshot = _snapshot with { ErrorMessage = journalRecoveryMessage };
             Publish();
         }
     }
@@ -714,6 +819,63 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             ?? _settings with { ActiveConfigurationId = previousState.ActiveConfigurationId };
         await _settingsStore.SaveAsync(_settings, cancellationToken);
         await RefreshConfigurationSnapshotAsync(cancellationToken, publish: false);
+    }
+
+    private async Task<string?> RestoreConfigurationFromJournalAsync(
+        ConfigurationSwitchJournal journal,
+        IReadOnlyList<ConfigurationProfile> configurations,
+        CancellationToken cancellationToken)
+    {
+        string? previousConfigurationId = journal.PreviousConfigurationId;
+        string? message = null;
+        if (previousConfigurationId is not null
+            && !configurations.Any(configuration =>
+                string.Equals(configuration.Id, previousConfigurationId, StringComparison.OrdinalIgnoreCase)))
+        {
+            previousConfigurationId = null;
+            message = "配置切换恢复记录指向的旧配置已不存在，已恢复为未选择配置。";
+        }
+
+        _settings = _settings with { ActiveConfigurationId = previousConfigurationId };
+        await _settingsStore.SaveAsync(_settings, cancellationToken);
+        return message;
+    }
+
+    private async Task<bool> RecoverCoreFromJournalAsync(
+        ConfigurationSwitchJournal journal,
+        CoreState observedCoreState,
+        CancellationToken cancellationToken)
+    {
+        if (!journal.PreviousCoreWasRunning)
+        {
+            return true;
+        }
+
+        if (observedCoreState == CoreState.Running)
+        {
+            await RestartCoreAsync(cancellationToken);
+        }
+        else
+        {
+            await StartCoreAsync(cancellationToken);
+        }
+
+        return IsCoreHealthy();
+    }
+
+    private async Task<(bool Completed, string? Message)> CompleteConfigurationSwitchRecoveryAsync(
+        ConfigurationSwitchJournal journal,
+        CoreState observedCoreState,
+        CancellationToken cancellationToken)
+    {
+        if (journal.PreviousCoreWasRunning
+            && !await RecoverCoreFromJournalAsync(journal, observedCoreState, cancellationToken))
+        {
+            return (false, "配置切换恢复记录仍未完成，旧核心未能通过健康检查。");
+        }
+
+        await _configurationSwitchJournalStore.ClearAsync();
+        return (true, null);
     }
 
     public async Task DeleteConfigurationAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
