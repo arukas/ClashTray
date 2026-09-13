@@ -193,6 +193,23 @@ public sealed class ConfigurationStore
         return refreshed;
     }
 
+    public async Task ValidateCandidateAsync(
+        ConfigurationProfile profile,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        string path = ValidateConfigurationPath(profile.Path);
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException("配置文件不存在。", path);
+        }
+
+        await using FileStream source = File.OpenRead(path);
+        byte[] bytes = await ReadBytesWithLimitAsync(source, cancellationToken);
+        ValidateYaml(bytes);
+        await ValidateCandidateBytesAsync(bytes, Path.GetExtension(path), cancellationToken);
+    }
+
     public async Task DeleteAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(profile);

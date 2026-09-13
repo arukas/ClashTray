@@ -898,7 +898,12 @@ public sealed class RuntimeStateTests
 
         try
         {
-            await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, settings);
+            await using ClashTrayRuntime runtime = new ClashTrayRuntime(
+                paths,
+                null,
+                null,
+                settings,
+                candidateValidator: new AcceptingCandidateValidator());
             await runtime.InitializeAsync();
 
             await runtime.SetActiveConfigurationAsync(second.Id);
@@ -941,6 +946,48 @@ public sealed class RuntimeStateTests
             Assert.AreEqual(first.Id, runtime.Settings.ActiveConfigurationId);
             Assert.AreEqual(first.Id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
             Assert.AreEqual(0, settings.SaveCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task FailedCandidateValidationDoesNotPersistOrChangeActiveSelection()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationStore store = new ConfigurationStore(paths);
+        ConfigurationProfile first = await store.ImportLocalAsync(
+            await WriteConfigAsync(root, "first.yaml"),
+            "first");
+        ConfigurationProfile second = await store.ImportLocalAsync(
+            await WriteConfigAsync(root, "second.yaml"),
+            "second");
+        TestSettingsStore settings = new TestSettingsStore(
+            new AppSettings(ActiveConfigurationId: first.Id));
+
+        try
+        {
+            await using ClashTrayRuntime runtime = new ClashTrayRuntime(
+                paths,
+                null,
+                null,
+                settings,
+                candidateValidator: new RejectingCandidateValidator());
+            await runtime.InitializeAsync();
+
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+                runtime.SetActiveConfigurationAsync(second.Id));
+
+            Assert.AreEqual(first.Id, runtime.Settings.ActiveConfigurationId);
+            Assert.AreEqual(first.Id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
+            Assert.AreEqual(0, settings.SaveCount);
+            Assert.IsFalse(File.Exists(paths.ConfigurationSwitchJournalFile));
         }
         finally
         {
@@ -996,6 +1043,18 @@ public sealed class RuntimeStateTests
         }
 
         public void SetState(SystemProxyState state) => State = state;
+    }
+
+    private sealed class AcceptingCandidateValidator : IConfigurationCandidateValidator
+    {
+        public Task ValidateAsync(string candidatePath, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RejectingCandidateValidator : IConfigurationCandidateValidator
+    {
+        public Task ValidateAsync(string candidatePath, CancellationToken cancellationToken = default) =>
+            Task.FromException(new InvalidDataException("candidate rejected"));
     }
 
     private sealed class TestSettingsStore : ISettingsStore

@@ -16,6 +16,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly SnapshotPublishThrottle _throttledPublisher;
     private readonly AppPaths _paths;
     private readonly ConfigurationStore _configurationStore;
+    private readonly ConfigurationSwitchCoordinator _configurationSwitchCoordinator;
+    private readonly IConfigurationSwitchOperations _configurationSwitchOperations;
     private readonly ISettingsStore _settingsStore;
     private readonly CoreDiscovery _coreDiscovery;
     private readonly ISystemProxyController _systemProxy;
@@ -62,7 +64,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         IStartupRegistration? startupRegistration,
         IServicePipeClient? servicePipeClient,
         ISettingsStore? settingsStore,
-        ISystemProxyController? systemProxy = null)
+        ISystemProxyController? systemProxy = null,
+        IConfigurationCandidateValidator? candidateValidator = null)
     {
         bool useDefaultEnvironment = paths is null;
         _paths = paths ?? new AppPaths();
@@ -70,10 +73,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _coreDiscovery = new CoreDiscovery(_paths);
         _configurationStore = new ConfigurationStore(
             _paths,
-            candidateValidator: new MihomoConfigurationCandidateValidator(
+            candidateValidator: candidateValidator ?? new MihomoConfigurationCandidateValidator(
                 _paths,
                 () => _settings,
                 () => _coreDiscovery.FindExecutable()));
+        _configurationSwitchCoordinator = new ConfigurationSwitchCoordinator(
+            new ConfigurationSwitchJournalStore(_paths));
+        _configurationSwitchOperations = new RuntimeConfigurationSwitchOperations(this);
         _settingsStore = settingsStore ?? new SettingsStore(_paths);
         _startupRegistration = startupRegistration
             ?? (useDefaultEnvironment ? new StartupManager() : new StartupManager(new InMemoryStartupRegistry()));
@@ -531,39 +537,33 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 cancellationToken);
             UpdateSubscriptionState(SubscriptionState.Applying, null);
             UpdateSubscriptionState(SubscriptionState.Succeeded, null);
-            IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
             if (shouldRemainActive)
             {
-                await SetActiveConfigurationAsync(profile.Id, restartCore: false, cancellationToken: cancellationToken);
+                ConfigurationSwitchRequest request = ConfigurationSwitchRequest.Create(
+                    ConfigurationSwitchSource.SubscriptionRefresh,
+                    profile.Id,
+                    restartCore: update.ContentChanged || activeSelectionChanged,
+                    forceApply: update.ContentChanged);
+                ConfigurationSwitchResult result = await ExecuteConfigurationSwitchAsync(request, cancellationToken);
+                if (result.Outcome == ConfigurationSwitchOutcome.NoOp)
+                {
+                    await RefreshConfigurationSnapshotAsync(cancellationToken);
+                }
             }
             else
             {
-                _snapshot = _snapshot with
-                {
-                    Configurations = configurations.Select(configuration => configuration with
-                    {
-                        IsActive = configuration.Id == _settings.ActiveConfigurationId
-                    }).ToArray()
-                };
-                Publish();
+                await RefreshConfigurationSnapshotAsync(cancellationToken);
             }
 
-            if (shouldRemainActive && _snapshot.Core.State == CoreState.Running)
+            if (shouldRemainActive && !update.ContentChanged && !activeSelectionChanged)
             {
-                if (update.ContentChanged || activeSelectionChanged)
-                {
-                    await RestartCoreAsync(cancellationToken);
-                }
-                else
-                {
-                    _logBuffer.Add(new LogEntry(
-                        DateTimeOffset.UtcNow,
-                        "ClashTray",
-                        "info",
-                        "订阅内容 SHA-256 未变化，已跳过 Mihomo 重启。"));
-                    _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
-                    Publish();
-                }
+                _logBuffer.Add(new LogEntry(
+                    DateTimeOffset.UtcNow,
+                    "ClashTray",
+                    "info",
+                    "订阅内容 SHA-256 未变化，已跳过 Mihomo 重启。"));
+                _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
+                Publish();
             }
         }
         catch (Exception exception)
@@ -583,52 +583,137 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
 
         await _configurationStore.ReloadAsync(profile, cancellationToken);
+        bool isActive = profile.IsActive
+            || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
+        if (isActive)
+        {
+            await ExecuteConfigurationSwitchAsync(
+                ConfigurationSwitchRequest.Create(
+                    ConfigurationSwitchSource.Manual,
+                    profile.Id,
+                    restartCore: _snapshot.Core.State == CoreState.Running,
+                    forceApply: true),
+                cancellationToken);
+        }
+        else
+        {
+            await RefreshConfigurationSnapshotAsync(cancellationToken);
+        }
+    }
+
+    public Task SetActiveConfigurationAsync(string id, CancellationToken cancellationToken = default) =>
+        ExecuteConfigurationSwitchAsync(
+            ConfigurationSwitchRequest.Create(ConfigurationSwitchSource.Manual, id),
+            cancellationToken);
+
+    private async Task<ConfigurationSwitchResult> ExecuteConfigurationSwitchAsync(
+        ConfigurationSwitchRequest request,
+        CancellationToken cancellationToken)
+    {
+        await _operationLock.WaitAsync(cancellationToken);
+        try
+        {
+            ConfigurationSwitchResult result = await _configurationSwitchCoordinator.ExecuteAsync(
+                request,
+                _configurationSwitchOperations,
+                cancellationToken);
+            ThrowIfConfigurationSwitchFailed(result);
+            return result;
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    private static void ThrowIfConfigurationSwitchFailed(ConfigurationSwitchResult result)
+    {
+        switch (result.Outcome)
+        {
+            case ConfigurationSwitchOutcome.NoOp:
+            case ConfigurationSwitchOutcome.Committed:
+                return;
+            case ConfigurationSwitchOutcome.Rejected when result.ErrorCode == ErrorCode.ConfigurationSwitchTargetNotFound:
+                throw new FileNotFoundException("Configuration profile not found.");
+            case ConfigurationSwitchOutcome.RolledBack when result.Failure is OperationCanceledException cancellation:
+                throw cancellation;
+            case ConfigurationSwitchOutcome.RolledBack:
+                throw new InvalidOperationException("配置切换失败，已恢复旧配置。", result.Failure);
+            case ConfigurationSwitchOutcome.RollbackFailed:
+                List<Exception> failures = new List<Exception>();
+                if (result.Failure is not null)
+                {
+                    failures.Add(result.Failure);
+                }
+
+                if (result.RollbackFailure is not null)
+                {
+                    failures.Add(result.RollbackFailure);
+                }
+
+                throw new InvalidOperationException(
+                    "配置切换失败，且旧配置恢复失败。",
+                    new AggregateException(failures));
+            default:
+                throw new InvalidOperationException($"配置切换失败：{result.ErrorCode}。");
+        }
+    }
+
+    private async Task RefreshConfigurationSnapshotAsync(
+        CancellationToken cancellationToken,
+        bool publish = true)
+    {
         IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
         _snapshot = _snapshot with
         {
             Configurations = configurations.Select(configuration => configuration with
             {
-                IsActive = configuration.Id == _settings.ActiveConfigurationId
-            }).ToArray()
+                IsActive = string.Equals(configuration.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase)
+            }).ToArray(),
+            Core = _snapshot.Core with
+            {
+                ConfigurationName = configurations.FirstOrDefault(configuration =>
+                    string.Equals(configuration.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase))?.Name
+            }
         };
-        Publish();
-
-        if (string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase)
-            && _snapshot.Core.State == CoreState.Running)
+        if (publish)
         {
-            await RestartCoreAsync(cancellationToken);
+            Publish();
         }
     }
 
-    public Task SetActiveConfigurationAsync(string id, CancellationToken cancellationToken = default) =>
-        SetActiveConfigurationAsync(id, restartCore: true, cancellationToken: cancellationToken);
-
-    private async Task SetActiveConfigurationAsync(
-        string id,
-        bool restartCore,
-        CancellationToken cancellationToken = default)
+    private async Task PromoteConfigurationInMemoryAsync(
+        ConfigurationProfile candidate,
+        CancellationToken cancellationToken)
     {
+        _settings = _settings with { ActiveConfigurationId = candidate.Id };
         IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
-        ConfigurationProfile? selected = configurations.FirstOrDefault(configuration => configuration.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
-        if (selected is null)
-        {
-            throw new FileNotFoundException("Configuration profile not found.", id);
-        }
-
-        bool changed = !string.Equals(_settings.ActiveConfigurationId, id, StringComparison.OrdinalIgnoreCase);
-        _settings = _settings with { ActiveConfigurationId = id };
-        await _settingsStore.SaveAsync(_settings, cancellationToken);
         _snapshot = _snapshot with
         {
-            Configurations = configurations.Select(configuration => configuration with { IsActive = configuration.Id == id }).ToArray(),
-            Core = _snapshot.Core with { ConfigurationName = selected.Name }
+            Configurations = configurations.Select(configuration => configuration with
+            {
+                IsActive = string.Equals(configuration.Id, candidate.Id, StringComparison.OrdinalIgnoreCase)
+            }).ToArray(),
+            Core = _snapshot.Core with { ConfigurationName = candidate.Name }
         };
-        Publish();
+    }
 
-        if (changed && restartCore && _snapshot.Core.State == CoreState.Running)
-        {
-            await RestartCoreAsync(cancellationToken);
-        }
+    private async Task CommitConfigurationSelectionAsync(
+        ConfigurationProfile candidate,
+        CancellationToken cancellationToken)
+    {
+        await _settingsStore.SaveAsync(_settings, cancellationToken);
+        await RefreshConfigurationSnapshotAsync(cancellationToken);
+    }
+
+    private async Task RestoreConfigurationSelectionAsync(
+        ConfigurationSwitchRuntimeState previousState,
+        CancellationToken cancellationToken)
+    {
+        _settings = previousState.PreviousSettings
+            ?? _settings with { ActiveConfigurationId = previousState.ActiveConfigurationId };
+        await _settingsStore.SaveAsync(_settings, cancellationToken);
+        await RefreshConfigurationSnapshotAsync(cancellationToken, publish: false);
     }
 
     public async Task DeleteConfigurationAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
@@ -1463,6 +1548,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _httpClient.Dispose();
         _subscriptionOperationLock.Dispose();
         _dataRefreshLock.Dispose();
+        await _configurationSwitchCoordinator.DisposeAsync();
         _operationLock.Dispose();
         _runtimeCts.Dispose();
     }
@@ -2763,6 +2849,104 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
 
         return null;
+    }
+
+    private sealed class RuntimeConfigurationSwitchOperations : IConfigurationSwitchOperations
+    {
+        private readonly ClashTrayRuntime _runtime;
+
+        public RuntimeConfigurationSwitchOperations(ClashTrayRuntime runtime)
+        {
+            _runtime = runtime;
+        }
+
+        public string? CurrentConfigurationId => _runtime._settings.ActiveConfigurationId;
+
+        public async Task<ConfigurationProfile?> ResolveCandidateAsync(
+            string id,
+            CancellationToken cancellationToken)
+        {
+            IReadOnlyList<ConfigurationProfile> configurations =
+                await _runtime._configurationStore.ListAsync(cancellationToken);
+            return configurations.FirstOrDefault(configuration =>
+                string.Equals(configuration.Id, id, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public Task ValidateCandidateAsync(
+            ConfigurationProfile candidate,
+            CancellationToken cancellationToken) =>
+            _runtime._configurationStore.ValidateCandidateAsync(candidate, cancellationToken);
+
+        public Task<ConfigurationSwitchRuntimeState> CaptureStateAsync(
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new ConfigurationSwitchRuntimeState(
+                _runtime._settings.ActiveConfigurationId,
+                _runtime._snapshot.Core.State == CoreState.Running,
+                _runtime._settings.SystemProxyEnabled,
+                _runtime._snapshot.SystemProxy,
+                _runtime._settings.TunEnabled,
+                _runtime._snapshot.Tun,
+                _runtime._controllerGeneration,
+                _runtime._settings));
+        }
+
+        public async Task ApplyAsync(
+            ConfigurationSwitchContext context,
+            CancellationToken cancellationToken)
+        {
+            bool restartCore = context.Request.RestartCore && context.PreviousState.CoreWasRunning;
+            if (restartCore)
+            {
+                await _runtime.StopCoreCoreAsync(operationLockHeld: true, cancellationToken);
+                await context.SetStageAsync(
+                    ConfigurationSwitchStage.NetworkStateSafeguarded,
+                    CancellationToken.None);
+            }
+
+            await _runtime.PromoteConfigurationInMemoryAsync(context.Candidate, cancellationToken);
+            await context.SetStageAsync(
+                ConfigurationSwitchStage.RuntimePromoted,
+                CancellationToken.None);
+
+            if (restartCore)
+            {
+                await _runtime.StartCoreCoreAsync(operationLockHeld: true, cancellationToken);
+                if (!_runtime.IsCoreHealthy())
+                {
+                    throw new InvalidOperationException("切换后的 Mihomo 核心健康检查失败。");
+                }
+
+                await context.SetStageAsync(
+                    ConfigurationSwitchStage.CoreRestarted,
+                    CancellationToken.None);
+            }
+
+            await _runtime.CommitConfigurationSelectionAsync(
+                context.Candidate,
+                CancellationToken.None);
+        }
+
+        public async Task RollbackAsync(
+            ConfigurationSwitchContext context,
+            Exception failure,
+            CancellationToken cancellationToken)
+        {
+            await _runtime.RestoreConfigurationSelectionAsync(
+                context.PreviousState,
+                cancellationToken);
+            if (context.PreviousState.CoreWasRunning)
+            {
+                await _runtime.RestartCoreCoreAsync(cancellationToken);
+                if (!_runtime.IsCoreHealthy())
+                {
+                    throw new InvalidOperationException("旧配置核心恢复后的健康检查失败。");
+                }
+            }
+
+            _runtime.Publish();
+        }
     }
 
     private static RuntimeSnapshot CreateInitialSnapshot() => new(

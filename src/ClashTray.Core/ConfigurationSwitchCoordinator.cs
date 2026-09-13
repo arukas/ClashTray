@@ -7,13 +7,17 @@ public sealed record ConfigurationSwitchRequest(
     Guid OperationId,
     ConfigurationSwitchSource Source,
     string TargetConfigurationId,
-    long? ExpectedNetworkRevision = null)
+    long? ExpectedNetworkRevision = null,
+    bool RestartCore = true,
+    bool ForceApply = false)
 {
     public static ConfigurationSwitchRequest Create(
         ConfigurationSwitchSource source,
         string targetConfigurationId,
-        long? expectedNetworkRevision = null) =>
-        new(Guid.NewGuid(), source, targetConfigurationId, expectedNetworkRevision);
+        long? expectedNetworkRevision = null,
+        bool restartCore = true,
+        bool forceApply = false) =>
+        new(Guid.NewGuid(), source, targetConfigurationId, expectedNetworkRevision, restartCore, forceApply);
 
     internal void Validate()
     {
@@ -41,7 +45,8 @@ public sealed record ConfigurationSwitchRuntimeState(
     SystemProxyState SystemProxyState,
     bool TunPreference,
     TunState TunState,
-    long ControllerGeneration);
+    long ControllerGeneration,
+    AppSettings? PreviousSettings = null);
 
 public enum ConfigurationSwitchOutcome
 {
@@ -145,7 +150,8 @@ public sealed class ConfigurationSwitchCoordinator : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            if (string.Equals(
+            if (!request.ForceApply
+                && string.Equals(
                     operations.CurrentConfigurationId,
                     request.TargetConfigurationId,
                     StringComparison.OrdinalIgnoreCase))
