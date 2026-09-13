@@ -2353,47 +2353,62 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task ApplyProgramOverridesCoreAsync(bool coreRunning, CancellationToken cancellationToken)
     {
-        if (coreRunning && _api is not null)
-        {
-            try
-            {
-                await ApplyProgramNetworkPreferencesAsync(cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                LogControllerFailure("程序局域网/IPv6 设置覆盖", "/configs", exception, 0);
-                _snapshot = _snapshot with
-                {
-                    ErrorMessage = $"程序局域网/IPv6 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
-                    Logs = _logBuffer.Snapshot()
-                };
-                Publish();
-            }
+        await ApplyControllerProgramOverridesAsync(coreRunning, cancellationToken);
+        await ApplyLocalDeviceProgramOverridesAsync(coreRunning, cancellationToken);
+    }
 
-            try
-            {
-                await ApplyProgramTunPreferenceAsync(cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception exception)
-            {
-                LogControllerFailure("程序 TUN 设置覆盖", "/configs", exception, 0);
-                _snapshot = _snapshot with
-                {
-                    ErrorMessage = $"程序 TUN 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
-                    Logs = _logBuffer.Snapshot()
-                };
-                Publish();
-            }
+    private async Task ApplyControllerProgramOverridesAsync(
+        bool coreRunning,
+        CancellationToken cancellationToken)
+    {
+        if (!coreRunning || _api is null)
+        {
+            return;
         }
 
+        try
+        {
+            await ApplyProgramNetworkPreferencesAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogControllerFailure("程序局域网/IPv6 设置覆盖", "/configs", exception, 0);
+            _snapshot = _snapshot with
+            {
+                ErrorMessage = $"程序局域网/IPv6 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
+                Logs = _logBuffer.Snapshot()
+            };
+            Publish();
+        }
+
+        try
+        {
+            await ApplyProgramTunPreferenceAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogControllerFailure("程序 TUN 设置覆盖", "/configs", exception, 0);
+            _snapshot = _snapshot with
+            {
+                ErrorMessage = $"程序 TUN 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
+                Logs = _logBuffer.Snapshot()
+            };
+            Publish();
+        }
+    }
+
+    private async Task ApplyLocalDeviceProgramOverridesAsync(
+        bool coreRunning,
+        CancellationToken cancellationToken)
+    {
         try
         {
             await ReconcileSystemProxyAsync(coreRunning, cancellationToken);
