@@ -26,6 +26,14 @@ public enum EndpointTransportSecurity
     HttpExplicitlyConfirmed
 }
 
+public enum ErrorCode
+{
+    None = 0,
+    EndpointCommandDenied = 1000,
+    EndpointCapabilityUnavailable = 1001,
+    UnsupportedEndpointCommand = 1002
+}
+
 [Flags]
 public enum EndpointCapability
 {
