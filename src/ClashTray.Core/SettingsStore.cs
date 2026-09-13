@@ -29,6 +29,7 @@ public sealed class SettingsStore : ISettingsStore
     private const int MaxSettingsBytes = 256 * 1024;
     private readonly AppPaths _paths;
     private readonly JsonSerializerOptions _options = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private IDictionary<string, JsonElement>? _preservedFields;
 
     public SettingsStore(AppPaths paths)
     {
@@ -54,9 +55,13 @@ public sealed class SettingsStore : ISettingsStore
             }
 
             await using FileStream stream = File.OpenRead(_paths.SettingsFile);
-            AppSettings settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, _options, cancellationToken)
-                ?? new AppSettings();
+            SettingsFileDto dto = await JsonSerializer.DeserializeAsync<SettingsFileDto>(stream, _options, cancellationToken)
+                ?? new SettingsFileDto();
+            AppSettings settings = dto.ToDomain();
             SettingsValidator.Validate(settings);
+            _preservedFields = dto.AdditionalFields is null
+                ? null
+                : new Dictionary<string, JsonElement>(dto.AdditionalFields);
             return new SettingsLoadResult(settings, SettingsLoadStatus.Loaded, null);
         }
         catch (JsonException)
@@ -91,7 +96,8 @@ public sealed class SettingsStore : ISettingsStore
     {
         ArgumentNullException.ThrowIfNull(settings);
         SettingsValidator.Validate(settings);
-        await AtomicFile.WriteJsonAsync(_paths.SettingsFile, settings, _options, cancellationToken);
+        SettingsFileDto dto = SettingsFileDto.FromDomain(settings, _preservedFields);
+        await AtomicFile.WriteJsonAsync(_paths.SettingsFile, dto, _options, cancellationToken);
     }
 
     private SettingsLoadResult RecoverCorruptSettings()
