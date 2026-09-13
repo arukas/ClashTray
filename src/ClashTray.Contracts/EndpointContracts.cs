@@ -31,7 +31,8 @@ public enum ErrorCode
     None = 0,
     EndpointCommandDenied = 1000,
     EndpointCapabilityUnavailable = 1001,
-    UnsupportedEndpointCommand = 1002
+    UnsupportedEndpointCommand = 1002,
+    ConfigurationSwitchJournalCorrupt = 1100
 }
 
 [Flags]

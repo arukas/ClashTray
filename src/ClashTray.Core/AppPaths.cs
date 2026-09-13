@@ -36,6 +36,9 @@ public sealed class AppPaths
 
     public string SettingsFile => Path.Combine(LocalRoot, "settings.json");
 
+    public string ConfigurationSwitchJournalFile =>
+        Path.Combine(LocalRoot, "configuration-switch-journal.json");
+
     public string ProxyBackupFile => Path.Combine(LocalRoot, "system-proxy-backup.json");
 
     public string ProxyOwnershipFile => Path.Combine(LocalRoot, "system-proxy-ownership.json");
