@@ -101,13 +101,10 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         {
             if (_api is not null)
             {
-                try
-                {
-                    await _api.SetTunAsync(false);
-                }
-                catch
-                {
-                }
+                TunShutdownResult tunShutdown = await TunShutdownGuard.EnsureDisabledAsync(
+                    _api,
+                    CancellationToken.None);
+                _tunState = tunShutdown.State;
             }
 
             await _processManager.DisposeAsync();
@@ -340,15 +337,27 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private async Task<ServiceResponse> StopCoreAsync(ServiceRequest request, CancellationToken cancellationToken)
     {
+        if (_processManager.State == CoreState.Running && _api is null)
+        {
+            _tunState = TunState.Unknown;
+            return Failure(request, "停止核心前无法确认 TUN 状态，核心保持运行。", CoreState.Running);
+        }
+
         if (_api is not null)
         {
-            try
+            TunShutdownResult tunShutdown = await TunShutdownGuard.EnsureDisabledAsync(
+                _api,
+                cancellationToken);
+            if (!tunShutdown.Succeeded)
             {
-                await _api.SetTunAsync(false, cancellationToken);
+                _tunState = tunShutdown.State;
+                return Failure(
+                    request,
+                    tunShutdown.Error ?? "停止核心前无法确认 TUN 已关闭，核心保持运行。",
+                    CoreState.Running);
             }
-            catch
-            {
-            }
+
+            _tunState = tunShutdown.State;
         }
 
         await _processManager.StopAsync(cancellationToken);
@@ -362,7 +371,12 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     {
         ServiceCorePayload payload = Deserialize<ServiceCorePayload>(request.Payload);
         ValidateCorePayload(payload);
-        await StopCoreAsync(request, cancellationToken);
+        ServiceResponse stopResponse = await StopCoreAsync(request, cancellationToken);
+        if (!stopResponse.Succeeded)
+        {
+            return stopResponse;
+        }
+
         return await StartCoreAsync(request with { Payload = JsonSerializer.Serialize(payload, _jsonOptions) }, cancellationToken);
     }
 

@@ -530,39 +530,55 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                             _usingServiceCore = false;
                         }
 
+                        if (response.Core == CoreState.Running)
+                        {
+                            SetController(CreateApiClient());
+                        }
+
                         UpdateCoreState(response.Core, response.Error ?? "ClashTray 服务无法停止 Mihomo。");
-                        return;
+                        throw new InvalidOperationException(
+                            response.Error ?? "ClashTray 服务无法停止 Mihomo。");
                     }
                 }
                 catch (TimeoutException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
                     UpdateCoreState(CoreState.Failed, $"ClashTray 服务不可用，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
-                    return;
+                    throw new InvalidOperationException(
+                        "ClashTray 服务不可用，停止结果无法确认。",
+                        exception);
                 }
                 catch (ServiceUnavailableException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
                     UpdateCoreState(CoreState.Failed, $"ClashTray 服务不可用，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
-                    return;
+                    throw new InvalidOperationException(
+                        "ClashTray 服务不可用，停止结果无法确认。",
+                        exception);
                 }
                 catch (UnauthorizedAccessException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
                     UpdateCoreState(CoreState.Failed, $"ClashTray 服务访问被拒绝，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
-                    return;
+                    throw new InvalidOperationException(
+                        "ClashTray 服务访问被拒绝，停止结果无法确认。",
+                        exception);
                 }
                 catch (ServiceRequestUnknownException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
                     UpdateCoreState(CoreState.Failed, $"ClashTray 服务停止结果无法确认，请检查服务状态后重试：{ErrorSanitizer.Sanitize(exception)}");
-                    return;
+                    throw new InvalidOperationException(
+                        "ClashTray 服务停止结果无法确认，请检查服务状态后重试。",
+                        exception);
                 }
                 catch (IOException exception)
                 {
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
                     UpdateCoreState(CoreState.Failed, $"ClashTray 服务通信失败，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
-                    return;
+                    throw new InvalidOperationException(
+                        "ClashTray 服务通信失败，停止结果无法确认。",
+                        exception);
                 }
 
                 _usingServiceCore = false;
