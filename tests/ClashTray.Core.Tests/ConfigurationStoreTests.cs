@@ -225,15 +225,19 @@ public sealed class ConfigurationStoreTests
             string metadataPath = Path.Combine(paths.ConfigurationsRoot, $"{first.Profile.Id}.json");
             string previousMetadata = await File.ReadAllTextAsync(metadataPath);
             ConfigurationProfileBackup backup = await store.CaptureBackupAsync(first.Profile);
+            Guid backupId = Guid.NewGuid();
+            await store.SavePersistentBackupAsync(backupId, first.Profile, backup);
 
             handler.ResponseBody = "mixed-port: 7891\n";
             ConfigurationImportResult refreshed = await store.ImportSubscriptionWithResultAsync(uri, "Test subscription");
             Assert.AreNotEqual(previousContent, await File.ReadAllTextAsync(refreshed.Profile.Path));
 
-            await ConfigurationStore.RestoreBackupAsync(backup);
+            Assert.IsTrue(await store.RestorePersistentBackupAsync(backupId, first.Profile.Id));
 
             Assert.AreEqual(previousContent, await File.ReadAllTextAsync(first.Profile.Path));
             Assert.AreEqual(previousMetadata, await File.ReadAllTextAsync(metadataPath));
+            await store.ClearPersistentBackupAsync(backupId);
+            Assert.IsFalse(Directory.EnumerateFiles(paths.ConfigurationSwitchBackupsRoot).Any());
         }
         finally
         {

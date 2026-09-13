@@ -1045,6 +1045,68 @@ public sealed class RuntimeStateTests
         }
     }
 
+    [TestMethod]
+    public async Task StartupRestoresPersistedSubscriptionBackupBeforeCompletingRecovery()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationStore store = new ConfigurationStore(paths);
+        string id = "0123456789abcdef";
+        string configurationPath = Path.Combine(paths.ConfigurationsRoot, $"{id}.yaml");
+        ConfigurationProfile profile = new(
+            id,
+            "subscription",
+            configurationPath,
+            new Uri("https://subscription.invalid/config"),
+            DateTimeOffset.UtcNow,
+            false);
+        await File.WriteAllTextAsync(configurationPath, "mixed-port: 7890\n");
+        await WriteMetadataAsync(paths, profile);
+        ConfigurationProfileBackup backup = await store.CaptureBackupAsync(profile);
+        Guid backupId = Guid.NewGuid();
+        await store.SavePersistentBackupAsync(backupId, profile, backup);
+        await File.WriteAllTextAsync(configurationPath, "mixed-port: 7891\n");
+        await WriteMetadataAsync(paths, profile with { LastRefreshed = DateTimeOffset.UtcNow.AddMinutes(1) });
+
+        TestSettingsStore settings = new TestSettingsStore(
+            new AppSettings(ActiveConfigurationId: id));
+        ConfigurationSwitchJournalStore journalStore = new ConfigurationSwitchJournalStore(paths);
+        ConfigurationSwitchJournal journal = ConfigurationSwitchJournal.Create(
+            Guid.NewGuid(),
+            ConfigurationSwitchSource.SubscriptionRefresh,
+            id,
+            id,
+            previousCoreWasRunning: false,
+            previousSystemProxyPreference: false,
+            previousSystemProxyState: SystemProxyState.Off,
+            previousTunPreference: false,
+            previousTunState: TunState.Unavailable,
+            previousControllerGeneration: 0)
+            .WithContentBackup(backupId)
+            .WithStage(ConfigurationSwitchStage.RuntimePromoted);
+        await journalStore.SaveAsync(journal);
+
+        try
+        {
+            await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, settings);
+            await runtime.InitializeAsync();
+
+            Assert.AreEqual("mixed-port: 7890\n", await File.ReadAllTextAsync(configurationPath));
+            Assert.AreEqual(id, runtime.Settings.ActiveConfigurationId);
+            Assert.AreEqual(id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
+            Assert.AreEqual(1, settings.SaveCount);
+            Assert.IsFalse(File.Exists(paths.ConfigurationSwitchJournalFile));
+            Assert.IsFalse(Directory.EnumerateFiles(paths.ConfigurationSwitchBackupsRoot).Any());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private static async Task<string> WriteConfigAsync(string root, string name)
     {
         string path = Path.Combine(root, name);

@@ -39,6 +39,9 @@ public sealed class AppPaths
     public string ConfigurationSwitchJournalFile =>
         Path.Combine(LocalRoot, "configuration-switch-journal.json");
 
+    public string ConfigurationSwitchBackupsRoot =>
+        Path.Combine(LocalRoot, "configuration-switch-backups");
+
     public string ProxyBackupFile => Path.Combine(LocalRoot, "system-proxy-backup.json");
 
     public string ProxyOwnershipFile => Path.Combine(LocalRoot, "system-proxy-ownership.json");
@@ -48,9 +51,11 @@ public sealed class AppPaths
         Directory.CreateDirectory(LocalRoot);
         Directory.CreateDirectory(ProgramRoot);
         Directory.CreateDirectory(ConfigurationsRoot);
+        Directory.CreateDirectory(ConfigurationSwitchBackupsRoot);
         Directory.CreateDirectory(RuntimeRoot);
         Directory.CreateDirectory(LogsRoot);
         WindowsPathSecurity.ProtectRuntimeDirectory(RuntimeRoot);
+        WindowsPathSecurity.ProtectRuntimeDirectory(ConfigurationSwitchBackupsRoot);
     }
 
     public void EnsureProgramDataDirectories(string? managedUserSid = null)

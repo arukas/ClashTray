@@ -38,7 +38,8 @@ public sealed record ConfigurationSwitchJournal(
     bool PreviousTunPreference,
     TunState PreviousTunState,
     long PreviousControllerGeneration,
-    DateTimeOffset StartedAtUtc)
+    DateTimeOffset StartedAtUtc,
+    Guid? ContentBackupId = null)
 {
     public const int CurrentSchemaVersion = 1;
 
@@ -93,6 +94,9 @@ public sealed record ConfigurationSwitchJournal(
     public ConfigurationSwitchJournal WithStage(ConfigurationSwitchStage stage) =>
         this with { Stage = stage };
 
+    public ConfigurationSwitchJournal WithContentBackup(Guid? contentBackupId) =>
+        this with { ContentBackupId = contentBackupId };
+
     internal void Validate()
     {
         if (SchemaVersion != CurrentSchemaVersion)
@@ -113,6 +117,11 @@ public sealed record ConfigurationSwitchJournal(
         if (PreviousControllerGeneration < 0)
         {
             throw new InvalidDataException("Configuration switch journal generation is invalid.");
+        }
+
+        if (ContentBackupId is Guid backupId && backupId == Guid.Empty)
+        {
+            throw new InvalidDataException("Configuration switch journal backup ID is invalid.");
         }
     }
 }

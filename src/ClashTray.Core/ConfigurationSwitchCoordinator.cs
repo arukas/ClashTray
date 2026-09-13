@@ -189,6 +189,34 @@ public sealed class ConfigurationSwitchCoordinator : IAsyncDisposable
                 previousState.TunPreference,
                 previousState.TunState,
                 previousState.ControllerGeneration);
+            ConfigurationSwitchJournalLoadResult preparedJournal =
+                await _journalStore.LoadAsync(CancellationToken.None);
+            if (preparedJournal.Journal is { } existingJournal
+                && existingJournal.OperationId != request.OperationId)
+            {
+                return new ConfigurationSwitchResult(
+                    request.OperationId,
+                    ConfigurationSwitchOutcome.Rejected,
+                    existingJournal.Stage,
+                    ErrorCode.ConfigurationSwitchRecoveryRequired);
+            }
+
+            if (preparedJournal.Journal is { } sameOperationJournal)
+            {
+                journal = sameOperationJournal with
+                {
+                    Source = request.Source,
+                    Stage = ConfigurationSwitchStage.Prepared,
+                    PreviousConfigurationId = previousState.ActiveConfigurationId,
+                    CandidateConfigurationId = candidate.Id,
+                    PreviousCoreWasRunning = previousState.CoreWasRunning,
+                    PreviousSystemProxyPreference = previousState.SystemProxyPreference,
+                    PreviousSystemProxyState = previousState.SystemProxyState,
+                    PreviousTunPreference = previousState.TunPreference,
+                    PreviousTunState = previousState.TunState,
+                    PreviousControllerGeneration = previousState.ControllerGeneration
+                };
+            }
             ConfigurationSwitchContext context = new(
                 request,
                 candidate,

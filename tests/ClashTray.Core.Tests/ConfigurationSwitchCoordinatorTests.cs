@@ -96,6 +96,94 @@ public sealed class ConfigurationSwitchCoordinatorTests
     }
 
     [TestMethod]
+    public async Task PendingJournalFromAnotherOperationRejectsNewSwitch()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationProfile candidate = CreateProfile("new");
+        FakeSwitchOperations operations = new FakeSwitchOperations(candidate);
+        ConfigurationSwitchJournalStore journalStore = new ConfigurationSwitchJournalStore(paths);
+        await journalStore.SaveAsync(ConfigurationSwitchJournal.Create(
+            Guid.NewGuid(),
+            ConfigurationSwitchSource.Recovery,
+            "old",
+            candidate.Id,
+            previousCoreWasRunning: false,
+            previousSystemProxyPreference: false,
+            previousSystemProxyState: SystemProxyState.Off,
+            previousTunPreference: false,
+            previousTunState: TunState.Off,
+            previousControllerGeneration: 1).WithStage(ConfigurationSwitchStage.RollbackFailed));
+        await using ConfigurationSwitchCoordinator coordinator =
+            new ConfigurationSwitchCoordinator(journalStore);
+
+        try
+        {
+            ConfigurationSwitchResult result = await coordinator.ExecuteAsync(
+                ConfigurationSwitchRequest.Create(ConfigurationSwitchSource.Manual, candidate.Id),
+                operations);
+
+            Assert.AreEqual(ConfigurationSwitchOutcome.Rejected, result.Outcome);
+            Assert.AreEqual(ErrorCode.ConfigurationSwitchRecoveryRequired, result.ErrorCode);
+            Assert.IsFalse(operations.Applied);
+            Assert.IsTrue(File.Exists(paths.ConfigurationSwitchJournalFile));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task PreparedJournalForSameOperationPreservesContentBackupId()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationProfile candidate = CreateProfile("new");
+        FakeSwitchOperations operations = new FakeSwitchOperations(candidate)
+        {
+            FailApply = true,
+            FailRollback = true
+        };
+        Guid operationId = Guid.NewGuid();
+        Guid backupId = Guid.NewGuid();
+        ConfigurationSwitchJournalStore journalStore = new ConfigurationSwitchJournalStore(paths);
+        await journalStore.SaveAsync(ConfigurationSwitchJournal.Create(
+            operationId,
+            ConfigurationSwitchSource.SubscriptionRefresh,
+            "old",
+            candidate.Id,
+            previousCoreWasRunning: false,
+            previousSystemProxyPreference: false,
+            previousSystemProxyState: SystemProxyState.Off,
+            previousTunPreference: false,
+            previousTunState: TunState.Off,
+            previousControllerGeneration: 1)
+            .WithContentBackup(backupId));
+        await using ConfigurationSwitchCoordinator coordinator =
+            new ConfigurationSwitchCoordinator(journalStore);
+
+        try
+        {
+            ConfigurationSwitchResult result = await coordinator.ExecuteAsync(
+                new ConfigurationSwitchRequest(
+                    operationId,
+                    ConfigurationSwitchSource.SubscriptionRefresh,
+                    candidate.Id),
+                operations);
+
+            Assert.AreEqual(ConfigurationSwitchOutcome.RollbackFailed, result.Outcome);
+            ConfigurationSwitchJournalLoadResult loaded = await journalStore.LoadAsync();
+            Assert.AreEqual(backupId, loaded.Journal!.ContentBackupId);
+            Assert.AreEqual(ConfigurationSwitchStage.RollbackFailed, loaded.Journal.Stage);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
     public async Task InvalidCandidateDoesNotCreateJournalOrApply()
     {
         string root = CreateRoot();

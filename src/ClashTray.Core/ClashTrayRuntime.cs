@@ -18,7 +18,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly ConfigurationStore _configurationStore;
     private readonly ConfigurationSwitchJournalStore _configurationSwitchJournalStore;
     private readonly ConfigurationSwitchCoordinator _configurationSwitchCoordinator;
-    private readonly IConfigurationSwitchOperations _configurationSwitchOperations;
+    private readonly RuntimeConfigurationSwitchOperations _configurationSwitchOperations;
     private readonly ISettingsStore _settingsStore;
     private readonly CoreDiscovery _coreDiscovery;
     private readonly ISystemProxyController _systemProxy;
@@ -121,16 +121,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         SettingsLoadResult settingsLoad = await _settingsStore.LoadWithStatusAsync(cancellationToken);
         _settings = settingsLoad.Settings;
-        IReadOnlyList<ConfigurationProfile> storedConfigurations = await _configurationStore.ListAsync(cancellationToken);
         ConfigurationSwitchJournalLoadResult journalLoad =
             await _configurationSwitchJournalStore.LoadAsync(cancellationToken);
         ConfigurationSwitchJournal? recoveryJournal = journalLoad.Journal;
         string? journalRecoveryMessage = journalLoad.Message;
+        bool journalContentRestored = true;
         if (recoveryJournal is { Stage: ConfigurationSwitchStage.Committed })
         {
             try
             {
-                await _configurationSwitchJournalStore.ClearAsync();
+                await ClearRecoveredConfigurationSwitchArtifactsAsync(recoveryJournal);
                 recoveryJournal = null;
             }
             catch (Exception exception)
@@ -141,15 +141,40 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         else if (recoveryJournal is not null)
         {
+            if (recoveryJournal.ContentBackupId is Guid backupId)
+            {
+                try
+                {
+                    journalContentRestored = await _configurationStore.RestorePersistentBackupAsync(
+                        backupId,
+                        recoveryJournal.CandidateConfigurationId,
+                        cancellationToken);
+                    if (!journalContentRestored)
+                    {
+                        journalRecoveryMessage = "配置切换恢复记录缺少旧配置备份，无法恢复订阅内容。";
+                    }
+                }
+                catch (Exception exception)
+                {
+                    journalContentRestored = false;
+                    journalRecoveryMessage = $"订阅配置备份恢复失败：{ErrorSanitizer.Sanitize(exception)}";
+                }
+            }
+
+            IReadOnlyList<ConfigurationProfile> configurationsBeforeRestore =
+                await _configurationStore.ListAsync(cancellationToken);
             string? restoreMessage = await RestoreConfigurationFromJournalAsync(
                 recoveryJournal,
-                storedConfigurations,
+                configurationsBeforeRestore,
                 cancellationToken);
             if (!string.IsNullOrWhiteSpace(restoreMessage))
             {
                 journalRecoveryMessage = restoreMessage;
             }
         }
+
+        IReadOnlyList<ConfigurationProfile> storedConfigurations =
+            await _configurationStore.ListAsync(cancellationToken);
 
         string? activeConfigurationId = _settings.ActiveConfigurationId
             ?? storedConfigurations.FirstOrDefault(configuration => configuration.IsActive)?.Id;
@@ -212,6 +237,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     (bool completed, string? message) = await CompleteConfigurationSwitchRecoveryAsync(
                         recoveryJournal,
                         serviceStatus.Core,
+                        journalContentRestored,
                         cancellationToken);
                     if (!completed)
                     {
@@ -228,6 +254,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 (bool completed, string? message) = await CompleteConfigurationSwitchRecoveryAsync(
                     recoveryJournal,
                     serviceStatus.Core,
+                    journalContentRestored,
                     cancellationToken);
                 if (!completed)
                 {
@@ -244,9 +271,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _snapshot = _snapshot with { Tun = TunState.Unavailable };
             if (recoveryJournal is not null)
             {
-                if (!recoveryJournal.PreviousCoreWasRunning)
+                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored)
                 {
-                    await _configurationSwitchJournalStore.ClearAsync();
+                    await ClearRecoveredConfigurationSwitchArtifactsAsync(recoveryJournal);
                     recoveryJournal = null;
                 }
                 else
@@ -260,9 +287,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _snapshot = _snapshot with { Tun = TunState.Unavailable };
             if (recoveryJournal is not null)
             {
-                if (!recoveryJournal.PreviousCoreWasRunning)
+                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored)
                 {
-                    await _configurationSwitchJournalStore.ClearAsync();
+                    await ClearRecoveredConfigurationSwitchArtifactsAsync(recoveryJournal);
                     recoveryJournal = null;
                 }
                 else
@@ -276,9 +303,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _snapshot = _snapshot with { Tun = TunState.Unavailable };
             if (recoveryJournal is not null)
             {
-                if (!recoveryJournal.PreviousCoreWasRunning)
+                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored)
                 {
-                    await _configurationSwitchJournalStore.ClearAsync();
+                    await ClearRecoveredConfigurationSwitchArtifactsAsync(recoveryJournal);
                     recoveryJournal = null;
                 }
                 else
@@ -621,6 +648,21 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task RefreshSubscriptionCoreAsync(ConfigurationProfile profile, CancellationToken cancellationToken)
     {
+        await _operationLock.WaitAsync(cancellationToken);
+        try
+        {
+            await RefreshSubscriptionCoreLockedAsync(profile, cancellationToken);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    private async Task RefreshSubscriptionCoreLockedAsync(
+        ConfigurationProfile profile,
+        CancellationToken cancellationToken)
+    {
         if (profile.SubscriptionUri is null)
         {
             return;
@@ -633,6 +675,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             profile.Id,
             StringComparison.OrdinalIgnoreCase);
         ConfigurationProfileBackup? contentBackup = null;
+        ConfigurationSwitchRuntimeState? previousState = null;
+        Guid operationId = Guid.NewGuid();
+        Guid? persistentBackupId = null;
         bool contentChanged = false;
         bool switchCommitted = false;
         UpdateSubscriptionState(SubscriptionState.Downloading, null);
@@ -640,7 +685,27 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             if (shouldRemainActive)
             {
+                previousState = await _configurationSwitchOperations.CaptureStateAsync(cancellationToken);
                 contentBackup = await _configurationStore.CaptureBackupAsync(profile, cancellationToken);
+                persistentBackupId = Guid.NewGuid();
+                await _configurationStore.SavePersistentBackupAsync(
+                    persistentBackupId.Value,
+                    profile,
+                    contentBackup,
+                    cancellationToken);
+                ConfigurationSwitchJournal preparedJournal = ConfigurationSwitchJournal.Create(
+                    operationId,
+                    ConfigurationSwitchSource.SubscriptionRefresh,
+                    previousState.ActiveConfigurationId,
+                    profile.Id,
+                    previousState.CoreWasRunning,
+                    previousState.SystemProxyPreference,
+                    previousState.SystemProxyState,
+                    previousState.TunPreference,
+                    previousState.TunState,
+                    previousState.ControllerGeneration)
+                    .WithContentBackup(persistentBackupId);
+                await _configurationSwitchJournalStore.SaveAsync(preparedJournal, cancellationToken);
             }
 
             UpdateSubscriptionState(SubscriptionState.Validating, null);
@@ -653,15 +718,26 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             UpdateSubscriptionState(SubscriptionState.Succeeded, null);
             if (shouldRemainActive)
             {
-                ConfigurationSwitchRequest request = ConfigurationSwitchRequest.Create(
+                ConfigurationSwitchRequest request = new(
+                    operationId,
                     ConfigurationSwitchSource.SubscriptionRefresh,
                     profile.Id,
-                    restartCore: update.ContentChanged || activeSelectionChanged,
-                    forceApply: update.ContentChanged);
-                ConfigurationSwitchResult result = await ExecuteConfigurationSwitchAsync(request, cancellationToken);
+                    RestartCore: update.ContentChanged || activeSelectionChanged,
+                    ForceApply: update.ContentChanged);
+                ConfigurationSwitchResult result = await ExecuteConfigurationSwitchAsync(
+                    request,
+                    cancellationToken,
+                    operationLockHeld: true);
                 switchCommitted = result.Outcome is
                     ConfigurationSwitchOutcome.NoOp
                     or ConfigurationSwitchOutcome.Committed;
+                if (switchCommitted)
+                {
+                    Guid backupId = persistentBackupId
+                        ?? throw new InvalidOperationException("订阅备份标识丢失。");
+                    await ClearConfigurationSwitchArtifactsAsync(operationId, backupId);
+                    persistentBackupId = null;
+                }
                 if (result.Outcome == ConfigurationSwitchOutcome.NoOp)
                 {
                     await RefreshConfigurationSnapshotAsync(cancellationToken);
@@ -686,18 +762,47 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             Exception finalException = exception;
-            if (contentBackup is not null && contentChanged && !switchCommitted)
+            if (persistentBackupId is Guid backupId && !switchCommitted)
             {
                 try
                 {
-                    await ConfigurationStore.RestoreBackupAsync(contentBackup, CancellationToken.None);
-                    await RefreshConfigurationSnapshotAsync(CancellationToken.None);
+                    if (contentBackup is not null && contentChanged)
+                    {
+                        await ConfigurationStore.RestoreBackupAsync(contentBackup, CancellationToken.None);
+                        await RefreshConfigurationSnapshotAsync(CancellationToken.None);
+                    }
+
+                    ConfigurationSwitchJournalLoadResult currentJournal =
+                        await _configurationSwitchJournalStore.LoadAsync(CancellationToken.None);
+                    bool keepRecoveryJournal = currentJournal.Journal is { } journal
+                        && journal.OperationId == operationId
+                        && journal.Stage == ConfigurationSwitchStage.RollbackFailed;
+                    if (!keepRecoveryJournal)
+                    {
+                        await ClearConfigurationSwitchArtifactsAsync(operationId, backupId);
+                        persistentBackupId = null;
+                    }
                 }
                 catch (Exception restoreException)
                 {
+                    Exception recoveryException = restoreException;
+                    try
+                    {
+                        await EnsureRecoveryJournalAsync(
+                            operationId,
+                            profile,
+                            previousState,
+                            backupId);
+                    }
+                    catch (Exception journalException)
+                    {
+                        recoveryException = new AggregateException(
+                            restoreException,
+                            journalException);
+                    }
                     finalException = new InvalidOperationException(
                         "订阅切换失败，且旧配置文件恢复失败。",
-                        new AggregateException(exception, restoreException));
+                        new AggregateException(exception, recoveryException));
                 }
             }
 
@@ -741,9 +846,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task<ConfigurationSwitchResult> ExecuteConfigurationSwitchAsync(
         ConfigurationSwitchRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool operationLockHeld = false)
     {
-        await _operationLock.WaitAsync(cancellationToken);
+        if (!operationLockHeld)
+        {
+            await _operationLock.WaitAsync(cancellationToken);
+        }
+
         try
         {
             ConfigurationSwitchResult result = await _configurationSwitchCoordinator.ExecuteAsync(
@@ -755,7 +865,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         finally
         {
-            _operationLock.Release();
+            if (!operationLockHeld)
+            {
+                _operationLock.Release();
+            }
         }
     }
 
@@ -768,6 +881,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 return;
             case ConfigurationSwitchOutcome.Rejected when result.ErrorCode == ErrorCode.ConfigurationSwitchTargetNotFound:
                 throw new FileNotFoundException("Configuration profile not found.");
+            case ConfigurationSwitchOutcome.Rejected when result.ErrorCode == ErrorCode.ConfigurationSwitchRecoveryRequired:
+                throw new InvalidOperationException("上一个配置切换尚未完成恢复，请先重启 ClashTray 后再试。");
             case ConfigurationSwitchOutcome.RolledBack when result.Failure is OperationCanceledException cancellation:
                 throw cancellation;
             case ConfigurationSwitchOutcome.RolledBack:
@@ -869,6 +984,65 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         return message;
     }
 
+    private async Task ClearConfigurationSwitchArtifactsAsync(
+        Guid operationId,
+        Guid backupId)
+    {
+        ConfigurationSwitchJournalLoadResult currentJournal =
+            await _configurationSwitchJournalStore.LoadAsync(CancellationToken.None);
+        if (currentJournal.Journal is null || currentJournal.Journal.OperationId == operationId)
+        {
+            await _configurationSwitchJournalStore.ClearAsync();
+        }
+
+        await _configurationStore.ClearPersistentBackupAsync(backupId);
+    }
+
+    private async Task ClearRecoveredConfigurationSwitchArtifactsAsync(
+        ConfigurationSwitchJournal journal)
+    {
+        await _configurationSwitchJournalStore.ClearAsync();
+        if (journal.ContentBackupId is Guid backupId)
+        {
+            await _configurationStore.ClearPersistentBackupAsync(backupId);
+        }
+    }
+
+    private async Task EnsureRecoveryJournalAsync(
+        Guid operationId,
+        ConfigurationProfile profile,
+        ConfigurationSwitchRuntimeState? previousState,
+        Guid backupId)
+    {
+        if (previousState is null)
+        {
+            return;
+        }
+
+        ConfigurationSwitchJournalLoadResult currentJournal =
+            await _configurationSwitchJournalStore.LoadAsync(CancellationToken.None);
+        if (currentJournal.Journal is { } existingJournal
+            && existingJournal.OperationId != operationId)
+        {
+            return;
+        }
+
+        ConfigurationSwitchJournal journal = currentJournal.Journal ?? ConfigurationSwitchJournal.Create(
+            operationId,
+            ConfigurationSwitchSource.SubscriptionRefresh,
+            previousState.ActiveConfigurationId,
+            profile.Id,
+            previousState.CoreWasRunning,
+            previousState.SystemProxyPreference,
+            previousState.SystemProxyState,
+            previousState.TunPreference,
+            previousState.TunState,
+            previousState.ControllerGeneration);
+        await _configurationSwitchJournalStore.SaveAsync(
+            journal.WithContentBackup(backupId).WithStage(ConfigurationSwitchStage.RollbackFailed),
+            CancellationToken.None);
+    }
+
     private async Task<bool> RecoverCoreFromJournalAsync(
         ConfigurationSwitchJournal journal,
         CoreState observedCoreState,
@@ -894,15 +1068,26 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private async Task<(bool Completed, string? Message)> CompleteConfigurationSwitchRecoveryAsync(
         ConfigurationSwitchJournal journal,
         CoreState observedCoreState,
+        bool contentRestored,
         CancellationToken cancellationToken)
     {
+        if (!contentRestored)
+        {
+            if (observedCoreState == CoreState.Running)
+            {
+                await StopCoreAsync(cancellationToken);
+            }
+
+            return (false, "配置切换恢复记录仍未完成，旧订阅内容无法确认，核心已保持停止。");
+        }
+
         if (journal.PreviousCoreWasRunning
             && !await RecoverCoreFromJournalAsync(journal, observedCoreState, cancellationToken))
         {
             return (false, "配置切换恢复记录仍未完成，旧核心未能通过健康检查。");
         }
 
-        await _configurationSwitchJournalStore.ClearAsync();
+        await ClearRecoveredConfigurationSwitchArtifactsAsync(journal);
         return (true, null);
     }
 

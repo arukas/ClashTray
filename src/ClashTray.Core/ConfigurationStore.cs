@@ -21,6 +21,8 @@ public sealed class ConfigurationStore
 {
     private const int MaxConfigurationBytes = 16 * 1024 * 1024;
     private const int MaxMetadataBytes = 256 * 1024;
+    private const int MaxBackupBytes = 24 * 1024 * 1024;
+    private const int BackupSchemaVersion = 1;
     private static readonly string[] SupportedExtensions = [".yaml", ".yml"];
     private readonly AppPaths _paths;
     private readonly HttpMessageHandler? _subscriptionHandler;
@@ -238,6 +240,113 @@ public sealed class ConfigurationStore
         cancellationToken.ThrowIfCancellationRequested();
         await RestoreFileAsync(backup.ConfigurationPath, backup.ConfigurationBytes);
         await RestoreFileAsync(backup.MetadataPath, backup.MetadataBytes);
+    }
+
+    internal async Task SavePersistentBackupAsync(
+        Guid backupId,
+        ConfigurationProfile profile,
+        ConfigurationProfileBackup backup,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(backup);
+        if (backupId == Guid.Empty)
+        {
+            throw new ArgumentException("Configuration backup ID is required.", nameof(backupId));
+        }
+
+        string configurationPath = ValidateConfigurationPath(profile.Path);
+        string metadataPath = MetadataPath(profile.Id);
+        if (!string.Equals(configurationPath, backup.ConfigurationPath, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(metadataPath, backup.MetadataPath, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("配置备份路径与配置档案不匹配。");
+        }
+
+        PersistedConfigurationProfileBackup persisted = new(
+            BackupSchemaVersion,
+            backupId,
+            profile.Id,
+            Path.GetExtension(configurationPath).ToLowerInvariant(),
+            backup.ConfigurationBytes,
+            backup.MetadataBytes);
+        await AtomicFile.WriteJsonAsync(
+            PersistentBackupPath(backupId),
+            persisted,
+            _jsonOptions,
+            cancellationToken);
+    }
+
+    internal async Task<bool> RestorePersistentBackupAsync(
+        Guid backupId,
+        string profileId,
+        CancellationToken cancellationToken = default)
+    {
+        if (backupId == Guid.Empty)
+        {
+            throw new ArgumentException("Configuration backup ID is required.", nameof(backupId));
+        }
+
+        string backupPath = PersistentBackupPath(backupId);
+        byte[]? backupBytes = await ReadExistingFileAsync(
+            backupPath,
+            MaxBackupBytes,
+            cancellationToken);
+        if (backupBytes is null)
+        {
+            return false;
+        }
+
+        PersistedConfigurationProfileBackup? persisted;
+        try
+        {
+            persisted = JsonSerializer.Deserialize<PersistedConfigurationProfileBackup>(
+                backupBytes,
+                _jsonOptions);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException("配置切换备份格式无效。", exception);
+        }
+
+        if (persisted is null
+            || persisted.SchemaVersion != BackupSchemaVersion
+            || persisted.BackupId != backupId
+            || !string.Equals(persisted.ProfileId, profileId, StringComparison.OrdinalIgnoreCase)
+            || !SupportedExtensions.Contains(persisted.Extension, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("配置切换备份内容无效。");
+        }
+
+        if (persisted.ConfigurationBytes?.Length > MaxConfigurationBytes
+            || persisted.MetadataBytes?.Length > MaxMetadataBytes)
+        {
+            throw new InvalidDataException("配置切换备份超过允许的大小限制。");
+        }
+
+        string configurationPath = ValidateConfigurationPath(Path.Combine(
+            _paths.ConfigurationsRoot,
+            $"{profileId}{persisted.Extension.ToLowerInvariant()}"));
+        string metadataPath = MetadataPath(profileId);
+        await RestoreFileAsync(configurationPath, persisted.ConfigurationBytes);
+        await RestoreFileAsync(metadataPath, persisted.MetadataBytes);
+        return true;
+    }
+
+    internal Task ClearPersistentBackupAsync(Guid backupId)
+    {
+        if (backupId == Guid.Empty)
+        {
+            throw new ArgumentException("Configuration backup ID is required.", nameof(backupId));
+        }
+
+        string path = PersistentBackupPath(backupId);
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+
+        return Task.CompletedTask;
     }
 
     public async Task DeleteAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
@@ -476,6 +585,9 @@ public sealed class ConfigurationStore
         return Path.Combine(_paths.ConfigurationsRoot, $"{id}.json");
     }
 
+    private string PersistentBackupPath(Guid backupId) =>
+        Path.Combine(_paths.ConfigurationSwitchBackupsRoot, $"{backupId:N}.json");
+
     private string ValidateConfigurationPath(string path)
     {
         if (!IsConfigurationPathAllowed(path))
@@ -574,6 +686,14 @@ public sealed class ConfigurationStore
 
         public bool IsActive { get; set; }
     }
+
+    private sealed record PersistedConfigurationProfileBackup(
+        int SchemaVersion,
+        Guid BackupId,
+        string ProfileId,
+        string Extension,
+        byte[]? ConfigurationBytes,
+        byte[]? MetadataBytes);
 
     private sealed record PersistedConfigurationProfile(
         string Id,

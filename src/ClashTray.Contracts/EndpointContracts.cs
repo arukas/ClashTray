@@ -35,7 +35,8 @@ public enum ErrorCode
     ConfigurationSwitchJournalCorrupt = 1100,
     ConfigurationSwitchTargetNotFound = 1101,
     ConfigurationSwitchFailed = 1102,
-    ConfigurationSwitchRollbackFailed = 1103
+    ConfigurationSwitchRollbackFailed = 1103,
+    ConfigurationSwitchRecoveryRequired = 1104
 }
 
 [Flags]
