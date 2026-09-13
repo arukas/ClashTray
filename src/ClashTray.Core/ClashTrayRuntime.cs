@@ -22,8 +22,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly MihomoControllerSessionRegistry _controllerSessions = new();
     private readonly ISettingsStore _settingsStore;
     private readonly CoreDiscovery _coreDiscovery;
-    private readonly ISystemProxyController _systemProxy;
-    private readonly IServicePipeClient _servicePipeClient;
+    private readonly LocalDeviceCoordinator _localDevice;
     private readonly SubscriptionScheduler _subscriptionScheduler;
     private readonly MihomoProcessManager _processManager = new();
     private readonly IStartupRegistration _startupRegistration;
@@ -86,9 +85,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _settingsStore = settingsStore ?? new SettingsStore(_paths);
         _startupRegistration = startupRegistration
             ?? (useDefaultEnvironment ? new StartupManager() : new StartupManager(new InMemoryStartupRegistry()));
-        _servicePipeClient = servicePipeClient
+        IServicePipeClient resolvedServicePipeClient = servicePipeClient
             ?? (useDefaultEnvironment ? new ServicePipeClient() : new IsolatedServicePipeClient());
-        _systemProxy = systemProxy ?? new SystemProxyManager(_paths);
+        ISystemProxyController resolvedSystemProxy = systemProxy ?? new SystemProxyManager(_paths);
+        _localDevice = new LocalDeviceCoordinator(
+            EndpointKind.Local,
+            resolvedServicePipeClient,
+            resolvedSystemProxy);
         _subscriptionScheduler = new SubscriptionScheduler(
             cancellation => _configurationStore.ListAsync(cancellation),
             (profile, cancellation) => RefreshSubscriptionAsync(profile, cancellation),
@@ -193,12 +196,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 State = _coreDiscovery.FindExecutable() is null ? CoreState.Missing : CoreState.Stopped,
                 Version = FindCoreVersion()
             },
-            SystemProxy = _systemProxy.DetectState()
+            SystemProxy = _localDevice.DetectSystemProxyState()
         };
         await ApplyProgramOverridesAsync(coreRunning: false, cancellationToken: cancellationToken);
         try
         {
-            ServiceResponse serviceStatus = await _servicePipeClient.SendAsync(ServiceCommand.GetStatus, cancellationToken: cancellationToken);
+            ServiceResponse serviceStatus = await _localDevice.GetStatusAsync(cancellationToken);
             _snapshot = _snapshot with
             {
                 Tun = serviceStatus.Tun,
@@ -387,16 +390,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 cancellationToken: cancellationToken);
 
             string runtimeDirectory = Path.Combine(_paths.RuntimeRoot, "mihomo");
-            string servicePayload = JsonSerializer.Serialize(new ServiceCorePayload(
+            ServiceCorePayload servicePayload = new(
                 runtimeConfigPath,
                 runtimeDirectory,
                 _settings.ControllerPort,
-                string.Empty));
+                string.Empty);
             UpdateCoreState(CoreState.Starting, null);
             ServiceResponse? serviceResponse = null;
             try
             {
-                serviceResponse = await _servicePipeClient.SendAsync(ServiceCommand.StartCore, servicePayload, cancellationToken);
+                serviceResponse = await _localDevice.StartCoreAsync(servicePayload, cancellationToken);
             }
             catch (TimeoutException)
             {
@@ -518,7 +521,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 try
                 {
-                    ServiceResponse response = await _servicePipeClient.SendAsync(ServiceCommand.StopCore, cancellationToken: cancellationToken);
+                    ServiceResponse response = await _localDevice.StopCoreAsync(cancellationToken);
                     if (!response.Succeeded)
                     {
                         _snapshot = _snapshot with { Tun = response.Tun };
@@ -1388,7 +1391,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _settings = settings;
 
             if (systemProxyBindingChanged
-                && _systemProxy.State is SystemProxyState.On
+                && _localDevice.SystemProxyState is SystemProxyState.On
                     or SystemProxyState.RestoreRequired
                     or SystemProxyState.Enabling)
             {
@@ -1541,7 +1544,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (enabled && !_coreHealthConfirmed)
             {
                 await RevokeSystemProxyForCoreLossAsync(operationLockHeld: true);
-                _snapshot = _snapshot with { SystemProxy = _systemProxy.State };
+                _snapshot = _snapshot with { SystemProxy = _localDevice.SystemProxyState };
                 Publish();
                 return;
             }
@@ -1550,14 +1553,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             Publish();
             if (enabled)
             {
-                await _systemProxy.EnableAsync(_settings.MixedPort, _settings.BypassList, cancellationToken);
+                await _localDevice.EnableSystemProxyAsync(_settings.MixedPort, _settings.BypassList, cancellationToken);
             }
             else
             {
-                await _systemProxy.DisableAsync(cancellationToken);
+                await _localDevice.DisableSystemProxyAsync(cancellationToken);
             }
 
-            _snapshot = _snapshot with { SystemProxy = _systemProxy.State, ErrorMessage = null };
+            _snapshot = _snapshot with { SystemProxy = _localDevice.SystemProxyState, ErrorMessage = null };
             Publish();
         }
         catch
@@ -1567,7 +1570,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
-            _snapshot = _snapshot with { SystemProxy = _systemProxy.State };
+            _snapshot = _snapshot with { SystemProxy = _localDevice.SystemProxyState };
             Publish();
             throw;
         }
@@ -1599,14 +1602,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             _snapshot = _snapshot with { Tun = enabled ? TunState.Enabling : TunState.Disabling };
             Publish();
-            string payload = JsonSerializer.Serialize(new ServiceTunPayload(
+            ServiceTunPayload payload = new(
                 _settings.ControllerPort,
                 string.Empty,
-                enabled));
-            ServiceResponse response = await _servicePipeClient.SendAsync(
-                enabled ? ServiceCommand.EnableTun : ServiceCommand.DisableTun,
-                payload,
-                cancellationToken: cancellationToken);
+                enabled);
+            ServiceResponse response = enabled
+                ? await _localDevice.EnableTunAsync(payload, cancellationToken)
+                : await _localDevice.DisableTunAsync(payload, cancellationToken);
             if (!response.Succeeded)
             {
                 throw new InvalidOperationException(response.Error ?? "TUN 操作失败。");
@@ -1735,10 +1737,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 manifest.Version,
                 manifest.DownloadUri,
                 manifest.Sha256);
-            ServiceResponse response = await _servicePipeClient.SendAsync(
-                ServiceCommand.InstallCore,
-                JsonSerializer.Serialize(payload),
-                cancellationToken);
+            ServiceResponse response = await _localDevice.InstallCoreAsync(payload, cancellationToken);
             if (!response.Succeeded)
             {
                 throw new InvalidOperationException(response.Error ?? "ClashTray 服务无法安装 Mihomo 核心。");
@@ -1816,9 +1815,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task RollbackCoreUpdateAsync(CancellationToken cancellationToken)
     {
-        ServiceResponse response = await _servicePipeClient.SendAsync(
-            ServiceCommand.RollbackCore,
-            cancellationToken: cancellationToken);
+        ServiceResponse response = await _localDevice.RollbackCoreAsync(cancellationToken);
         if (!response.Succeeded)
         {
             throw new InvalidOperationException(response.Error ?? "ClashTray 服务无法回滚 Mihomo 核心。");
@@ -2210,9 +2207,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 Exception? serviceException = null;
                 try
                 {
-                    serviceStatus = await _servicePipeClient.SendAsync(
-                        ServiceCommand.GetStatus,
-                        cancellationToken: _runtimeCts.Token);
+                    serviceStatus = await _localDevice.GetStatusAsync(_runtimeCts.Token);
                 }
                 catch (OperationCanceledException) when (_runtimeCts.IsCancellationRequested)
                 {
@@ -2412,7 +2407,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _logBuffer.Add(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", $"程序系统代理设置应用失败：{ErrorSanitizer.Sanitize(exception)}"));
             _snapshot = _snapshot with
             {
-                SystemProxy = _systemProxy.State,
+                SystemProxy = _localDevice.SystemProxyState,
                 ErrorMessage = $"程序系统代理设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
                 Logs = _logBuffer.Snapshot()
             };
@@ -2514,23 +2509,23 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         if (_settings.SystemProxyEnabled && coreRunning && _coreHealthConfirmed)
         {
-            if (_systemProxy.State is (SystemProxyState.Off or SystemProxyState.Failed))
+            if (_localDevice.SystemProxyState is (SystemProxyState.Off or SystemProxyState.Failed))
             {
-                await _systemProxy.EnableAsync(_settings.MixedPort, _settings.BypassList, cancellationToken);
+                await _localDevice.EnableSystemProxyAsync(_settings.MixedPort, _settings.BypassList, cancellationToken);
             }
         }
         else
         {
-            SystemProxyState detectedState = _systemProxy.DetectState();
+            SystemProxyState detectedState = _localDevice.DetectSystemProxyState();
             if (detectedState is SystemProxyState.On
                 or SystemProxyState.RestoreRequired
                 or SystemProxyState.Enabling)
             {
-                await _systemProxy.DisableAsync(cancellationToken);
+                await _localDevice.DisableSystemProxyAsync(cancellationToken);
             }
         }
 
-        SystemProxyState state = _systemProxy.State;
+        SystemProxyState state = _localDevice.SystemProxyState;
         if (_snapshot.SystemProxy != state)
         {
             _snapshot = _snapshot with { SystemProxy = state };
@@ -3085,7 +3080,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     $"核心不可用时撤销系统代理失败：{ErrorSanitizer.Sanitize(exception)}"));
                 _snapshot = _snapshot with
                 {
-                    SystemProxy = _systemProxy.State,
+                    SystemProxy = _localDevice.SystemProxyState,
                     ErrorMessage = "核心不可用时撤销系统代理失败，系统代理状态需要恢复。",
                     Logs = _logBuffer.Snapshot()
                 };
