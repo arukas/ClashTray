@@ -11,6 +11,12 @@ public sealed record ConfigurationImportResult(
     bool ContentChanged,
     string Sha256);
 
+internal sealed record ConfigurationProfileBackup(
+    string ConfigurationPath,
+    string MetadataPath,
+    byte[]? ConfigurationBytes,
+    byte[]? MetadataBytes);
+
 public sealed class ConfigurationStore
 {
     private const int MaxConfigurationBytes = 16 * 1024 * 1024;
@@ -208,6 +214,30 @@ public sealed class ConfigurationStore
         byte[] bytes = await ReadBytesWithLimitAsync(source, cancellationToken);
         ValidateYaml(bytes);
         await ValidateCandidateBytesAsync(bytes, Path.GetExtension(path), cancellationToken);
+    }
+
+    internal async Task<ConfigurationProfileBackup> CaptureBackupAsync(
+        ConfigurationProfile profile,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        string configurationPath = ValidateConfigurationPath(profile.Path);
+        string metadataPath = MetadataPath(profile.Id);
+        return new ConfigurationProfileBackup(
+            configurationPath,
+            metadataPath,
+            await ReadExistingFileAsync(configurationPath, MaxConfigurationBytes, cancellationToken),
+            await ReadExistingFileAsync(metadataPath, MaxMetadataBytes, cancellationToken));
+    }
+
+    internal static async Task RestoreBackupAsync(
+        ConfigurationProfileBackup backup,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(backup);
+        cancellationToken.ThrowIfCancellationRequested();
+        await RestoreFileAsync(backup.ConfigurationPath, backup.ConfigurationBytes);
+        await RestoreFileAsync(backup.MetadataPath, backup.MetadataBytes);
     }
 
     public async Task DeleteAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)

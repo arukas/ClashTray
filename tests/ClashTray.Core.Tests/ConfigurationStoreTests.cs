@@ -209,6 +209,41 @@ public sealed class ConfigurationStoreTests
         }
     }
 
+    [TestMethod]
+    public async Task SubscriptionRefreshBackupRestoresContentAndMetadata()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        using SubscriptionHandler handler = new SubscriptionHandler();
+        try
+        {
+            AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            ConfigurationStore store = new ConfigurationStore(paths, handler);
+            Uri uri = new Uri("https://subscription.invalid/config");
+
+            ConfigurationImportResult first = await store.ImportSubscriptionWithResultAsync(uri, "Test subscription");
+            string previousContent = await File.ReadAllTextAsync(first.Profile.Path);
+            string metadataPath = Path.Combine(paths.ConfigurationsRoot, $"{first.Profile.Id}.json");
+            string previousMetadata = await File.ReadAllTextAsync(metadataPath);
+            ConfigurationProfileBackup backup = await store.CaptureBackupAsync(first.Profile);
+
+            handler.ResponseBody = "mixed-port: 7891\n";
+            ConfigurationImportResult refreshed = await store.ImportSubscriptionWithResultAsync(uri, "Test subscription");
+            Assert.AreNotEqual(previousContent, await File.ReadAllTextAsync(refreshed.Profile.Path));
+
+            await ConfigurationStore.RestoreBackupAsync(backup);
+
+            Assert.AreEqual(previousContent, await File.ReadAllTextAsync(first.Profile.Path));
+            Assert.AreEqual(previousMetadata, await File.ReadAllTextAsync(metadataPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private sealed class SubscriptionHandler : HttpMessageHandler
     {
         public List<string> UserAgents { get; } = [];

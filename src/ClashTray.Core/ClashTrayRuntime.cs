@@ -632,14 +632,23 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _settings.ActiveConfigurationId,
             profile.Id,
             StringComparison.OrdinalIgnoreCase);
+        ConfigurationProfileBackup? contentBackup = null;
+        bool contentChanged = false;
+        bool switchCommitted = false;
         UpdateSubscriptionState(SubscriptionState.Downloading, null);
         try
         {
+            if (shouldRemainActive)
+            {
+                contentBackup = await _configurationStore.CaptureBackupAsync(profile, cancellationToken);
+            }
+
             UpdateSubscriptionState(SubscriptionState.Validating, null);
             ConfigurationImportResult update = await _configurationStore.ImportSubscriptionWithResultAsync(
                 profile.SubscriptionUri,
                 profile.Name,
                 cancellationToken);
+            contentChanged = update.ContentChanged;
             UpdateSubscriptionState(SubscriptionState.Applying, null);
             UpdateSubscriptionState(SubscriptionState.Succeeded, null);
             if (shouldRemainActive)
@@ -650,6 +659,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     restartCore: update.ContentChanged || activeSelectionChanged,
                     forceApply: update.ContentChanged);
                 ConfigurationSwitchResult result = await ExecuteConfigurationSwitchAsync(request, cancellationToken);
+                switchCommitted = result.Outcome is
+                    ConfigurationSwitchOutcome.NoOp
+                    or ConfigurationSwitchOutcome.Committed;
                 if (result.Outcome == ConfigurationSwitchOutcome.NoOp)
                 {
                     await RefreshConfigurationSnapshotAsync(cancellationToken);
@@ -673,8 +685,24 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            UpdateSubscriptionState(SubscriptionState.Failed, ErrorSanitizer.Sanitize(exception));
-            throw;
+            Exception finalException = exception;
+            if (contentBackup is not null && contentChanged && !switchCommitted)
+            {
+                try
+                {
+                    await ConfigurationStore.RestoreBackupAsync(contentBackup, CancellationToken.None);
+                    await RefreshConfigurationSnapshotAsync(CancellationToken.None);
+                }
+                catch (Exception restoreException)
+                {
+                    finalException = new InvalidOperationException(
+                        "订阅切换失败，且旧配置文件恢复失败。",
+                        new AggregateException(exception, restoreException));
+                }
+            }
+
+            UpdateSubscriptionState(SubscriptionState.Failed, ErrorSanitizer.Sanitize(finalException));
+            throw finalException;
         }
     }
 
