@@ -243,6 +243,9 @@
   <data name="CoreUpdateFieldsRequired" xml:space="preserve"><value>请填写官方 HTTPS 下载地址、版本和 64 位 SHA-256。</value></data>
   <data name="CoreUpdateDone" xml:space="preserve"><value>核心已完成校验并原子替换。</value></data>
   <data name="ErrorPortRangeFormat" xml:space="preserve"><value>{0} 端口必须是 1 到 65535 之间的整数。</value></data>
+  <data name="NetworkPermissionDenied" xml:space="preserve"><value>Windows 当前不允许读取网络状态。</value></data>
+  <data name="NetworkApiUnavailable" xml:space="preserve"><value>Windows 网络状态 API 当前不可用。</value></data>
+  <data name="NetworkStateReadFailed" xml:space="preserve"><value>无法读取 Windows 网络状态。</value></data>
   <data name="StartupStatusReadFailedFormat" xml:space="preserve"><value>无法读取 Windows 启动状态：{0}</value></data>
   <data name="StartupRegisteredButDisabled" xml:space="preserve"><value>开机启动已注册，但 Windows 已禁用；请在任务管理器的“启动应用”中启用。</value></data>
   <data name="StartupNeedsRepair" xml:space="preserve"><value>开机启动已打开，但启动项命令已变化；点击“保存设置”修复。</value></data>

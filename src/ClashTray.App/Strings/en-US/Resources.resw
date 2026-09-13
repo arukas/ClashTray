@@ -243,6 +243,9 @@ Upload {4} B · Download {5} B</value></data>
   <data name="CoreUpdateFieldsRequired" xml:space="preserve"><value>Enter the official HTTPS download URL, the version and the 64-digit SHA-256.</value></data>
   <data name="CoreUpdateDone" xml:space="preserve"><value>The core was verified and atomically replaced.</value></data>
   <data name="ErrorPortRangeFormat" xml:space="preserve"><value>The {0} port must be a whole number between 1 and 65535.</value></data>
+  <data name="NetworkPermissionDenied" xml:space="preserve"><value>Windows does not currently allow reading network status.</value></data>
+  <data name="NetworkApiUnavailable" xml:space="preserve"><value>The Windows network status API is currently unavailable.</value></data>
+  <data name="NetworkStateReadFailed" xml:space="preserve"><value>Could not read the Windows network status.</value></data>
   <data name="StartupStatusReadFailedFormat" xml:space="preserve"><value>Could not read the Windows startup state: {0}</value></data>
   <data name="StartupRegisteredButDisabled" xml:space="preserve"><value>Startup is registered but Windows disabled it; enable it in Task Manager → Startup apps.</value></data>
   <data name="StartupNeedsRepair" xml:space="preserve"><value>Startup is on, but the registered command changed; select “Save settings” to repair it.</value></data>

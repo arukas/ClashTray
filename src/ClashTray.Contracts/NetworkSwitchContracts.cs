@@ -63,7 +63,8 @@ public sealed record NetworkContextSnapshot(
     string? InterfaceIdentity,
     NetworkPermissionState PermissionState,
     bool IsAmbiguous,
-    bool IsStable);
+    bool IsStable,
+    string? ErrorMessage = null);
 
 public sealed record NetworkSwitchRule(
     string RuleId,

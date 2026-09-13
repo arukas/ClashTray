@@ -25,13 +25,13 @@ public static class NetworkSwitchPolicyEngine
                 "自动切换未启用。");
         }
 
-        if (input.Context.PermissionState is NetworkPermissionState.Denied or NetworkPermissionState.Unavailable)
+        if (input.Context.PermissionState != NetworkPermissionState.Allowed)
         {
             return NoAction(
                 NetworkSwitchState.PermissionRequired,
                 NetworkSwitchReason.PermissionRequired,
                 revision,
-                "Windows 当前不允许读取 Wi-Fi 名称。");
+                input.Context.ErrorMessage ?? "Windows 当前不允许读取 Wi-Fi 名称。");
         }
 
         if (!input.Context.IsStable)
