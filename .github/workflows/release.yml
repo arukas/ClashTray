@@ -90,6 +90,15 @@ jobs:
           }
 
           $baseVersion = ($version -split '-', 2)[0]
+
+          # The tag is the requested release, but Directory.Build.props owns the
+          # product version in the tree; refusing drift here keeps assemblies,
+          # installer names and the release manifest identical.
+          $productVersion = (& .\packaging\Get-ProductVersion.ps1)
+          if ($baseVersion -ne $productVersion.VersionPrefix) {
+            throw "Release version '$version' does not match VersionPrefix '$($productVersion.VersionPrefix)' in Directory.Build.props. Bump the props file and commit it before tagging."
+          }
+
           $releaseNotesPath = Join-Path $env:GITHUB_WORKSPACE "docs\releases\$baseVersion.md"
           if (-not (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf)) {
             throw "Versioned release notes were not found: $releaseNotesPath"

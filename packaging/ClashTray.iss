@@ -3,11 +3,14 @@
 ; directory. Inno Setup then compresses that directory and the optional Mihomo
 ; payload into a single LZMA2 solid installer.
 
+; The product version is owned by Directory.Build.props and must be passed in
+; by Build-EXE.ps1 (resolved through Get-ProductVersion.ps1). There is no
+; second hardcoded copy here, so installer output cannot drift from the tree.
 #ifndef PackageVersion
-  #define PackageVersion "0.2.0"
+  #error "PackageVersion is required; build through packaging\Build-EXE.ps1 so it is resolved from Directory.Build.props."
 #endif
 #ifndef PackageFileVersion
-  #define PackageFileVersion "0.2.0.0"
+  #error "PackageFileVersion is required; build through packaging\Build-EXE.ps1."
 #endif
 #ifndef Variant
   #define Variant "Full"

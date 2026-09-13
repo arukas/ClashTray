@@ -181,7 +181,7 @@ public sealed partial class MainWindow : Window
             .Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
             .InformationalVersion
-            ?? "0.2.0";
+            ?? "0.0.0-dev";
         CoreVersionText.Text = string.IsNullOrWhiteSpace(core.Version)
             ? $"ClashTray {appVersion} · Mihomo 未启动"
             : $"Mihomo {core.Version} · ClashTray {appVersion}";

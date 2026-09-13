@@ -3,8 +3,8 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
 
-    [ValidatePattern('^\d+\.\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?$')]
-    [string]$PackageVersion = '0.2.0',
+    # Resolved from Directory.Build.props when omitted; an explicit value must stay compatible with it.
+    [string]$PackageVersion,
 
     [ValidateSet('Full', 'NoCET', 'Mini')]
     [string]$Variant = 'Full',
@@ -16,6 +16,14 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$productVersion = & (Join-Path $PSScriptRoot 'Get-ProductVersion.ps1')
+if ([string]::IsNullOrWhiteSpace($PackageVersion)) {
+    $PackageVersion = $productVersion.Version
+} elseif ($PackageVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+    throw "PackageVersion must look like 1.2.3 or 1.2.3-alpha.1; received '$PackageVersion'."
+} elseif (($PackageVersion -split '-', 2)[0] -ne $productVersion.VersionPrefix) {
+    throw "PackageVersion '$PackageVersion' is not compatible with VersionPrefix '$($productVersion.VersionPrefix)' in Directory.Build.props. Bump Directory.Build.props or pass the matching version."
+}
 $packageCoreVersion = ($PackageVersion -split '-', 2)[0]
 $packageFileVersion = if (($packageCoreVersion -split '\.').Count -eq 3) {
     "$packageCoreVersion.0"

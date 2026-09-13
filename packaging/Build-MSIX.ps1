@@ -3,11 +3,23 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string] $Configuration = 'Release',
     [string] $CertificatePath,
-    [string] $PackageVersion = '0.2.0.0'
+    # Resolved from Directory.Build.props when omitted; an explicit value must stay compatible with it.
+    [string] $PackageVersion
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$productVersion = & (Join-Path $PSScriptRoot 'Get-ProductVersion.ps1')
+if ([string]::IsNullOrWhiteSpace($PackageVersion)) {
+    # MSIX identity requires four numeric components; the prerelease label is not representable there.
+    $PackageVersion = "$(($productVersion.Version -split '-', 2)[0]).0"
+} else {
+    if ($PackageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "PackageVersion must use four numeric components, for example 0.3.0.0." }
+    $requestedPrefix = ($PackageVersion -split '\.')[0..2] -join '.'
+    if ($requestedPrefix -ne $productVersion.VersionPrefix) {
+        throw "PackageVersion '$PackageVersion' is not compatible with VersionPrefix '$($productVersion.VersionPrefix)' in Directory.Build.props. Bump Directory.Build.props or pass the matching version."
+    }
+}
 $stageRoot = Join-Path $PSScriptRoot '.stage'
 $outputRoot = Join-Path $PSScriptRoot 'out'
 $appProject = Join-Path $repoRoot 'src\ClashTray.App\ClashTray.App.csproj'
@@ -22,7 +34,6 @@ $signtool = 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtoo
 
 if (-not (Test-Path -LiteralPath $dotnet)) { throw "Missing .NET SDK: $dotnet" }
 if (-not (Test-Path -LiteralPath $makeAppx)) { throw "Missing MakeAppx: $makeAppx" }
-if ($PackageVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "PackageVersion must use four numeric components, for example 0.2.0.0." }
 
 Remove-Item -LiteralPath $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $appPublish, $servicePublish, $packageRoot, $outputRoot -Force | Out-Null
