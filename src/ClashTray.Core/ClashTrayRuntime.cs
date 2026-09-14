@@ -52,6 +52,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private CancellationTokenSource? _remoteRefreshCts;
     private Task? _remoteRefreshTask;
     private RemoteControllerData? _remoteControllerData;
+    private RemoteRefreshCompletion? _remoteRefreshCompletion;
     private bool _usingServiceCore;
     private bool _coreHealthConfirmed;
     private readonly object _proxyRecoveryGate = new();
@@ -68,6 +69,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         long Generation,
         long SelectionRevision,
         MihomoControllerSnapshotData Snapshot);
+
+    private sealed record RemoteRefreshCompletion(
+        long Generation,
+        long SelectionRevision,
+        TaskCompletionSource<bool> Completion);
 
     private readonly record struct TrafficDataResult(bool Succeeded, TrafficSnapshot? Value);
 
@@ -477,8 +483,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             throw new InvalidOperationException($"端点 {endpoint.DisplayName} 已被禁用。");
         }
 
-        return await _endpointSessions.SelectAsync(endpoint, cancellationToken)
+        EndpointSession? session = await _endpointSessions.SelectAsync(endpoint, cancellationToken)
             .ConfigureAwait(false);
+        if (session is not null)
+        {
+            await WaitForRemoteRefreshAsync(session, cancellationToken).ConfigureAwait(false);
+        }
+
+        return session;
     }
 
     public Task DisconnectEndpointAsync() => _endpointSessions.DisconnectAsync();
@@ -2674,10 +2686,35 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
 
         EndpointSession? session = _endpointSessions.Current;
-        return EndpointSessionSnapshotFactory.Create(
+        ControllerSessionSnapshot snapshot = EndpointSessionSnapshotFactory.Create(
             status.Endpoint,
             status,
             session?.Handshake);
+        MihomoControllerSnapshotData? remoteData = null;
+        lock (_remoteRefreshGate)
+        {
+            if (_remoteControllerData is { } currentData
+                && currentData.Generation == status.Generation
+                && currentData.SelectionRevision == status.SelectionRevision)
+            {
+                remoteData = currentData.Snapshot;
+            }
+        }
+
+        return remoteData is null
+            ? snapshot
+            : snapshot with
+            {
+                Status = remoteData.Status,
+                ProxyGroups = remoteData.ProxyGroups,
+                ProxyNodes = remoteData.ProxyNodes,
+                Connections = remoteData.Connections,
+                Rules = remoteData.Rules,
+                Providers = remoteData.Providers,
+                RuleProviders = remoteData.RuleProviders,
+                Logs = remoteData.Logs,
+                ErrorMessage = remoteData.ErrorMessage ?? snapshot.ErrorMessage
+            };
     }
 
     private void OnEndpointSessionStatusChanged(
@@ -2685,11 +2722,25 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         EndpointSessionStatusEventArgs status)
     {
         CancellationTokenSource? previousRefresh;
+        RemoteRefreshCompletion? previousCompletion;
         lock (_remoteRefreshGate)
         {
             previousRefresh = _remoteRefreshCts;
+            previousCompletion = _remoteRefreshCompletion;
             _remoteRefreshCts = null;
             _remoteControllerData = null;
+            _remoteRefreshCompletion = status.State == EndpointSessionState.Connected
+                ? new RemoteRefreshCompletion(
+                    status.Generation,
+                    status.SelectionRevision,
+                    new TaskCompletionSource<bool>(
+                        TaskCreationOptions.RunContinuationsAsynchronously))
+                : null;
+        }
+
+        if (previousCompletion is not null)
+        {
+            previousCompletion.Completion.TrySetCanceled();
         }
 
         if (previousRefresh is not null)
@@ -2832,6 +2883,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     status.Generation,
                     status.SelectionRevision,
                     snapshot);
+                CompleteRemoteRefreshUnsafe(
+                    status.Generation,
+                    status.SelectionRevision,
+                    succeeded: true);
             }
 
             PublishAppSnapshot();
@@ -2843,9 +2898,50 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             if (IsCurrentRemoteSession(session, status))
             {
+                lock (_remoteRefreshGate)
+                {
+                    CompleteRemoteRefreshUnsafe(
+                        status.Generation,
+                        status.SelectionRevision,
+                        succeeded: false);
+                }
                 LogControllerFailure("远程 Controller 刷新", "/configs 或 /proxies", exception, 0);
                 PublishAppSnapshot();
             }
+        }
+    }
+
+    private async Task WaitForRemoteRefreshAsync(
+        EndpointSession session,
+        CancellationToken cancellationToken)
+    {
+        Task? completion = null;
+        lock (_remoteRefreshGate)
+        {
+            if (_remoteRefreshCompletion is { } current
+                && current.Generation == session.Generation
+                && current.SelectionRevision == session.SelectionRevision)
+            {
+                completion = current.Completion.Task;
+            }
+        }
+
+        if (completion is not null)
+        {
+            await completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void CompleteRemoteRefreshUnsafe(
+        long generation,
+        long selectionRevision,
+        bool succeeded)
+    {
+        if (_remoteRefreshCompletion is { } completion
+            && completion.Generation == generation
+            && completion.SelectionRevision == selectionRevision)
+        {
+            completion.Completion.TrySetResult(succeeded);
         }
     }
 
@@ -2879,6 +2975,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 _remoteRefreshCts = null;
                 _remoteRefreshTask = null;
                 _remoteControllerData = null;
+                _remoteRefreshCompletion?.Completion.TrySetCanceled();
+                _remoteRefreshCompletion = null;
             }
 
             if (refreshCts is not null)

@@ -297,8 +297,10 @@ public sealed class RuntimeEndpointTests
                 {
                     "/configs" => """{"mode":"global","tun":{"enable":false}}""",
                     "/proxies" => """{"proxies":{"Auto":{"type":"Selector","now":"node","all":["node"]},"node":{"type":"Direct"}}}""",
-                    "/traffic" => """{"upTotal":11,"downTotal":12,"up":1,"down":2}""",
-                    "/memory" => """{"inuse":22}""",
+                    "/traffic" => """{"upTotal":11,"downTotal":12,"up":1,"down":2}"""
+                        + "\n",
+                    "/memory" => """{"inuse":22}"""
+                        + "\n",
                     "/connections" => """{"connections":[]}""",
                     "/rules" => """{"rules":[]}""",
                     "/providers/proxies" => """{"providers":{}}""",
