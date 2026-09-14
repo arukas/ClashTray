@@ -97,7 +97,12 @@ public sealed class MihomoEndpointSessionConnector : IEndpointSessionConnector
             try
             {
                 transport = _transportFactory(endpoint, optionsLease.Options);
-                MihomoApiClient api = new(transport.HttpClient, transport.BaseUri, string.Empty);
+                MihomoApiClient api = new(
+                    transport.HttpClient,
+                    transport.BaseUri,
+                    string.Empty,
+                    webSocketFactory: transport.CreateWebSocket,
+                    webSocketUriBuilder: transport.BuildWebSocketUri);
                 using JsonDocument version = await api.GetVersionAsync(cancellationToken).ConfigureAwait(false);
                 EndpointHandshakeResult handshake = EndpointHandshakeValidator.Validate(version);
                 if (!handshake.IsCompatible)

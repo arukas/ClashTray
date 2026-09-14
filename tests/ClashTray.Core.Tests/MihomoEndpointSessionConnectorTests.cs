@@ -1,5 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.WebSockets;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using ClashTray.Contracts;
 
@@ -70,6 +73,51 @@ public sealed class MihomoEndpointSessionConnectorTests
 
             Assert.AreEqual(EndpointSessionState.Incompatible, exception.FailureState);
             Assert.IsFalse(exception.IsTransient);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task ConnectorWiresEndpointTransportIntoApiWebSocketFactory()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        EndpointSecretStore secretStore = new(paths);
+        EndpointCertificateStore certificateStore = new(paths);
+        using X509Certificate2 ca = CreateCaCertificate("ClashTray Connector CA");
+        await certificateStore.SetAsync("office-ca", ca.Export(X509ContentType.Cert));
+
+        EndpointDescriptor endpoint = CreateEndpoint("office") with
+        {
+            Security = EndpointTransportSecurity.HttpsCustomCertificate
+        };
+        EndpointRecord record = new(endpoint, CertificateReference: "office-ca");
+        using VersionHandler handler = new("{\"version\":\"v1.19.30\"}");
+        EndpointTransportOptionsResolver optionsResolver = new(secretStore, certificateStore);
+        MihomoEndpointSessionConnector connector = CreateConnector(
+            record,
+            optionsResolver,
+            handler);
+
+        try
+        {
+            await using EndpointSession session = await connector.ConnectAsync(
+                endpoint,
+                generation: 11,
+                selectionRevision: 5,
+                CancellationToken.None);
+
+            using ClientWebSocket socket = session.Api.CreateWebSocket();
+
+            Assert.IsNull(socket.Options.Proxy);
+            Assert.IsNotNull(socket.Options.RemoteCertificateValidationCallback);
+            Assert.AreEqual(
+                "wss://office.example.test/logs",
+                session.Api.BuildWebSocketUri("/logs").AbsoluteUri);
         }
         finally
         {
@@ -150,8 +198,27 @@ public sealed class MihomoEndpointSessionConnectorTests
             webSocketUri,
             client,
             options.Secret.Length == 0 ? null : $"Bearer {options.Secret}",
-            customCaCertificate: null,
+            customCaCertificate: options.CustomCaCertificate is { } ca
+                ? X509CertificateLoader.LoadCertificate(ca.Export(X509ContentType.Cert))
+                : null,
             bypassesSystemProxy: true);
+    }
+
+    private static X509Certificate2 CreateCaCertificate(string commonName)
+    {
+        using RSA key = RSA.Create(2048);
+        CertificateRequest request = new(
+            $"CN={commonName}",
+            key,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(
+            X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign,
+            critical: true));
+        return request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            DateTimeOffset.UtcNow.AddHours(1));
     }
 
     private static EndpointDescriptor CreateEndpoint(string id) =>

@@ -63,6 +63,8 @@ public sealed class MihomoApiClient
     private readonly HttpClient _httpClient;
     private readonly Uri _controllerUri;
     private readonly string _secret;
+    private readonly Func<ClientWebSocket>? _webSocketFactory;
+    private readonly Func<string, Uri>? _webSocketUriBuilder;
     private readonly TimeSpan _streamingFirstRecordTimeout;
     private readonly int _maxStreamingRecordBytes;
 
@@ -71,7 +73,9 @@ public sealed class MihomoApiClient
         Uri controllerUri,
         string secret,
         TimeSpan? streamingFirstRecordTimeout = null,
-        int maxStreamingRecordBytes = DefaultMaxStreamingRecordBytes)
+        int maxStreamingRecordBytes = DefaultMaxStreamingRecordBytes,
+        Func<ClientWebSocket>? webSocketFactory = null,
+        Func<string, Uri>? webSocketUriBuilder = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(controllerUri);
@@ -86,6 +90,8 @@ public sealed class MihomoApiClient
         _httpClient = httpClient;
         _controllerUri = controllerUri;
         _secret = secret;
+        _webSocketFactory = webSocketFactory;
+        _webSocketUriBuilder = webSocketUriBuilder;
         _streamingFirstRecordTimeout = streamingFirstRecordTimeout ?? DefaultStreamingFirstRecordTimeout;
         _maxStreamingRecordBytes = maxStreamingRecordBytes;
     }
@@ -236,25 +242,32 @@ public sealed class MihomoApiClient
 
     public ClientWebSocket CreateWebSocket()
     {
+        if (_webSocketFactory is not null)
+        {
+            return _webSocketFactory();
+        }
+
         ClientWebSocket socket = new ClientWebSocket();
         if (_secret.Length > 0)
         {
             socket.Options.SetRequestHeader("Authorization", $"Bearer {_secret}");
         }
+
         return socket;
     }
 
     public async Task<ClientWebSocket> ConnectWebSocketAsync(string path, CancellationToken cancellationToken = default)
     {
-        ClientWebSocket socket = CreateWebSocket();
+        ClientWebSocket? socket = null;
         try
         {
+            socket = CreateWebSocket();
             await socket.ConnectAsync(BuildWebSocketUri(path), cancellationToken);
             return socket;
         }
         catch
         {
-            socket.Dispose();
+            socket?.Dispose();
             throw;
         }
     }
@@ -262,6 +275,11 @@ public sealed class MihomoApiClient
     public Uri BuildWebSocketUri(string path)
     {
         Uri requestUri = BuildControllerUri(path);
+        if (_webSocketUriBuilder is not null)
+        {
+            return _webSocketUriBuilder(path);
+        }
+
         UriBuilder builder = new UriBuilder(requestUri)
         {
             Scheme = _controllerUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws",

@@ -21,7 +21,12 @@ public sealed class EndpointSession : IAsyncDisposable
 
         _transport = transport;
         Endpoint = transport.Endpoint;
-        Api = new MihomoApiClient(transport.HttpClient, transport.BaseUri, string.Empty);
+        Api = new MihomoApiClient(
+            transport.HttpClient,
+            transport.BaseUri,
+            string.Empty,
+            webSocketFactory: transport.CreateWebSocket,
+            webSocketUriBuilder: transport.BuildWebSocketUri);
         Capabilities = capabilities;
         Generation = generation;
         SelectionRevision = selectionRevision;

@@ -36,6 +36,35 @@ public sealed class EndpointTransportFactoryTests
     }
 
     [TestMethod]
+    public void ApiClientUsesEndpointTransportForWebSocketPolicy()
+    {
+        using X509Certificate2 ca = CreateCaCertificate("ClashTray WebSocket CA");
+        EndpointDescriptor endpoint = EndpointUriNormalizer.CreateRemoteDescriptor(
+                new EndpointId("private"),
+                "Private",
+                new Uri("https://controller.example.test"))
+            with { Security = EndpointTransportSecurity.HttpsCustomCertificate };
+
+        using EndpointTransport transport = EndpointTransportFactory.Create(
+            endpoint,
+            new EndpointTransportOptions("websocket-secret", ca));
+        MihomoApiClient api = new(
+            transport.HttpClient,
+            transport.BaseUri,
+            string.Empty,
+            webSocketFactory: transport.CreateWebSocket,
+            webSocketUriBuilder: transport.BuildWebSocketUri);
+
+        using ClientWebSocket socket = api.CreateWebSocket();
+
+        Assert.IsNull(socket.Options.Proxy);
+        Assert.IsNotNull(socket.Options.RemoteCertificateValidationCallback);
+        Assert.AreEqual(
+            "wss://controller.example.test/logs",
+            api.BuildWebSocketUri("/logs").AbsoluteUri);
+    }
+
+    [TestMethod]
     public void ExplicitHttpTransportUsesWsAtControllerOrigin()
     {
         EndpointDescriptor endpoint = EndpointUriNormalizer.CreateRemoteDescriptor(
