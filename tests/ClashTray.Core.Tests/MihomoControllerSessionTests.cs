@@ -149,4 +149,45 @@ public sealed class MihomoControllerSessionTests
         Assert.AreEqual(EndpointKind.Remote, exception.EndpointKind);
         Assert.AreEqual(EndpointCommand.ControlTun, exception.Command);
     }
+
+    [TestMethod]
+    public void TargetCommandGateChecksEndpointIdentityAndGeneration()
+    {
+        using HttpClient client = new HttpClient();
+        MihomoApiClient api = new MihomoApiClient(
+            client,
+            new Uri("https://controller.example/"),
+            string.Empty);
+        EndpointDescriptor endpoint = new EndpointDescriptor(
+            new EndpointId("remote"),
+            EndpointKind.Remote,
+            "Remote",
+            new Uri("https://controller.example/"),
+            EndpointTransportSecurity.HttpsSystemTrust);
+        MihomoControllerSessionRegistry registry = new MihomoControllerSessionRegistry();
+        MihomoControllerSession session = registry.Attach(
+            api,
+            endpoint,
+            EndpointCapabilityDefaults.Remote);
+
+        TargetCommand valid = new(endpoint.Id, session.Generation, EndpointCommand.ObserveStatus);
+        registry.EnsureTargetCommandAllowed(api, valid, "会话已切换，请重试。");
+
+        TargetCommand wrongEndpoint = new(new EndpointId("other"), session.Generation, EndpointCommand.ObserveStatus);
+        Assert.ThrowsExactly<InvalidOperationException>(() => registry.EnsureTargetCommandAllowed(
+            api,
+            wrongEndpoint,
+            "会话已切换，请重试。"));
+
+        TargetCommand wrongGeneration = new(endpoint.Id, session.Generation + 1, EndpointCommand.ObserveStatus);
+        Assert.ThrowsExactly<InvalidOperationException>(() => registry.EnsureTargetCommandAllowed(
+            api,
+            wrongGeneration,
+            "会话已切换，请重试。"));
+
+        TargetCommand localOnly = new(endpoint.Id, session.Generation, EndpointCommand.ControlTun);
+        EndpointCommandDeniedException denied = Assert.ThrowsExactly<EndpointCommandDeniedException>(() =>
+            registry.EnsureTargetCommandAllowed(api, localOnly, "会话已切换，请重试。"));
+        Assert.AreEqual(ErrorCode.EndpointCommandDenied, denied.ErrorCode);
+    }
 }

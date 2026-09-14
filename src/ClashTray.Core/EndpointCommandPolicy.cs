@@ -78,6 +78,16 @@ public sealed class EndpointCommandDeniedException : InvalidOperationException
 
 public static class EndpointCommandPolicy
 {
+    public static EndpointCapability GetRequiredCapability(EndpointCommand command)
+    {
+        if (!TryGetRequiredCapability(command, out EndpointCapability requiredCapability))
+        {
+            throw new ArgumentOutOfRangeException(nameof(command));
+        }
+
+        return requiredCapability;
+    }
+
     public static EndpointCommandDecision Evaluate(
         EndpointKind endpointKind,
         EndpointCapability capabilities,

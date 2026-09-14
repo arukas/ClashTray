@@ -122,4 +122,27 @@ public sealed class EndpointCommandPolicyTests
         Assert.AreEqual(EndpointCommand.ControlTun, exception.Command);
         Assert.AreEqual(EndpointCapability.ControlTun, exception.RequiredCapability);
     }
+
+    [TestMethod]
+    public void TargetCommandCarriesGenerationIdentityAndDerivedCapability()
+    {
+        TargetCommand command = new(
+            new EndpointId("office"),
+            17,
+            EndpointCommand.RefreshProvider);
+
+        Assert.AreEqual(new EndpointId("office"), command.EndpointId);
+        Assert.AreEqual(17, command.ExpectedGeneration);
+        Assert.AreEqual(EndpointCommand.RefreshProvider, command.Command);
+        Assert.AreEqual(EndpointCapability.RefreshProvider, command.RequiredCapability);
+    }
+
+    [TestMethod]
+    public void TargetCommandRejectsInvalidGenerationAndUnknownCommand()
+    {
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            new TargetCommand(new EndpointId("office"), 0, EndpointCommand.ObserveStatus));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() =>
+            new TargetCommand(new EndpointId("office"), 1, (EndpointCommand)int.MaxValue));
+    }
 }

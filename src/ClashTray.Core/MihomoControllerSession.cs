@@ -72,6 +72,29 @@ internal sealed class MihomoControllerSessionRegistry
             command);
     }
 
+    public void EnsureTargetCommandAllowed(
+        MihomoApiClient api,
+        TargetCommand targetCommand,
+        string staleSessionMessage)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+        ArgumentNullException.ThrowIfNull(targetCommand);
+        ArgumentException.ThrowIfNullOrWhiteSpace(staleSessionMessage);
+        MihomoControllerSession? current = Current;
+        if (current is null
+            || !ReferenceEquals(current.Api, api)
+            || current.Generation != targetCommand.ExpectedGeneration
+            || current.Endpoint.Id != targetCommand.EndpointId)
+        {
+            throw new InvalidOperationException(staleSessionMessage);
+        }
+
+        EndpointCommandPolicy.EnsureAllowed(
+            current.Endpoint.Kind,
+            current.Capabilities,
+            targetCommand.Command);
+    }
+
     private static void ValidateEndpoint(EndpointDescriptor endpoint)
         => EndpointDescriptorValidator.ValidateForActiveSession(endpoint);
 }
