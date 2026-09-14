@@ -16,6 +16,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly SnapshotPublishThrottle _throttledPublisher;
     private readonly AppPaths _paths;
     private readonly ConfigurationStore _configurationStore;
+    private readonly EndpointStore _endpointStore;
+    private readonly EndpointSecretStore _endpointSecretStore;
+    private readonly EndpointCertificateStore _endpointCertificateStore;
+    private readonly EndpointRemovalCoordinator _endpointRemovalCoordinator;
     private readonly NetworkRuleStore _networkRuleStore;
     private readonly ConfigurationSwitchJournalStore _configurationSwitchJournalStore;
     private readonly ConfigurationSwitchCoordinator _configurationSwitchCoordinator;
@@ -37,6 +41,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private Task? _logStreamTask;
     private AppSettings _settings = new();
     private RuntimeSnapshot _snapshot = CreateInitialSnapshot();
+    private IReadOnlyList<EndpointDescriptor> _remoteEndpointDescriptors = [];
+    private EndpointStoreLoadStatus _endpointStoreStatus = EndpointStoreLoadStatus.FirstRun;
+    private string? _endpointStoreMessage;
     private bool _usingServiceCore;
     private bool _coreHealthConfirmed;
     private readonly object _proxyRecoveryGate = new();
@@ -79,6 +86,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         bool useDefaultEnvironment = paths is null;
         _paths = paths ?? new AppPaths();
         _paths.EnsureDirectories();
+        _endpointStore = new EndpointStore(_paths);
+        _endpointSecretStore = new EndpointSecretStore(_paths);
+        _endpointCertificateStore = new EndpointCertificateStore(_paths);
+        _endpointRemovalCoordinator = new EndpointRemovalCoordinator(
+            _endpointStore,
+            _endpointSecretStore,
+            _endpointCertificateStore);
         _coreDiscovery = new CoreDiscovery(_paths);
         _configurationStore = new ConfigurationStore(
             _paths,
@@ -122,6 +136,21 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public AppSettings Settings => _settings;
 
+    public IReadOnlyList<EndpointDescriptor> Endpoints
+    {
+        get
+        {
+            List<EndpointDescriptor> endpoints =
+            [ControllerEndpointFactory.CreateLocal(_settings.ControllerPort)];
+            endpoints.AddRange(_remoteEndpointDescriptors);
+            return endpoints;
+        }
+    }
+
+    public EndpointStoreLoadStatus EndpointStoreStatus => _endpointStoreStatus;
+
+    public string? EndpointStoreMessage => _endpointStoreMessage;
+
     public NetworkSwitchRuleSet NetworkSwitchRules => _networkSwitchRuntimeController.Rules;
 
     public NetworkSwitchStatus NetworkSwitchStatus => _networkSwitchRuntimeController.Status;
@@ -144,6 +173,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         SettingsLoadResult settingsLoad = await _settingsStore.LoadWithStatusAsync(cancellationToken);
         _settings = settingsLoad.Settings;
+        await LoadEndpointCatalogAsync(cancellationToken);
         ConfigurationSwitchJournalLoadResult journalLoad =
             await _configurationSwitchJournalStore.LoadAsync(cancellationToken);
         ConfigurationSwitchJournal? recoveryJournal = journalLoad.Journal;
@@ -363,6 +393,59 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             _snapshot = _snapshot with { ErrorMessage = journalRecoveryMessage };
             Publish();
+        }
+    }
+
+    public async Task<EndpointCatalogLoadResult> LoadEndpointCatalogAsync(
+        CancellationToken cancellationToken = default)
+    {
+        EndpointCatalog catalog = new(
+            _endpointStore,
+            ControllerEndpointFactory.CreateLocal(_settings.ControllerPort));
+        EndpointCatalogLoadResult result = await catalog.LoadAsync(cancellationToken)
+            .ConfigureAwait(false);
+        _remoteEndpointDescriptors = result.Endpoints
+            .Where(endpoint => endpoint.Id != EndpointId.Local)
+            .ToArray();
+        _endpointStoreStatus = result.RemoteStoreStatus;
+        _endpointStoreMessage = result.Message;
+        return result;
+    }
+
+    public async Task<EndpointCatalogLoadResult> SaveRemoteEndpointAsync(
+        EndpointRecord endpoint,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _endpointStore.UpsertAsync(endpoint, cancellationToken).ConfigureAwait(false);
+            return await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    public async Task<EndpointRemovalResult> RemoveRemoteEndpointAsync(
+        EndpointId endpointId,
+        CancellationToken cancellationToken = default)
+    {
+        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EndpointRemovalResult result = await _endpointRemovalCoordinator.RemoveAsync(
+                    endpointId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
+            return result;
+        }
+        finally
+        {
+            _operationLock.Release();
         }
     }
 
