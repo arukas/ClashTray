@@ -244,7 +244,10 @@ public static class EndpointTransportFactory
     private static bool IsCertificateAuthority(X509Certificate2 certificate) =>
         certificate.Extensions
             .OfType<X509BasicConstraintsExtension>()
-            .Any(extension => extension.CertificateAuthority);
+            .Any(extension => extension.CertificateAuthority)
+        && certificate.Extensions
+            .OfType<X509KeyUsageExtension>()
+            .All(extension => (extension.KeyUsages & X509KeyUsageFlags.KeyCertSign) != 0);
 }
 
 internal static class EndpointCertificateValidator

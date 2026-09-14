@@ -68,11 +68,18 @@ public sealed class EndpointTransportFactoryTests
             endpoint,
             new EndpointTransportOptions(CustomCaCertificate: ca));
         using ClientWebSocket socket = transport.CreateWebSocket();
+        using X509Certificate2 invalidUsageCa = CreateCertificateAuthority(
+            "ClashTray Invalid Usage CA",
+            X509KeyUsageFlags.DigitalSignature);
 
         Assert.AreEqual("https://controller.example.test/", transport.BaseUri.AbsoluteUri);
         Assert.AreEqual("wss://controller.example.test/", transport.WebSocketUri.AbsoluteUri);
         Assert.ThrowsExactly<InvalidOperationException>(
             () => EndpointTransportFactory.Create(endpoint));
+        Assert.ThrowsExactly<InvalidOperationException>(
+            () => EndpointTransportFactory.Create(
+                endpoint,
+                new EndpointTransportOptions(CustomCaCertificate: invalidUsageCa)));
         Assert.AreEqual(WebSocketState.None, socket.State);
     }
 
@@ -148,6 +155,13 @@ public sealed class EndpointTransportFactoryTests
     }
 
     private static X509Certificate2 CreateCaCertificate(string commonName)
+        => CreateCertificateAuthority(
+            commonName,
+            X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign);
+
+    private static X509Certificate2 CreateCertificateAuthority(
+        string commonName,
+        X509KeyUsageFlags keyUsage)
     {
         using RSA key = RSA.Create(2048);
         CertificateRequest request = new(
@@ -157,7 +171,7 @@ public sealed class EndpointTransportFactoryTests
             RSASignaturePadding.Pkcs1);
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
         request.CertificateExtensions.Add(new X509KeyUsageExtension(
-            X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign,
+            keyUsage,
             critical: true));
         return request.CreateSelfSigned(
             DateTimeOffset.UtcNow.AddMinutes(-1),
