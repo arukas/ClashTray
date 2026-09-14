@@ -15,19 +15,19 @@ public sealed class EndpointTransportFactoryTests
         EndpointDescriptor endpoint = EndpointUriNormalizer.CreateRemoteDescriptor(
             new EndpointId("office"),
             "Office",
-            new Uri("HTTPS://Mihomo.Example.Test:443/controller"));
+            new Uri("HTTPS://Mihomo.Example.Test:443"));
 
         using EndpointTransport transport = EndpointTransportFactory.Create(
             endpoint,
             new EndpointTransportOptions("test-secret"));
 
-        Assert.AreEqual("https://mihomo.example.test/controller/", transport.BaseUri.AbsoluteUri);
-        Assert.AreEqual("wss://mihomo.example.test/controller/", transport.WebSocketUri.AbsoluteUri);
+        Assert.AreEqual("https://mihomo.example.test/", transport.BaseUri.AbsoluteUri);
+        Assert.AreEqual("wss://mihomo.example.test/", transport.WebSocketUri.AbsoluteUri);
         Assert.AreEqual("Bearer", transport.HttpClient.DefaultRequestHeaders.Authorization?.Scheme);
         Assert.AreEqual("test-secret", transport.HttpClient.DefaultRequestHeaders.Authorization?.Parameter);
         Assert.IsTrue(transport.BypassesSystemProxy);
         Assert.AreEqual(
-            "wss://mihomo.example.test/controller/logs?level=debug",
+            "wss://mihomo.example.test/logs?level=debug",
             transport.BuildWebSocketUri("/logs?level=debug").AbsoluteUri);
 
         using ClientWebSocket socket = transport.CreateWebSocket();
@@ -35,22 +35,22 @@ public sealed class EndpointTransportFactoryTests
     }
 
     [TestMethod]
-    public void ExplicitHttpTransportUsesWsAndPreservesBasePath()
+    public void ExplicitHttpTransportUsesWsAtControllerOrigin()
     {
         EndpointDescriptor endpoint = EndpointUriNormalizer.CreateRemoteDescriptor(
             new EndpointId("lab"),
             "Lab",
-            new Uri("http://mihomo.example.test/controller"),
+            new Uri("http://mihomo.example.test"),
             allowExplicitHttp: true);
 
         using EndpointTransport transport = EndpointTransportFactory.Create(endpoint);
 
         Assert.AreEqual(EndpointTransportSecurity.HttpExplicitlyConfirmed, endpoint.Security);
-        Assert.AreEqual("http://mihomo.example.test/controller/", transport.BaseUri.AbsoluteUri);
-        Assert.AreEqual("ws://mihomo.example.test/controller/", transport.WebSocketUri.AbsoluteUri);
+        Assert.AreEqual("http://mihomo.example.test/", transport.BaseUri.AbsoluteUri);
+        Assert.AreEqual("ws://mihomo.example.test/", transport.WebSocketUri.AbsoluteUri);
         Assert.IsTrue(transport.BypassesSystemProxy);
         Assert.AreEqual(
-            "ws://mihomo.example.test/controller/logs",
+            "ws://mihomo.example.test/logs",
             transport.BuildWebSocketUri("logs").AbsoluteUri);
     }
 

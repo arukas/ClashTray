@@ -6,11 +6,11 @@ namespace ClashTray.Core.Tests;
 public sealed class EndpointUriNormalizerTests
 {
     [TestMethod]
-    public void NormalizesHttpsHostDefaultPortAndBasePath()
+    public void NormalizesHttpsHostDefaultPortAndControllerOrigin()
     {
-        Uri normalized = EndpointUriNormalizer.NormalizeBaseUri(" HTTPS://Example.COM:443/mihomo ");
+        Uri normalized = EndpointUriNormalizer.NormalizeBaseUri(" HTTPS://Example.COM:443/ ");
 
-        Assert.AreEqual("https://example.com/mihomo/", normalized.AbsoluteUri);
+        Assert.AreEqual("https://example.com/", normalized.AbsoluteUri);
         Assert.IsTrue(normalized.IsDefaultPort);
     }
 
@@ -20,12 +20,19 @@ public sealed class EndpointUriNormalizerTests
         EndpointDescriptor descriptor = EndpointUriNormalizer.CreateRemoteDescriptor(
             new EndpointId("office"),
             "Office controller",
-            new Uri("https://mihomo.example.test/controller"));
+            new Uri("https://mihomo.example.test"));
 
         Assert.AreEqual(EndpointKind.Remote, descriptor.Kind);
         Assert.AreEqual(EndpointTransportSecurity.HttpsSystemTrust, descriptor.Security);
         Assert.AreEqual("office", descriptor.Id.Value);
-        Assert.AreEqual("https://mihomo.example.test/controller/", descriptor.BaseUri.AbsoluteUri);
+        Assert.AreEqual("https://mihomo.example.test/", descriptor.BaseUri.AbsoluteUri);
+    }
+
+    [TestMethod]
+    public void RejectsReverseProxyPathPrefixes()
+    {
+        Assert.ThrowsExactly<UriFormatException>(
+            () => EndpointUriNormalizer.NormalizeBaseUri("https://mihomo.example.test/controller"));
     }
 
     [TestMethod]

@@ -17,7 +17,7 @@ public sealed class EndpointStoreTests
             EndpointUriNormalizer.CreateRemoteDescriptor(
                 new EndpointId("office"),
                 "Office",
-                new Uri("HTTPS://Mihomo.Example.Test/controller")),
+                new Uri("HTTPS://Mihomo.Example.Test")),
             "office-secret");
 
         try

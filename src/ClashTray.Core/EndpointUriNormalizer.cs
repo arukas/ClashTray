@@ -129,8 +129,7 @@ public static class EndpointUriNormalizer
             return "/";
         }
 
-        return path.EndsWith('/')
-            ? path
-            : path + "/";
+        throw new UriFormatException(
+            "Endpoint URI must use the controller origin without a path prefix.");
     }
 }
