@@ -1163,7 +1163,22 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public Task UpdateNetworkSwitchRulesAsync(
         NetworkSwitchRuleSet rules,
         CancellationToken cancellationToken = default) =>
-        _networkSwitchRuntimeController.SetRulesAsync(rules, cancellationToken);
+        UpdateNetworkSwitchRulesCoreAsync(rules, cancellationToken);
+
+    private async Task UpdateNetworkSwitchRulesCoreAsync(
+        NetworkSwitchRuleSet rules,
+        CancellationToken cancellationToken)
+    {
+        await _operationLock.WaitAsync(cancellationToken);
+        try
+        {
+            await _networkSwitchRuntimeController.SetRulesAsync(rules, cancellationToken);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
 
     public void ClearNetworkSwitchManualOverride()
     {

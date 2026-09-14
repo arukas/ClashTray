@@ -770,6 +770,53 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task NetworkSwitchRuleSaveWaitsForSettingsOperation()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        BlockingSettingsStore settings = new(new AppSettings());
+        FakeSystemProxyController proxy = new(SystemProxyState.Off);
+        await using ClashTrayRuntime runtime = new(paths, null, null, settings, proxy);
+        Task? settingsUpdate = null;
+        Task? rulesUpdate = null;
+
+        try
+        {
+            await runtime.InitializeAsync();
+            settings.BlockNextSave();
+            settingsUpdate = runtime.UpdateSettingsAsync(runtime.Settings with { Theme = "dark" });
+            await settings.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            rulesUpdate = runtime.UpdateNetworkSwitchRulesAsync(
+                new NetworkSwitchRuleSet(false, null, []));
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+            Assert.IsFalse(rulesUpdate.IsCompleted);
+
+            settings.ReleaseSave();
+            await Task.WhenAll(settingsUpdate, rulesUpdate);
+            Assert.IsFalse(runtime.NetworkSwitchRules.AutomaticSwitchingEnabled);
+        }
+        finally
+        {
+            settings.ReleaseSave();
+            if (settingsUpdate is not null)
+            {
+                await settingsUpdate.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (rulesUpdate is not null)
+            {
+                await rulesUpdate.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public void MihomoDataParserPreservesZeroTrafficTotals()
     {
         using JsonDocument document = JsonDocument.Parse(
