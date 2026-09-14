@@ -12,7 +12,8 @@ public sealed class EndpointSession : IAsyncDisposable
         EndpointTransport transport,
         EndpointCapability capabilities,
         long generation,
-        long selectionRevision)
+        long selectionRevision,
+        EndpointHandshakeResult? handshake = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(generation);
@@ -24,6 +25,11 @@ public sealed class EndpointSession : IAsyncDisposable
         Capabilities = capabilities;
         Generation = generation;
         SelectionRevision = selectionRevision;
+        Handshake = handshake ?? new EndpointHandshakeResult(
+            EndpointSessionState.Connected,
+            Version: null,
+            capabilities,
+            ErrorMessage: null);
         ConnectedAt = DateTimeOffset.UtcNow;
     }
 
@@ -36,6 +42,8 @@ public sealed class EndpointSession : IAsyncDisposable
     public long Generation { get; }
 
     public long SelectionRevision { get; }
+
+    public EndpointHandshakeResult Handshake { get; }
 
     public DateTimeOffset ConnectedAt { get; }
 
