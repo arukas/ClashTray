@@ -566,6 +566,55 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task CoreUpdateSerializesRefreshUntilInstallCompletes()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        BlockingInstallService service = new();
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(
+            paths,
+            null,
+            service,
+            null);
+        Task? update = null;
+        Task? refresh = null;
+
+        try
+        {
+            update = runtime.InstallCoreUpdateAsync(new CoreUpdateManifest(
+                "v1.19.30",
+                new Uri("https://example.test/mihomo.zip"),
+                new string('0', 64)));
+            await service.InstallEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            refresh = runtime.RefreshDataAsync();
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+            Assert.IsFalse(refresh.IsCompleted);
+
+            service.ReleaseInstall();
+            await Task.WhenAll(update, refresh);
+        }
+        finally
+        {
+            service.ReleaseInstall();
+            if (update is not null)
+            {
+                await update.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (refresh is not null)
+            {
+                await refresh.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public void MihomoDataParserPreservesZeroTrafficTotals()
     {
         using JsonDocument document = JsonDocument.Parse(
@@ -1323,6 +1372,35 @@ public sealed class RuntimeStateTests
             {
                 Content = new StringContent(body)
             };
+    }
+
+    private sealed class BlockingInstallService : IServicePipeClient
+    {
+        private readonly TaskCompletionSource<bool> _releaseInstall = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<bool> InstallEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void ReleaseInstall() => _releaseInstall.TrySetResult(true);
+
+        public async Task<ServiceResponse> SendAsync(
+            ServiceCommand command,
+            string? payload = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (command == ServiceCommand.InstallCore)
+            {
+                InstallEntered.TrySetResult(true);
+                await _releaseInstall.Task.WaitAsync(cancellationToken);
+            }
+
+            return new ServiceResponse(
+                Guid.NewGuid(),
+                true,
+                TunState.Off,
+                Payload: "mihomo.exe");
+        }
     }
 
     private sealed class RuntimeControllerHandler : HttpMessageHandler

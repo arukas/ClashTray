@@ -2111,90 +2111,98 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public async Task<string> InstallCoreUpdateAsync(CoreUpdateManifest manifest, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        bool wasRunning = _snapshot.Core.State == CoreState.Running;
-        if (wasRunning)
-        {
-            await StopCoreAsync(cancellationToken);
-        }
-
-        bool installed = false;
-        bool rolledBack = false;
+        await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            ServiceCoreUpdatePayload payload = new(
-                manifest.Version,
-                manifest.DownloadUri,
-                manifest.Sha256);
-            ServiceResponse response = await _localDevice.InstallCoreAsync(payload, cancellationToken);
-            if (!response.Succeeded)
-            {
-                throw new InvalidOperationException(response.Error ?? "ClashTray 服务无法安装 Mihomo 核心。");
-            }
-
-            installed = true;
-            string path = response.Payload ?? _coreDiscovery.ManagedExecutablePath;
-            _snapshot = _snapshot with { Core = _snapshot.Core with { Version = FindCoreVersion(), ErrorMessage = null }, ErrorMessage = null };
-            Publish();
+            bool wasRunning = _snapshot.Core.State == CoreState.Running;
             if (wasRunning)
             {
-                await StartCoreAsync(cancellationToken);
-                if (!IsCoreHealthy())
+                await StopCoreCoreAsync(operationLockHeld: true, cancellationToken);
+            }
+
+            bool installed = false;
+            bool rolledBack = false;
+            try
+            {
+                ServiceCoreUpdatePayload payload = new(
+                    manifest.Version,
+                    manifest.DownloadUri,
+                    manifest.Sha256);
+                ServiceResponse response = await _localDevice.InstallCoreAsync(payload, cancellationToken);
+                if (!response.Succeeded)
                 {
-                    await StopCoreAsync(CancellationToken.None);
-                    await RollbackCoreUpdateAsync(CancellationToken.None);
-                    rolledBack = true;
-                    _snapshot = _snapshot with
-                    {
-                        Core = _snapshot.Core with
-                        {
-                            Version = FindCoreVersion(),
-                            ErrorMessage = "新核心健康检查失败，已自动回滚。"
-                        },
-                        ErrorMessage = "新核心健康检查失败，已自动回滚。"
-                    };
-                    Publish();
-                    await StartCoreAsync(CancellationToken.None);
+                    throw new InvalidOperationException(response.Error ?? "ClashTray 服务无法安装 Mihomo 核心。");
+                }
+
+                installed = true;
+                string path = response.Payload ?? _coreDiscovery.ManagedExecutablePath;
+                _snapshot = _snapshot with { Core = _snapshot.Core with { Version = FindCoreVersion(), ErrorMessage = null }, ErrorMessage = null };
+                Publish();
+                if (wasRunning)
+                {
+                    await StartCoreCoreAsync(operationLockHeld: true, cancellationToken);
                     if (!IsCoreHealthy())
                     {
-                        throw new InvalidOperationException("核心更新失败，且回滚后的旧核心也未能恢复。");
+                        await StopCoreCoreAsync(operationLockHeld: true, CancellationToken.None);
+                        await RollbackCoreUpdateAsync(CancellationToken.None);
+                        rolledBack = true;
+                        _snapshot = _snapshot with
+                        {
+                            Core = _snapshot.Core with
+                            {
+                                Version = FindCoreVersion(),
+                                ErrorMessage = "新核心健康检查失败，已自动回滚。"
+                            },
+                            ErrorMessage = "新核心健康检查失败，已自动回滚。"
+                        };
+                        Publish();
+                        await StartCoreCoreAsync(operationLockHeld: true, CancellationToken.None);
+                        if (!IsCoreHealthy())
+                        {
+                            throw new InvalidOperationException("核心更新失败，且回滚后的旧核心也未能恢复。");
+                        }
+
+                        _logBuffer.Add(new LogEntry(
+                            DateTimeOffset.UtcNow,
+                            "ClashTray",
+                            "warning",
+                            "新核心健康检查失败，已自动回滚并恢复旧核心。"));
+                        _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
+                        Publish();
+                        throw new InvalidOperationException("核心更新健康检查失败，已自动回滚并恢复旧核心。");
+                    }
+                }
+
+                return path;
+            }
+            catch
+            {
+                if (installed && !rolledBack)
+                {
+                    if (_snapshot.Core.State == CoreState.Running || _api is not null || _usingServiceCore)
+                    {
+                        await StopCoreCoreAsync(operationLockHeld: true, CancellationToken.None);
                     }
 
-                    _logBuffer.Add(new LogEntry(
-                        DateTimeOffset.UtcNow,
-                        "ClashTray",
-                        "warning",
-                        "新核心健康检查失败，已自动回滚并恢复旧核心。"));
-                    _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
+                    await RollbackCoreUpdateAsync(CancellationToken.None);
+                    _snapshot = _snapshot with
+                    {
+                        Core = _snapshot.Core with { Version = FindCoreVersion() }
+                    };
                     Publish();
-                    throw new InvalidOperationException("核心更新健康检查失败，已自动回滚并恢复旧核心。");
                 }
-            }
 
-            return path;
+                if (wasRunning && !IsCoreHealthy())
+                {
+                    await StartCoreCoreAsync(operationLockHeld: true, CancellationToken.None);
+                }
+
+                throw;
+            }
         }
-        catch
+        finally
         {
-            if (installed && !rolledBack)
-            {
-                if (_snapshot.Core.State == CoreState.Running || _api is not null || _usingServiceCore)
-                {
-                    await StopCoreAsync(CancellationToken.None);
-                }
-
-                await RollbackCoreUpdateAsync(CancellationToken.None);
-                _snapshot = _snapshot with
-                {
-                    Core = _snapshot.Core with { Version = FindCoreVersion() }
-                };
-                Publish();
-            }
-
-            if (wasRunning && !IsCoreHealthy())
-            {
-                await StartCoreAsync(CancellationToken.None);
-            }
-
-            throw;
+            _operationLock.Release();
         }
     }
 
