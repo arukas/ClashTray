@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Net.WebSockets;
+using System.Security.Authentication;
+using System.Security.Cryptography;
 using System.Text.Json;
 using ClashTray.Contracts;
 
@@ -50,11 +52,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly object _remoteRefreshGate = new();
     private readonly SemaphoreSlim _remoteRefreshLifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _remoteRefreshReadLock = new(1, 1);
+    private BoundedLogBuffer _remoteLogBuffer = new(500);
     private CancellationTokenSource? _remoteRefreshCts;
     private Task? _remoteRefreshTask;
     private RemoteControllerData? _remoteControllerData;
     private RemoteRefreshCompletion? _remoteRefreshCompletion;
     private readonly Func<TimeSpan, CancellationToken, Task> _remoteRefreshDelayAsync;
+    private readonly Func<EndpointSession, EndpointSessionStatusEventArgs, CancellationToken, Task> _remoteLogStreamRunner;
     private bool _usingServiceCore;
     private bool _coreHealthConfirmed;
     private readonly object _proxyRecoveryGate = new();
@@ -107,7 +111,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         IConfigurationCandidateValidator? candidateValidator = null,
         INetworkContextSource? networkContextSource = null,
         IEndpointSessionConnector? endpointSessionConnector = null,
-        Func<TimeSpan, CancellationToken, Task>? remoteRefreshDelayAsync = null)
+        Func<TimeSpan, CancellationToken, Task>? remoteRefreshDelayAsync = null,
+        Func<EndpointSession, EndpointSessionStatusEventArgs, CancellationToken, Task>? remoteLogStreamRunner = null)
     {
         bool useDefaultEnvironment = paths is null;
         _paths = paths ?? new AppPaths();
@@ -170,6 +175,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             OnScheduledSubscriptionRefreshFailed,
             OnScheduledSubscriptionCycleFailed);
         _remoteRefreshDelayAsync = remoteRefreshDelayAsync ?? Task.Delay;
+        _remoteLogStreamRunner = remoteLogStreamRunner ?? RunRemoteLogStreamAsync;
         _throttledPublisher = new SnapshotPublishThrottle(Publish, _runtimeCts.Token);
         _processManager.StateChanged += OnProcessStateChanged;
         _processManager.LogLineReceived += OnProcessLogLine;
@@ -2917,6 +2923,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             previousCompletion = _remoteRefreshCompletion;
             _remoteRefreshCts = null;
             _remoteControllerData = null;
+            _remoteLogBuffer = new BoundedLogBuffer(500);
             _remoteRefreshCompletion = status.State == EndpointSessionState.Connected
                 ? new RemoteRefreshCompletion(
                     status.Generation,
@@ -3038,6 +3045,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationTokenSource refreshCts)
     {
         bool initialRefreshPending = true;
+        bool remoteLogStreamStarted = false;
+        Task? remoteLogStreamTask = null;
         TimeSpan retryDelay = RemoteRefreshRetryDelay;
         try
         {
@@ -3054,6 +3063,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     {
                         return;
                     }
+
+                    if (!remoteLogStreamStarted)
+                    {
+                        remoteLogStreamStarted = true;
+                        remoteLogStreamTask = _remoteLogStreamRunner(
+                            session,
+                            status,
+                            refreshCts.Token);
+                    }
+
                     initialRefreshPending = false;
                     retryDelay = RemoteRefreshRetryDelay;
                     await _remoteRefreshDelayAsync(RemoteRefreshInterval, refreshCts.Token)
@@ -3110,6 +3129,24 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 PublishAppSnapshot();
             }
         }
+        finally
+        {
+            if (remoteLogStreamTask is not null)
+            {
+                try
+                {
+                    await refreshCts.CancelAsync().ConfigureAwait(false);
+                    await remoteLogStreamTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (refreshCts.IsCancellationRequested)
+                {
+                }
+                catch (Exception exception)
+                {
+                    LogControllerFailure("远程 Mihomo 实时日志", "/logs", exception, 0);
+                }
+            }
+        }
     }
 
     private async Task<bool> RefreshRemoteControllerSnapshotAsync(
@@ -3136,6 +3173,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     session.Handshake.Version,
                     $"mihomo/{status.Endpoint.DisplayName}",
                     previousData,
+                    includeLogs: previousData is null,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -3146,6 +3184,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             lock (_remoteRefreshGate)
             {
+                if (previousData is null)
+                {
+                    foreach (LogEntry entry in snapshot.Logs)
+                    {
+                        _remoteLogBuffer.Add(entry);
+                    }
+                }
+
+                snapshot = snapshot with { Logs = _remoteLogBuffer.Snapshot() };
                 _remoteControllerData = new RemoteControllerData(
                     status.Generation,
                     status.SelectionRevision,
@@ -3824,7 +3871,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 using ClientWebSocket socket = await api.ConnectWebSocketAsync(path, cancellationToken);
                 retryDelay = TimeSpan.FromSeconds(1);
-                await ReceiveLogMessagesAsync(socket, cancellationToken);
+                await ReceiveLogMessagesAsync(
+                    socket,
+                    "mihomo",
+                    AddMihomoLog,
+                    cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -3861,8 +3912,114 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    private async Task ReceiveLogMessagesAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    private async Task RunRemoteLogStreamAsync(
+        EndpointSession session,
+        EndpointSessionStatusEventArgs status,
+        CancellationToken cancellationToken)
     {
+        TimeSpan retryDelay = TimeSpan.FromSeconds(1);
+        string path = $"/logs?level={Uri.EscapeDataString(_settings.LogLevel)}&format=structured";
+        string logSource = $"mihomo/{status.Endpoint.DisplayName}";
+        while (!cancellationToken.IsCancellationRequested
+            && IsCurrentRemoteSession(session, status))
+        {
+            try
+            {
+                using ClientWebSocket socket = await session.ConnectWebSocketAsync(
+                    path,
+                    cancellationToken).ConfigureAwait(false);
+                retryDelay = TimeSpan.FromSeconds(1);
+                await ReceiveLogMessagesAsync(
+                    socket,
+                    logSource,
+                    entry => AddRemoteLog(session, status, entry),
+                    cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (WebSocketException)
+            {
+            }
+            catch (HttpRequestException)
+            {
+            }
+            catch (IOException)
+            {
+            }
+            catch (AuthenticationException)
+            {
+            }
+            catch (CryptographicException)
+            {
+            }
+
+            if (cancellationToken.IsCancellationRequested
+                || !IsCurrentRemoteSession(session, status))
+            {
+                break;
+            }
+
+            LogControllerFailure(
+                "远程 Mihomo 实时日志",
+                "/logs",
+                new IOException("远程日志 WebSocket 已断开。"),
+                retryDelay == TimeSpan.FromSeconds(1) ? 0 : 1);
+            _throttledPublisher.Queue();
+            try
+            {
+                await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            retryDelay = TimeSpan.FromSeconds(Math.Min(30, retryDelay.TotalSeconds * 2));
+        }
+    }
+
+    private void AddRemoteLog(
+        EndpointSession session,
+        EndpointSessionStatusEventArgs status,
+        LogEntry entry)
+    {
+        lock (_remoteRefreshGate)
+        {
+            if (!IsCurrentRemoteSession(session, status)
+                || _remoteControllerData is not { } currentData
+                || currentData.Generation != status.Generation
+                || currentData.SelectionRevision != status.SelectionRevision)
+            {
+                return;
+            }
+
+            _remoteLogBuffer.Add(entry);
+            _remoteControllerData = currentData with
+            {
+                Snapshot = currentData.Snapshot with
+                {
+                    Logs = _remoteLogBuffer.Snapshot()
+                }
+            };
+        }
+
+        _throttledPublisher.Queue();
+    }
+
+    private static async Task ReceiveLogMessagesAsync(
+        ClientWebSocket socket,
+        string logSource,
+        Action<LogEntry> append,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(socket);
+        ArgumentException.ThrowIfNullOrWhiteSpace(logSource);
+        ArgumentNullException.ThrowIfNull(append);
         byte[] receiveBuffer = new byte[16 * 1024];
         while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
         {
@@ -3907,9 +4064,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             try
             {
                 using JsonDocument document = await JsonDocument.ParseAsync(message, cancellationToken: cancellationToken);
-                foreach (LogEntry entry in MihomoDataParser.ParseLogs(document, "mihomo"))
+                foreach (LogEntry entry in MihomoDataParser.ParseLogs(document, logSource))
                 {
-                    AddMihomoLog(entry);
+                    append(entry);
                 }
             }
             catch (JsonException)

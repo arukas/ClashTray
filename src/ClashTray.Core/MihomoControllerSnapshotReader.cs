@@ -32,6 +32,7 @@ public sealed class MihomoControllerSnapshotReader
         string? version,
         string logSource,
         MihomoControllerSnapshotData? previous = null,
+        bool includeLogs = true,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(api);
@@ -115,11 +116,16 @@ public sealed class MihomoControllerSnapshotReader
                 },
                 (previousProviders, previousRuleProviders),
                 cancellationToken);
-        Task<ReadResult<IReadOnlyList<LogEntry>>> logsTask = ReadDocumentAsync(
-            () => api.GetLogsAsync(cancellationToken: cancellationToken),
-            document => MihomoDataParser.ParseLogs(document, logSource),
-            previousLogs,
-            cancellationToken);
+        Task<ReadResult<IReadOnlyList<LogEntry>>> logsTask = includeLogs
+            ? ReadDocumentAsync(
+                () => api.GetLogsAsync(cancellationToken: cancellationToken),
+                document => MihomoDataParser.ParseLogs(document, logSource),
+                previousLogs,
+                cancellationToken)
+            : Task.FromResult(new ReadResult<IReadOnlyList<LogEntry>>(
+                true,
+                previousLogs,
+                ErrorMessage: null));
 
         await Task.WhenAll(
             configurationTask,

@@ -215,7 +215,8 @@ public sealed class RuntimeEndpointTests
             null,
             null,
             connector,
-            (_, cancellationToken) => Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken));
+            (_, cancellationToken) => Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken),
+            remoteLogStreamRunner: (_, _, _) => Task.CompletedTask);
         EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
             new EndpointId("office"),
             "Office",
@@ -372,7 +373,8 @@ public sealed class RuntimeEndpointTests
             null,
             null,
             connector,
-            (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
+            (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken),
+            remoteLogStreamRunner: (_, _, _) => Task.CompletedTask);
         EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
             new EndpointId("office"),
             "Office",
@@ -389,6 +391,69 @@ public sealed class RuntimeEndpointTests
 
             Assert.AreEqual(31, runtime.AppSnapshot.ActiveController.Status?.UploadBytes);
             Assert.AreEqual(32, runtime.AppSnapshot.ActiveController.Status?.DownloadBytes);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task ActiveRemoteLogStreamIsCancelledWhenEndpointChanges()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        StaticConnector connector = new();
+        TaskCompletionSource<bool> streamStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> streamCancelled = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task RunRemoteLogStreamAsync(
+            EndpointSession session,
+            EndpointSessionStatusEventArgs status,
+            CancellationToken cancellationToken)
+        {
+            Assert.IsNotNull(session);
+            Assert.AreEqual(new EndpointId("office"), status.Endpoint.Id);
+            streamStarted.TrySetResult(true);
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                streamCancelled.TrySetResult(true);
+            }
+        }
+
+        await using ClashTrayRuntime runtime = new(
+            paths,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            connector,
+            (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken),
+            RunRemoteLogStreamAsync);
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("https://office.example.test"));
+
+        try
+        {
+            await runtime.SaveRemoteEndpointAsync(new EndpointRecord(remote));
+            await runtime.SelectEndpointAsync(remote.Id);
+            await streamStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            await runtime.SelectEndpointAsync(EndpointId.Local);
+            await streamCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.AreEqual(EndpointId.Local, runtime.EndpointSessionStatus.Endpoint.Id);
+            Assert.AreEqual(EndpointSessionState.Disconnected, runtime.EndpointSessionStatus.State);
         }
         finally
         {
@@ -417,7 +482,8 @@ public sealed class RuntimeEndpointTests
             null,
             null,
             connector,
-            (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
+            (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken),
+            remoteLogStreamRunner: (_, _, _) => Task.CompletedTask);
         EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
             new EndpointId("office"),
             "Office",
