@@ -159,6 +159,74 @@ public sealed class RuntimeEndpointTests
         }
     }
 
+    [TestMethod]
+    public async Task RuntimePublishesRemoteSessionStateAndDisconnectsStaleMetadata()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        StaticConnector connector = new();
+        await using ClashTrayRuntime runtime = new(
+            paths,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            connector);
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("https://office.example.test"));
+
+        try
+        {
+            await runtime.SaveRemoteEndpointAsync(new EndpointRecord(remote));
+            List<EndpointSessionState> publishedStates = [];
+            runtime.AppSnapshotChanged += (_, snapshot) =>
+            {
+                if (snapshot.ActiveController.Endpoint.Id == remote.Id)
+                {
+                    publishedStates.Add(snapshot.ActiveController.State);
+                }
+            };
+
+            EndpointSession? session = await runtime.SelectEndpointAsync(remote.Id);
+
+            Assert.IsNotNull(session);
+            Assert.AreEqual(CoreState.Missing, runtime.AppSnapshot.LocalDevice.CoreState);
+            Assert.AreEqual(remote.Id, runtime.AppSnapshot.ActiveController.Endpoint.Id);
+            Assert.AreEqual(EndpointSessionState.Connected, runtime.AppSnapshot.ActiveController.State);
+            Assert.AreEqual(EndpointCapabilityDefaults.Remote, runtime.AppSnapshot.ActiveController.Capabilities);
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    EndpointSessionState.Connecting,
+                    EndpointSessionState.Connected
+                },
+                publishedStates);
+
+            await runtime.UpdateRemoteEndpointAsync(
+                remote.Id,
+                remote with
+                {
+                    DisplayName = "Office renamed",
+                    BaseUri = new Uri("https://new-office.example.test")
+                },
+                secret: null,
+                customCaCertificate: null,
+                insecureHttpAcknowledgedAtUtc: null);
+
+            Assert.AreEqual(EndpointId.Local, runtime.AppSnapshot.ActiveController.Endpoint.Id);
+            Assert.AreEqual(EndpointSessionState.Disconnected, runtime.EndpointSessionStatus.State);
+            Assert.ThrowsExactly<ObjectDisposedException>(() => session!.BuildWebSocketUri("/logs"));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static string CreateRoot() => Path.Combine(
         Path.GetTempPath(),
         "ClashTrayTests",
@@ -169,6 +237,28 @@ public sealed class RuntimeEndpointTests
         if (Directory.Exists(root))
         {
             Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class StaticConnector : IEndpointSessionConnector
+    {
+        [System.Diagnostics.CodeAnalysis.SuppressMessage(
+            "Reliability",
+            "CA2000:Dispose objects before losing scope",
+            Justification = "The EndpointSession takes ownership of the transport and disposes it asynchronously.")]
+        public Task<EndpointSession> ConnectAsync(
+            EndpointDescriptor endpoint,
+            long generation,
+            long selectionRevision,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EndpointTransport transport = EndpointTransportFactory.Create(endpoint);
+            return Task.FromResult(new EndpointSession(
+                transport,
+                EndpointCapabilityDefaults.Remote,
+                generation,
+                selectionRevision));
         }
     }
 }

@@ -19,6 +19,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly EndpointStore _endpointStore;
     private readonly EndpointSecretStore _endpointSecretStore;
     private readonly EndpointCertificateStore _endpointCertificateStore;
+    private readonly EndpointTransportOptionsResolver _endpointTransportOptionsResolver;
+    private readonly EndpointSessionManager _endpointSessions;
     private readonly EndpointRemovalCoordinator _endpointRemovalCoordinator;
     private readonly EndpointProvisioningCoordinator _endpointProvisioningCoordinator;
     private readonly NetworkRuleStore _networkRuleStore;
@@ -71,7 +73,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     }
 
     public ClashTrayRuntime(AppPaths? paths, INetworkContextSource? networkContextSource)
-        : this(paths, null, null, null, null, null, networkContextSource)
+        : this(paths, null, null, null, null, null, networkContextSource, null)
     {
     }
 
@@ -82,7 +84,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         ISettingsStore? settingsStore,
         ISystemProxyController? systemProxy = null,
         IConfigurationCandidateValidator? candidateValidator = null,
-        INetworkContextSource? networkContextSource = null)
+        INetworkContextSource? networkContextSource = null,
+        IEndpointSessionConnector? endpointSessionConnector = null)
     {
         bool useDefaultEnvironment = paths is null;
         _paths = paths ?? new AppPaths();
@@ -90,10 +93,22 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _endpointStore = new EndpointStore(_paths);
         _endpointSecretStore = new EndpointSecretStore(_paths);
         _endpointCertificateStore = new EndpointCertificateStore(_paths);
+        _endpointTransportOptionsResolver = new EndpointTransportOptionsResolver(
+            _endpointSecretStore,
+            _endpointCertificateStore);
+        IEndpointSessionConnector resolvedEndpointSessionConnector = endpointSessionConnector
+            ?? new MihomoEndpointSessionConnector(
+                ResolveEndpointRecordAsync,
+                _endpointTransportOptionsResolver);
+        _endpointSessions = new EndpointSessionManager(
+            ControllerEndpointFactory.CreateLocal(_settings.ControllerPort),
+            resolvedEndpointSessionConnector);
+        _endpointSessions.StatusChanged += OnEndpointSessionStatusChanged;
         _endpointRemovalCoordinator = new EndpointRemovalCoordinator(
             _endpointStore,
             _endpointSecretStore,
-            _endpointCertificateStore);
+            _endpointCertificateStore,
+            _endpointSessions);
         _endpointProvisioningCoordinator = new EndpointProvisioningCoordinator(
             _endpointStore,
             _endpointSecretStore,
@@ -143,6 +158,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _snapshot,
         _settings,
         Endpoints,
+        activeController: BuildActiveControllerSnapshot(),
         controllerGeneration: ControllerGeneration);
 
     public AppSettings Settings => _settings;
@@ -161,6 +177,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public EndpointStoreLoadStatus EndpointStoreStatus => _endpointStoreStatus;
 
     public string? EndpointStoreMessage => _endpointStoreMessage;
+
+    public EndpointSessionStatusEventArgs EndpointSessionStatus => _endpointSessions.Status;
 
     public NetworkSwitchRuleSet NetworkSwitchRules => _networkSwitchRuntimeController.Rules;
 
@@ -422,9 +440,38 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             .ToArray();
         _endpointStoreStatus = result.RemoteStoreStatus;
         _endpointStoreMessage = result.Message;
+        await ReconcileEndpointSessionAsync(result.Endpoints).ConfigureAwait(false);
         Publish();
         return result;
     }
+
+    public async Task<EndpointSession?> SelectEndpointAsync(
+        EndpointId endpointId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(endpointId.Value);
+        if (endpointId == EndpointId.Local)
+        {
+            await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
+            return null;
+        }
+
+        EndpointDescriptor? endpoint = Endpoints.FirstOrDefault(candidate => candidate.Id == endpointId);
+        if (endpoint is null)
+        {
+            throw new KeyNotFoundException($"未找到端点 {endpointId.Value}。");
+        }
+
+        if (!endpoint.IsEnabled)
+        {
+            throw new InvalidOperationException($"端点 {endpoint.DisplayName} 已被禁用。");
+        }
+
+        return await _endpointSessions.SelectAsync(endpoint, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public Task DisconnectEndpointAsync() => _endpointSessions.DisconnectAsync();
 
     public async Task<EndpointCatalogLoadResult> SaveRemoteEndpointAsync(
         EndpointRecord endpoint,
@@ -2116,6 +2163,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _endpointSessions.StatusChanged -= OnEndpointSessionStatusChanged;
+        await _endpointSessions.DisposeAsync();
         _networkSwitchRuntimeController.StatusChanged -= OnNetworkSwitchStatusChanged;
         await _networkSwitchRuntimeController.DisposeAsync();
 
@@ -2571,6 +2620,59 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         Uri controllerUri = new Uri($"http://127.0.0.1:{_settings.ControllerPort}/");
         return new MihomoApiClient(_httpClient, controllerUri, string.Empty);
+    }
+
+    private async Task<EndpointRecord?> ResolveEndpointRecordAsync(
+        EndpointId endpointId,
+        CancellationToken cancellationToken)
+    {
+        EndpointStoreLoadResult loaded = await _endpointStore.LoadAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (loaded.Status == EndpointStoreLoadStatus.ReadFailed)
+        {
+            throw new IOException(loaded.Message ?? "端点元数据无法读取。");
+        }
+
+        return loaded.Endpoints.FirstOrDefault(endpoint => endpoint.Descriptor.Id == endpointId);
+    }
+
+    private async Task ReconcileEndpointSessionAsync(
+        IReadOnlyList<EndpointDescriptor> catalogEndpoints)
+    {
+        EndpointSessionStatusEventArgs status = _endpointSessions.Status;
+        if (status.Endpoint.Kind != EndpointKind.Remote)
+        {
+            return;
+        }
+
+        EndpointDescriptor? catalogEndpoint = catalogEndpoints.FirstOrDefault(endpoint =>
+            endpoint.Id == status.Endpoint.Id);
+        if (catalogEndpoint is null || catalogEndpoint != status.Endpoint)
+        {
+            await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
+        }
+    }
+
+    private ControllerSessionSnapshot? BuildActiveControllerSnapshot()
+    {
+        EndpointSessionStatusEventArgs status = _endpointSessions.Status;
+        if (status.Endpoint.Kind != EndpointKind.Remote)
+        {
+            return null;
+        }
+
+        EndpointSession? session = _endpointSessions.Current;
+        return EndpointSessionSnapshotFactory.Create(
+            status.Endpoint,
+            status,
+            session?.Handshake);
+    }
+
+    private void OnEndpointSessionStatusChanged(
+        object? sender,
+        EndpointSessionStatusEventArgs status)
+    {
+        PublishAppSnapshot();
     }
 
     private void SetController(MihomoApiClient? api)
