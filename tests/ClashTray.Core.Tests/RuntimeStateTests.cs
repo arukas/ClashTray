@@ -615,6 +615,66 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task DeleteConfigurationSerializesRefreshUntilSettingsAreSaved()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        BlockingSettingsStore settings = new(new AppSettings());
+        FakeSystemProxyController proxy = new(SystemProxyState.Off);
+        BlockingInstallService service = new();
+        using RuntimeControllerHandler handler = new();
+        using HttpClient httpClient = new(handler);
+        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new(
+            paths,
+            null,
+            service,
+            settings,
+            proxy,
+            new AcceptingCandidateValidator());
+        Task? delete = null;
+        Task? refresh = null;
+
+        try
+        {
+            string source = Path.Combine(root, "source.yaml");
+            await File.WriteAllTextAsync(source, "proxies: []\n");
+            ConfigurationProfile profile = await runtime.ImportLocalConfigurationAsync(source);
+            runtime.AttachControllerForTesting(api, usingServiceCore: true);
+            profile = runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive);
+
+            settings.BlockNextSave();
+            delete = runtime.DeleteConfigurationAsync(profile);
+            await settings.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            refresh = runtime.RefreshDataAsync();
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+            Assert.IsFalse(refresh.IsCompleted);
+
+            settings.ReleaseSave();
+            await Task.WhenAll(delete, refresh);
+        }
+        finally
+        {
+            settings.ReleaseSave();
+            if (delete is not null)
+            {
+                await delete.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (refresh is not null)
+            {
+                await refresh.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public void MihomoDataParserPreservesZeroTrafficTotals()
     {
         using JsonDocument document = JsonDocument.Parse(
@@ -1315,6 +1375,41 @@ public sealed class RuntimeStateTests
             SaveCount++;
             Settings = settings;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class BlockingSettingsStore : ISettingsStore
+    {
+        private readonly TaskCompletionSource<bool> _releaseSave = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _blockNextSave;
+
+        public BlockingSettingsStore(AppSettings settings)
+        {
+            Settings = settings;
+        }
+
+        public AppSettings Settings { get; private set; }
+
+        public TaskCompletionSource<bool> SaveEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void BlockNextSave() => Volatile.Write(ref _blockNextSave, 1);
+
+        public void ReleaseSave() => _releaseSave.TrySetResult(true);
+
+        public Task<SettingsLoadResult> LoadWithStatusAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new SettingsLoadResult(Settings, SettingsLoadStatus.Loaded, null));
+
+        public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(ref _blockNextSave, 0) == 1)
+            {
+                SaveEntered.TrySetResult(true);
+                await _releaseSave.Task.WaitAsync(cancellationToken);
+            }
+
+            Settings = settings;
         }
     }
 

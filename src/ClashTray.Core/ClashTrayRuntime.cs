@@ -1400,30 +1400,38 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public async Task DeleteConfigurationAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        bool wasActive = profile.IsActive
-            || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
-        if (wasActive && _snapshot.Core.State == CoreState.Running)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            await StopCoreAsync(cancellationToken);
-        }
-
-        await _configurationStore.DeleteAsync(profile, cancellationToken);
-        IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
-        if (wasActive)
-        {
-            _settings = _settings with { ActiveConfigurationId = null };
-            await _settingsStore.SaveAsync(_settings, cancellationToken);
-        }
-
-        _snapshot = _snapshot with
-        {
-            Configurations = configurations.Select(configuration => configuration with
+            bool wasActive = profile.IsActive
+                || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
+            if (wasActive && _snapshot.Core.State == CoreState.Running)
             {
-                IsActive = configuration.Id == _settings.ActiveConfigurationId
-            }).ToArray(),
-            Core = wasActive ? _snapshot.Core with { ConfigurationName = null } : _snapshot.Core
-        };
-        Publish();
+                await StopCoreCoreAsync(operationLockHeld: true, cancellationToken);
+            }
+
+            await _configurationStore.DeleteAsync(profile, cancellationToken);
+            IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
+            if (wasActive)
+            {
+                _settings = _settings with { ActiveConfigurationId = null };
+                await _settingsStore.SaveAsync(_settings, cancellationToken);
+            }
+
+            _snapshot = _snapshot with
+            {
+                Configurations = configurations.Select(configuration => configuration with
+                {
+                    IsActive = configuration.Id == _settings.ActiveConfigurationId
+                }).ToArray(),
+                Core = wasActive ? _snapshot.Core with { ConfigurationName = null } : _snapshot.Core
+            };
+            Publish();
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
     }
 
     public Task SetModeAsync(ProxyMode mode, CancellationToken cancellationToken = default) =>
