@@ -348,7 +348,7 @@
   <data name="EndpointCustomCaBox.Header" xml:space="preserve"><value>自定义 CA 证书（PEM，可选）</value></data>
   <data name="EndpointHttpsCustomItem.Content" xml:space="preserve"><value>HTTPS（自定义 CA）</value></data>
   <data name="EndpointTrustHint.Text" xml:space="preserve"><value>secret 使用 Windows DPAPI 保护；自定义 CA 只对当前端点生效。不会提供“忽略 HTTPS 证书错误”，也不会修改 Windows 全局证书库。</value></data>
-  <data name="SaveEndpointButton.Content" xml:space="preserve"><value>添加端点</value></data>
+  <data name="SaveEndpointButton.Content" xml:space="preserve"><value>保存端点</value></data>
   <data name="RemoveEndpointButton.Content" xml:space="preserve"><value>删除端点</value></data>
   <data name="EndpointFieldsRequired" xml:space="preserve"><value>请填写端点名称和 Controller 根地址。</value></data>
   <data name="EndpointHttpRiskRequired" xml:space="preserve"><value>使用 HTTP 前必须明确确认明文传输风险。</value></data>

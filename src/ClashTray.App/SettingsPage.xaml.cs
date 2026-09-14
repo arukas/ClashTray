@@ -19,6 +19,7 @@ public sealed partial class SettingsPage : UserControl
     private string _configurationIdsSignature = string.Empty;
     private string _endpointSignature = string.Empty;
     private bool _updatingEndpointControls;
+    private EndpointId? _editingEndpointId;
     private readonly List<NetworkRuleEditorRow> _networkRuleRows = [];
 
     public SettingsPage(ClashTrayRuntime runtime)
@@ -63,7 +64,9 @@ public sealed partial class SettingsPage : UserControl
             (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
             "https-custom",
             StringComparison.Ordinal);
-        if (customHttps && string.IsNullOrWhiteSpace(EndpointCustomCaBox.Text))
+        if (customHttps
+            && string.IsNullOrWhiteSpace(EndpointCustomCaBox.Text)
+            && _editingEndpointId is null)
         {
             StatusText.Text = LocalizationService.Get("EndpointCustomCaRequired");
             return;
@@ -84,8 +87,10 @@ public sealed partial class SettingsPage : UserControl
 
         try
         {
+            EndpointId endpointId = _editingEndpointId
+                ?? new EndpointId($"remote-{Guid.NewGuid():N}");
             EndpointDescriptor descriptor = EndpointUriNormalizer.CreateRemoteDescriptor(
-                new EndpointId($"remote-{Guid.NewGuid():N}"),
+                endpointId,
                 EndpointNameBox.Text.Trim(),
                 endpointUri,
                 allowExplicitHttp: explicitHttp);
@@ -93,13 +98,26 @@ public sealed partial class SettingsPage : UserControl
                 ? null
                 : EndpointSecretBox.Password;
             ReadOnlyMemory<byte>? customCa = customHttps
+                && !string.IsNullOrWhiteSpace(EndpointCustomCaBox.Text)
                 ? Encoding.UTF8.GetBytes(EndpointCustomCaBox.Text)
                 : null;
-            await _runtime.ProvisionRemoteEndpointAsync(
-                descriptor,
-                secret,
-                customCa,
-                explicitHttp ? DateTimeOffset.UtcNow : null);
+            if (_editingEndpointId is EndpointId editingEndpointId)
+            {
+                await _runtime.UpdateRemoteEndpointAsync(
+                    editingEndpointId,
+                    descriptor,
+                    secret,
+                    customCa,
+                    explicitHttp ? DateTimeOffset.UtcNow : null);
+            }
+            else
+            {
+                await _runtime.ProvisionRemoteEndpointAsync(
+                    descriptor,
+                    secret,
+                    customCa,
+                    explicitHttp ? DateTimeOffset.UtcNow : null);
+            }
             UpdateEndpointList(_runtime.Endpoints);
             ClearEndpointEditor();
             StatusText.Text = LocalizationService.Get("EndpointSaved");
@@ -144,6 +162,7 @@ public sealed partial class SettingsPage : UserControl
         if (EndpointListView.SelectedItem is ListViewItem { Tag: EndpointDescriptor endpoint }
             && endpoint.Kind == EndpointKind.Remote)
         {
+            _editingEndpointId = endpoint.Id;
             EndpointNameBox.Text = endpoint.DisplayName;
             EndpointUriBox.Text = endpoint.BaseUri.AbsoluteUri.TrimEnd('/');
             EndpointTransportBox.SelectedItem = EndpointTransportBox.Items
@@ -160,6 +179,10 @@ public sealed partial class SettingsPage : UserControl
             EndpointSecretBox.Password = string.Empty;
             EndpointCustomCaBox.Text = string.Empty;
             EndpointHttpRiskCheckBox.IsChecked = endpoint.Security == EndpointTransportSecurity.HttpExplicitlyConfirmed;
+        }
+        else
+        {
+            _editingEndpointId = null;
         }
 
         UpdateEndpointRemoveButton();
@@ -256,6 +279,7 @@ public sealed partial class SettingsPage : UserControl
 
     private void ClearEndpointEditor()
     {
+        _editingEndpointId = null;
         _updatingEndpointControls = true;
         try
         {

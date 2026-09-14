@@ -348,7 +348,7 @@ Upload {4} B · Download {5} B</value></data>
   <data name="EndpointCustomCaBox.Header" xml:space="preserve"><value>Custom CA certificate (PEM, optional)</value></data>
   <data name="EndpointHttpsCustomItem.Content" xml:space="preserve"><value>HTTPS (custom CA)</value></data>
   <data name="EndpointTrustHint.Text" xml:space="preserve"><value>The secret is protected with Windows DPAPI; a custom CA applies only to this endpoint. There is no “ignore HTTPS certificate errors” option, and the Windows global certificate store is not changed.</value></data>
-  <data name="SaveEndpointButton.Content" xml:space="preserve"><value>Add endpoint</value></data>
+  <data name="SaveEndpointButton.Content" xml:space="preserve"><value>Save endpoint</value></data>
   <data name="RemoveEndpointButton.Content" xml:space="preserve"><value>Remove endpoint</value></data>
   <data name="EndpointFieldsRequired" xml:space="preserve"><value>Enter an endpoint name and Controller origin.</value></data>
   <data name="EndpointHttpRiskRequired" xml:space="preserve"><value>Explicitly acknowledge cleartext transport before using HTTP.</value></data>
