@@ -316,6 +316,45 @@ public sealed class RuntimeEndpointTests
         }
     }
 
+    [TestMethod]
+    public async Task RuntimeRefreshesActiveRemoteSnapshotOnDemand()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        StaticConnector connector = new();
+        await using ClashTrayRuntime runtime = new(
+            paths,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            connector,
+            (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("https://office.example.test"));
+
+        try
+        {
+            await runtime.SaveRemoteEndpointAsync(new EndpointRecord(remote));
+            await runtime.SelectEndpointAsync(remote.Id);
+            Assert.AreEqual(11, runtime.AppSnapshot.ActiveController.Status?.UploadBytes);
+
+            connector.SetTraffic(31, 32);
+            await runtime.RefreshDataAsync();
+
+            Assert.AreEqual(31, runtime.AppSnapshot.ActiveController.Status?.UploadBytes);
+            Assert.AreEqual(32, runtime.AppSnapshot.ActiveController.Status?.DownloadBytes);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static string CreateRoot() => Path.Combine(
         Path.GetTempPath(),
         "ClashTrayTests",

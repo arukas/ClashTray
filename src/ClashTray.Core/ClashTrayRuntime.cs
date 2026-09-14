@@ -2444,6 +2444,25 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task RefreshDataAsync(CancellationToken cancellationToken = default)
     {
+        EndpointSession? remoteSession = CaptureActiveRemoteSession(
+            EndpointCommand.ObserveStatus,
+            "刷新远程端点数据期间会话已切换，请重试。");
+        if (remoteSession is not null)
+        {
+            EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+            if (!await RefreshRemoteControllerSnapshotAsync(
+                    remoteSession,
+                    remoteStatus,
+                    cancellationToken)
+                .ConfigureAwait(false))
+            {
+                throw new InvalidOperationException(
+                    "远程端点数据刷新结果无法确认，请重试。");
+            }
+
+            return;
+        }
+
         if (_api is null)
         {
             return;
