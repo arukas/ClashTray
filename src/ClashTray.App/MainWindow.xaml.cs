@@ -707,9 +707,15 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshPageDataAsync()
     {
-        if (_runtime is null
-            || _runtime.Snapshot.Core.State != CoreState.Running
-            || _pageRefreshInProgress)
+        if (_runtime is null || _pageRefreshInProgress)
+        {
+            return;
+        }
+
+        bool activeControllerConnected = _activeEndpointKind == EndpointKind.Remote
+            ? _runtime.AppSnapshot.ActiveController.State == EndpointSessionState.Connected
+            : _runtime.Snapshot.Core.State == CoreState.Running;
+        if (!activeControllerConnected)
         {
             return;
         }
