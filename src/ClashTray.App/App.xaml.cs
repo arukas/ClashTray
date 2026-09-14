@@ -318,13 +318,13 @@ public partial class App : Application, IAsyncDisposable
     {
         _dispatcherQueue?.TryEnqueue(() =>
         {
-            UpdateTrayState(snapshot);
+            UpdateTrayState(_runtime.Snapshot);
         });
     }
 
     private void OnAppSnapshotChanged(object? sender, AppSnapshot snapshot)
     {
-        _dispatcherQueue?.TryEnqueue(() => _mainWindow?.UpdateAppSnapshot(snapshot));
+        _dispatcherQueue?.TryEnqueue(() => _mainWindow?.UpdateAppSnapshot(_runtime.AppSnapshot));
     }
 
     private void UpdateTrayState(RuntimeSnapshot snapshot)
