@@ -123,6 +123,37 @@ public sealed class RuntimeEndpointTests
         }
     }
 
+    [TestMethod]
+    public async Task RuntimePublishesUnifiedAppSnapshotWhenEndpointCatalogChanges()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        await using ClashTrayRuntime runtime = new(paths);
+        TaskCompletionSource<AppSnapshot> changed = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.AppSnapshotChanged += (_, snapshot) => changed.TrySetResult(snapshot);
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("https://office.example.test"));
+
+        try
+        {
+            await runtime.SaveRemoteEndpointAsync(new EndpointRecord(remote));
+
+            AppSnapshot published = await changed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.AreEqual(2, published.Endpoints.Count);
+            Assert.AreEqual(EndpointId.Local, published.ActiveController.Endpoint.Id);
+            Assert.AreEqual(EndpointId.Local, published.Endpoints[0].Id);
+            Assert.AreEqual(new EndpointId("office"), published.Endpoints[1].Id);
+            Assert.AreEqual(EndpointCapabilityDefaults.Local, published.ActiveController.Capabilities);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static string CreateRoot() => Path.Combine(
         Path.GetTempPath(),
         "ClashTrayTests",

@@ -139,6 +139,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public RuntimeSnapshot Snapshot => _snapshot;
 
+    public AppSnapshot AppSnapshot => AppSnapshotComposer.Compose(
+        _snapshot,
+        _settings,
+        Endpoints,
+        controllerGeneration: ControllerGeneration);
+
     public AppSettings Settings => _settings;
 
     public IReadOnlyList<EndpointDescriptor> Endpoints
@@ -173,6 +179,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         && currentState is CoreState.Missing or CoreState.Stopped or CoreState.Failed;
 
     public event EventHandler<RuntimeSnapshot>? SnapshotChanged;
+
+    public event EventHandler<AppSnapshot>? AppSnapshotChanged;
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -414,6 +422,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             .ToArray();
         _endpointStoreStatus = result.RemoteStoreStatus;
         _endpointStoreMessage = result.Message;
+        PublishAppSnapshot();
         return result;
     }
 
@@ -3490,7 +3499,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             ErrorMessage = error
         };
         SnapshotChanged?.Invoke(this, _snapshot);
+        PublishAppSnapshot();
     }
+
+    private void PublishAppSnapshot() => AppSnapshotChanged?.Invoke(this, AppSnapshot);
 
     private void OnProcessLogLine(string line, bool isError)
     {
