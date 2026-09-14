@@ -20,6 +20,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly EndpointSecretStore _endpointSecretStore;
     private readonly EndpointCertificateStore _endpointCertificateStore;
     private readonly EndpointRemovalCoordinator _endpointRemovalCoordinator;
+    private readonly EndpointProvisioningCoordinator _endpointProvisioningCoordinator;
     private readonly NetworkRuleStore _networkRuleStore;
     private readonly ConfigurationSwitchJournalStore _configurationSwitchJournalStore;
     private readonly ConfigurationSwitchCoordinator _configurationSwitchCoordinator;
@@ -90,6 +91,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _endpointSecretStore = new EndpointSecretStore(_paths);
         _endpointCertificateStore = new EndpointCertificateStore(_paths);
         _endpointRemovalCoordinator = new EndpointRemovalCoordinator(
+            _endpointStore,
+            _endpointSecretStore,
+            _endpointCertificateStore);
+        _endpointProvisioningCoordinator = new EndpointProvisioningCoordinator(
             _endpointStore,
             _endpointSecretStore,
             _endpointCertificateStore);
@@ -421,6 +426,32 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         try
         {
             await _endpointStore.UpsertAsync(endpoint, cancellationToken).ConfigureAwait(false);
+            return await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    public async Task<EndpointCatalogLoadResult> ProvisionRemoteEndpointAsync(
+        EndpointDescriptor descriptor,
+        string? secret,
+        ReadOnlyMemory<byte>? customCaCertificate,
+        DateTimeOffset? insecureHttpAcknowledgedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _endpointProvisioningCoordinator.ProvisionAsync(
+                    descriptor,
+                    secret,
+                    customCaCertificate,
+                    insecureHttpAcknowledgedAtUtc,
+                    cancellationToken)
+                .ConfigureAwait(false);
             return await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
