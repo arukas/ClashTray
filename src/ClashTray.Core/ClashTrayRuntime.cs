@@ -49,6 +49,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private string? _endpointStoreMessage;
     private readonly object _remoteRefreshGate = new();
     private readonly SemaphoreSlim _remoteRefreshLifecycleLock = new(1, 1);
+    private readonly SemaphoreSlim _remoteRefreshReadLock = new(1, 1);
     private CancellationTokenSource? _remoteRefreshCts;
     private Task? _remoteRefreshTask;
     private RemoteControllerData? _remoteControllerData;
@@ -1411,6 +1412,30 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
+            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+                EndpointCommand.SwitchMode,
+                "模式切换期间远程端点会话已切换，请重试。");
+            if (remoteSession is not null)
+            {
+                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+                await remoteSession.Api.SetModeAsync(mode, cancellationToken);
+                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
+                {
+                    throw new InvalidOperationException("模式切换期间远程端点会话已切换，请重试。");
+                }
+
+                if (!await RefreshRemoteControllerSnapshotAsync(
+                        remoteSession,
+                        remoteStatus,
+                        cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException("远程端点模式切换结果无法确认，请重试。");
+                }
+
+                return;
+            }
+
             (MihomoApiClient api, long generation) = CaptureControllerSession();
             EnsureControllerCommand(
                 api,
@@ -2265,6 +2290,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _subscriptionOperationLock.Dispose();
         _dataRefreshLock.Dispose();
         _remoteRefreshLifecycleLock.Dispose();
+        _remoteRefreshReadLock.Dispose();
         await _configurationSwitchCoordinator.DisposeAsync();
         _operationLock.Dispose();
         _runtimeCts.Dispose();
@@ -2832,24 +2858,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 return;
             }
 
-            MihomoControllerSnapshotData? previousData = null;
-            lock (_remoteRefreshGate)
-            {
-                if (_remoteControllerData is { } currentData
-                    && currentData.Generation == requestedStatus.Generation
-                    && currentData.SelectionRevision == requestedStatus.SelectionRevision)
-                {
-                    previousData = currentData.Snapshot;
-                }
-            }
-
             CancellationTokenSource refreshCts = CancellationTokenSource.CreateLinkedTokenSource(
                 _runtimeCts.Token);
             Task refreshTask = RefreshRemoteControllerAsync(
                 session,
                 requestedStatus,
-                refreshCts,
-                previousData);
+                refreshCts);
             lock (_remoteRefreshGate)
             {
                 _remoteRefreshCts = refreshCts;
@@ -2865,8 +2879,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private async Task RefreshRemoteControllerAsync(
         EndpointSession session,
         EndpointSessionStatusEventArgs status,
-        CancellationTokenSource refreshCts,
-        MihomoControllerSnapshotData? previousData)
+        CancellationTokenSource refreshCts)
     {
         bool initialRefreshPending = true;
         TimeSpan retryDelay = RemoteRefreshRetryDelay;
@@ -2877,38 +2890,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 refreshCts.Token.ThrowIfCancellationRequested();
                 try
                 {
-                    MihomoControllerSnapshotData snapshot = await MihomoControllerSnapshotReader.ReadAsync(
-                            session.Api,
-                            session.Handshake.Version,
-                            $"mihomo/{status.Endpoint.DisplayName}",
-                            previousData,
+                    if (!await RefreshRemoteControllerSnapshotAsync(
+                            session,
+                            status,
                             refreshCts.Token)
-                        .ConfigureAwait(false);
-
-                    if (!IsCurrentRemoteSession(session, status))
+                        .ConfigureAwait(false))
                     {
                         return;
                     }
-
-                    lock (_remoteRefreshGate)
-                    {
-                        _remoteControllerData = new RemoteControllerData(
-                            status.Generation,
-                            status.SelectionRevision,
-                            snapshot);
-                        if (initialRefreshPending)
-                        {
-                            CompleteRemoteRefreshUnsafe(
-                                status.Generation,
-                                status.SelectionRevision,
-                                succeeded: true);
-                            initialRefreshPending = false;
-                        }
-                    }
-
-                    previousData = snapshot;
+                    initialRefreshPending = false;
                     retryDelay = RemoteRefreshRetryDelay;
-                    PublishAppSnapshot();
                     await _remoteRefreshDelayAsync(RemoteRefreshInterval, refreshCts.Token)
                         .ConfigureAwait(false);
                 }
@@ -2965,6 +2956,59 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    private async Task<bool> RefreshRemoteControllerSnapshotAsync(
+        EndpointSession session,
+        EndpointSessionStatusEventArgs status,
+        CancellationToken cancellationToken)
+    {
+        await _remoteRefreshReadLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            MihomoControllerSnapshotData? previousData = null;
+            lock (_remoteRefreshGate)
+            {
+                if (_remoteControllerData is { } currentData
+                    && currentData.Generation == status.Generation
+                    && currentData.SelectionRevision == status.SelectionRevision)
+                {
+                    previousData = currentData.Snapshot;
+                }
+            }
+
+            MihomoControllerSnapshotData snapshot = await MihomoControllerSnapshotReader.ReadAsync(
+                    session.Api,
+                    session.Handshake.Version,
+                    $"mihomo/{status.Endpoint.DisplayName}",
+                    previousData,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!IsCurrentRemoteSession(session, status))
+            {
+                return false;
+            }
+
+            lock (_remoteRefreshGate)
+            {
+                _remoteControllerData = new RemoteControllerData(
+                    status.Generation,
+                    status.SelectionRevision,
+                    snapshot);
+                CompleteRemoteRefreshUnsafe(
+                    status.Generation,
+                    status.SelectionRevision,
+                    succeeded: true);
+            }
+
+            PublishAppSnapshot();
+            return true;
+        }
+        finally
+        {
+            _remoteRefreshReadLock.Release();
+        }
+    }
+
     private async Task WaitForRemoteRefreshAsync(
         EndpointSession session,
         CancellationToken cancellationToken)
@@ -3012,6 +3056,29 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             && currentStatus.Generation == status.Generation
             && currentStatus.SelectionRevision == status.SelectionRevision
             && currentStatus.State == EndpointSessionState.Connected;
+    }
+
+    private EndpointSession? CaptureActiveRemoteSession(
+        EndpointCommand command,
+        string staleSessionMessage)
+    {
+        EndpointSessionStatusEventArgs status = _endpointSessions.Status;
+        if (status.Endpoint.Kind != EndpointKind.Remote)
+        {
+            return null;
+        }
+
+        EndpointSession? session = _endpointSessions.Current;
+        if (session is null || !IsCurrentRemoteSession(session, status))
+        {
+            throw new InvalidOperationException(staleSessionMessage);
+        }
+
+        EndpointCommandPolicy.EnsureAllowed(
+            session.Endpoint.Kind,
+            session.Capabilities,
+            command);
+        return session;
     }
 
     private async Task StopRemoteRefreshAsync()

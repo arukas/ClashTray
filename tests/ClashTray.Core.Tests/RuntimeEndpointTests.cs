@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core.Tests;
@@ -228,6 +229,20 @@ public sealed class RuntimeEndpointTests
             AppSnapshot updatedSnapshot = await republished.Task.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.AreEqual(21, updatedSnapshot.ActiveController.Status?.UploadBytes);
 
+            TaskCompletionSource<AppSnapshot> modeChanged = new(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            runtime.AppSnapshotChanged += (_, snapshot) =>
+            {
+                if (snapshot.ActiveController.Status?.Mode == ProxyMode.Direct)
+                {
+                    modeChanged.TrySetResult(snapshot);
+                }
+            };
+            await runtime.SetModeAsync(ProxyMode.Direct);
+            AppSnapshot modeSnapshot = await modeChanged.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.AreEqual(ProxyMode.Direct, modeSnapshot.ActiveController.Status?.Mode);
+            Assert.AreEqual(1, connector.ModePatchCount);
+
             await runtime.UpdateRemoteEndpointAsync(
                 remote.Id,
                 remote with
@@ -265,6 +280,8 @@ public sealed class RuntimeEndpointTests
     private sealed class StaticConnector : IEndpointSessionConnector
     {
         private SnapshotHandler? _handler;
+
+        public int ModePatchCount => Volatile.Read(ref _handler)?.ModePatchCount ?? 0;
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage(
             "Reliability",
@@ -313,6 +330,10 @@ public sealed class RuntimeEndpointTests
         {
             private long _uploadBytes = 11;
             private long _downloadBytes = 12;
+            private string _mode = "global";
+            private int _modePatchCount;
+
+            public int ModePatchCount => Volatile.Read(ref _modePatchCount);
 
             public void SetTraffic(long uploadBytes, long downloadBytes)
             {
@@ -320,16 +341,34 @@ public sealed class RuntimeEndpointTests
                 Interlocked.Exchange(ref _downloadBytes, downloadBytes);
             }
 
-            protected override Task<HttpResponseMessage> SendAsync(
+            protected override async Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request,
                 CancellationToken cancellationToken)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 long uploadBytes = Interlocked.Read(ref _uploadBytes);
                 long downloadBytes = Interlocked.Read(ref _downloadBytes);
+                if (request.Method == HttpMethod.Patch
+                    && request.RequestUri?.AbsolutePath == "/configs")
+                {
+                    using JsonDocument payload = JsonDocument.Parse(
+                        await request.Content!.ReadAsStringAsync(cancellationToken));
+                    string? requestedMode = payload.RootElement
+                        .GetProperty("mode")
+                        .GetString();
+                    if (!string.IsNullOrWhiteSpace(requestedMode))
+                    {
+                        Volatile.Write(ref _mode, requestedMode);
+                    }
+
+                    Interlocked.Increment(ref _modePatchCount);
+                }
+
                 string body = request.RequestUri?.AbsolutePath switch
                 {
-                    "/configs" => """{"mode":"global","tun":{"enable":false}}""",
+                    "/configs" => "{\"mode\":\""
+                        + Volatile.Read(ref _mode)
+                        + "\",\"tun\":{\"enable\":false}}",
                     "/proxies" => """{"proxies":{"Auto":{"type":"Selector","now":"node","all":["node"]},"node":{"type":"Direct"}}}""",
                     "/traffic" => $$"""{"upTotal":{{uploadBytes}},"downTotal":{{downloadBytes}},"up":1,"down":2}"""
                         + "\n",
@@ -342,10 +381,10 @@ public sealed class RuntimeEndpointTests
                     "/logs" => "[]",
                     _ => "{}"
                 };
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                return new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(body, Encoding.UTF8, "application/json")
-                });
+                };
             }
         }
     }
