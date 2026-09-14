@@ -32,6 +32,7 @@ public sealed class EndpointTransportFactoryTests
 
         using ClientWebSocket socket = transport.CreateWebSocket();
         Assert.AreEqual(WebSocketState.None, socket.State);
+        Assert.IsNull(socket.Options.Proxy);
     }
 
     [TestMethod]
