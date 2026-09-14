@@ -25,6 +25,17 @@ The Windows Service is optional during ordinary development. If it is installed,
 
 New settings default to Mixed port 7890, SOCKS port 7891, HTTP port 7892, and IPv6 disabled. Existing saved IPv6 preferences are preserved. Existing saved port settings are preserved; change them in Settings and restart the core to apply the new ports. The generated controller secret is explicitly empty; no random secret is generated or read from an old controller-secret.bin file. The controller listens only on 127.0.0.1 and API requests omit authentication headers. After upgrading from a version with a generated secret, restart the core to apply the empty secret.
 
+## HTTPS, CA certificates, and subscriptions
+
+A CA certificate is the public certificate of a certificate authority that is allowed to issue server certificates. It is not a switch that makes an arbitrary HTTPS server trusted, and it is not the same thing as the server's leaf certificate.
+
+- Public HTTPS subscription URLs use the normal Windows system certificate trust. No custom CA is needed for a normally trusted public service.
+- A private Mihomo Controller can use a per-endpoint custom CA in **Settings > Remote Mihomo endpoints**. ClashTray keeps that CA local to the selected endpoint, still checks the hostname, validity period, certificate usage, and chain, and applies the same policy to REST and WebSocket transport.
+- ClashTray deliberately has no **ignore HTTPS certificate errors** option. A hostname mismatch, expired certificate, wrong certificate purpose, or broken chain is a connection failure that must be fixed at the server, endpoint URI, or CA configuration.
+- Explicit HTTP is a separate, visibly acknowledged insecure mode; it is not a workaround for a broken HTTPS certificate. Controller secrets are stored separately with Windows DPAPI and are never placed in the URL.
+
+Subscription fetching currently uses the regular .NET `HttpClient` path and does not load a remote Controller CA. Prefer HTTPS for subscriptions and do not paste a subscription URL, secret, or certificate private key into logs or issue reports.
+
 ## Editing settings
 
 The Settings page keeps changes as an editable draft until **保存设置** is pressed, including **随 Windows 启动** and **启动后自动启动核心**. Live traffic/controller/provider refreshes must not overwrite this draft. Changes made elsewhere (such as the header theme menu) merge into untouched fields; validation or save failures keep edits available for correction. Successful saves persist the values and a newly opened settings page loads them.
