@@ -58,6 +58,26 @@
 
         <Border Style="{StaticResource ClashTrayCardStyle}">
             <StackPanel Spacing="8">
+                <TextBlock x:Uid="EndpointManagementHeader" FontWeight="SemiBold" />
+                <TextBlock x:Uid="EndpointManagementHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <ListView x:Name="EndpointListView" x:Uid="EndpointListView" SelectionMode="Single" SelectionChanged="EndpointListView_SelectionChanged" />
+                <TextBox x:Name="EndpointNameBox" x:Uid="EndpointNameBox" />
+                <TextBox x:Name="EndpointUriBox" x:Uid="EndpointUriBox" />
+                <ComboBox x:Name="EndpointTransportBox" x:Uid="EndpointTransportBox" SelectionChanged="EndpointTransportBox_SelectionChanged" SelectedIndex="0">
+                    <ComboBoxItem x:Uid="EndpointHttpsSystemTrustItem" Tag="https-system" />
+                    <ComboBoxItem x:Uid="EndpointHttpExplicitItem" Tag="http-explicit" />
+                </ComboBox>
+                <CheckBox x:Name="EndpointHttpRiskCheckBox" x:Uid="EndpointHttpRiskCheckBox" IsEnabled="False" />
+                <TextBlock x:Uid="EndpointTrustHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Left">
+                    <Button x:Name="SaveEndpointButton" x:Uid="SaveEndpointButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveEndpointButton_Click" />
+                    <Button x:Name="RemoveEndpointButton" x:Uid="RemoveEndpointButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="RemoveEndpointButton_Click" IsEnabled="False" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <StackPanel Spacing="8">
                 <TextBlock x:Uid="PortsHeader" FontWeight="SemiBold" />
                 <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>

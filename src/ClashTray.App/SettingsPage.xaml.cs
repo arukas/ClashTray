@@ -16,6 +16,8 @@ public sealed partial class SettingsPage : UserControl
     private NetworkSwitchRuleSet? _loadedNetworkRules;
     private RuntimeSnapshot? _lastSnapshot;
     private string _configurationIdsSignature = string.Empty;
+    private string _endpointSignature = string.Empty;
+    private bool _updatingEndpointControls;
     private readonly List<NetworkRuleEditorRow> _networkRuleRows = [];
 
     public SettingsPage(ClashTrayRuntime runtime)
@@ -24,6 +26,7 @@ public sealed partial class SettingsPage : UserControl
         _runtime = runtime;
         InitializeComponent();
         LoadSettings(runtime.Settings);
+        UpdateEndpointList(runtime.Endpoints);
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
@@ -33,7 +36,219 @@ public sealed partial class SettingsPage : UserControl
         LoadSettings(_runtime.Settings);
         UpdateProviders(snapshot);
         UpdateNetworkSwitch(snapshot);
+        UpdateEndpointList(_runtime.Endpoints);
     }
+
+    private async void SaveEndpointButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(EndpointNameBox.Text)
+            || string.IsNullOrWhiteSpace(EndpointUriBox.Text))
+        {
+            StatusText.Text = LocalizationService.Get("EndpointFieldsRequired");
+            return;
+        }
+
+        bool explicitHttp = string.Equals(
+            (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
+            "http-explicit",
+            StringComparison.Ordinal);
+        if (explicitHttp && EndpointHttpRiskCheckBox.IsChecked != true)
+        {
+            StatusText.Text = LocalizationService.Get("EndpointHttpRiskRequired");
+            return;
+        }
+
+        if (!Uri.TryCreate(EndpointUriBox.Text.Trim(), UriKind.Absolute, out Uri? endpointUri)
+            || endpointUri is null)
+        {
+            StatusText.Text = LocalizationService.Get("EndpointUriInvalid");
+            return;
+        }
+
+        try
+        {
+            EndpointDescriptor descriptor = EndpointUriNormalizer.CreateRemoteDescriptor(
+                new EndpointId($"remote-{Guid.NewGuid():N}"),
+                EndpointNameBox.Text.Trim(),
+                endpointUri,
+                allowExplicitHttp: explicitHttp);
+            EndpointRecord record = new(
+                descriptor,
+                InsecureHttpAcknowledgedAtUtc: explicitHttp ? DateTimeOffset.UtcNow : null);
+            await _runtime.SaveRemoteEndpointAsync(record);
+            UpdateEndpointList(_runtime.Endpoints);
+            ClearEndpointEditor();
+            StatusText.Text = LocalizationService.Get("EndpointSaved");
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = ErrorSanitizer.Sanitize(exception);
+        }
+    }
+
+    private async void RemoveEndpointButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (EndpointListView.SelectedItem is not ListViewItem { Tag: EndpointDescriptor endpoint }
+            || endpoint.Kind != EndpointKind.Remote)
+        {
+            StatusText.Text = LocalizationService.Get("EndpointSelectRemote");
+            return;
+        }
+
+        try
+        {
+            EndpointRemovalResult result = await _runtime.RemoveRemoteEndpointAsync(endpoint.Id);
+            UpdateEndpointList(_runtime.Endpoints);
+            ClearEndpointEditor();
+            StatusText.Text = result.Removed
+                ? LocalizationService.Get("EndpointRemoved")
+                : LocalizationService.Get("EndpointNotFound");
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = ErrorSanitizer.Sanitize(exception);
+        }
+    }
+
+    private void EndpointListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_updatingEndpointControls)
+        {
+            return;
+        }
+
+        if (EndpointListView.SelectedItem is ListViewItem { Tag: EndpointDescriptor endpoint }
+            && endpoint.Kind == EndpointKind.Remote)
+        {
+            EndpointNameBox.Text = endpoint.DisplayName;
+            EndpointUriBox.Text = endpoint.BaseUri.AbsoluteUri.TrimEnd('/');
+            EndpointTransportBox.SelectedItem = EndpointTransportBox.Items
+                .OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(
+                    item.Tag?.ToString(),
+                    endpoint.Security == EndpointTransportSecurity.HttpExplicitlyConfirmed
+                        ? "http-explicit"
+                        : "https-system",
+                    StringComparison.Ordinal));
+            EndpointHttpRiskCheckBox.IsChecked = endpoint.Security == EndpointTransportSecurity.HttpExplicitlyConfirmed;
+        }
+
+        UpdateEndpointRemoveButton();
+    }
+
+    private void EndpointTransportBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (EndpointHttpRiskCheckBox is null)
+        {
+            return;
+        }
+
+        bool explicitHttp = string.Equals(
+            (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
+            "http-explicit",
+            StringComparison.Ordinal);
+        EndpointHttpRiskCheckBox.IsEnabled = explicitHttp;
+        if (!explicitHttp)
+        {
+            EndpointHttpRiskCheckBox.IsChecked = false;
+        }
+    }
+
+    private void UpdateEndpointList(IReadOnlyList<EndpointDescriptor> endpoints)
+    {
+        if (EndpointListView is null)
+        {
+            return;
+        }
+
+        string signature = string.Join(
+            '\u001F',
+            endpoints.Select(endpoint => $"{endpoint.Id.Value}\u001E{endpoint.DisplayName}\u001E{endpoint.BaseUri.AbsoluteUri}\u001E{endpoint.Security}\u001E{endpoint.IsEnabled}"));
+        if (string.Equals(_endpointSignature, signature, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        EndpointId? selectedId = (EndpointListView.SelectedItem as ListViewItem)?.Tag is EndpointDescriptor selected
+            ? selected.Id
+            : null;
+        _updatingEndpointControls = true;
+        try
+        {
+            EndpointListView.Items.Clear();
+            foreach (EndpointDescriptor endpoint in endpoints)
+            {
+                StackPanel content = new() { Spacing = 1 };
+                content.Children.Add(new TextBlock
+                {
+                    Text = endpoint.DisplayName,
+                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
+                });
+                content.Children.Add(new TextBlock
+                {
+                    Text = endpoint.Kind == EndpointKind.Local
+                        ? LocalizationService.Get("EndpointLocalSummary")
+                        : $"{endpoint.BaseUri.AbsoluteUri} · {FormatEndpointSecurity(endpoint.Security)}",
+                    Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+                });
+                EndpointListView.Items.Add(new ListViewItem
+                {
+                    Content = content,
+                    Tag = endpoint,
+                    IsEnabled = endpoint.Kind == EndpointKind.Remote
+                });
+            }
+
+            if (selectedId is EndpointId previousId)
+            {
+                EndpointListView.SelectedItem = EndpointListView.Items
+                    .OfType<ListViewItem>()
+                    .FirstOrDefault(item => item.Tag is EndpointDescriptor endpoint && endpoint.Id == previousId);
+            }
+        }
+        finally
+        {
+            _updatingEndpointControls = false;
+        }
+
+        _endpointSignature = signature;
+        UpdateEndpointRemoveButton();
+    }
+
+    private void ClearEndpointEditor()
+    {
+        _updatingEndpointControls = true;
+        try
+        {
+            EndpointListView.SelectedIndex = -1;
+            EndpointNameBox.Text = string.Empty;
+            EndpointUriBox.Text = string.Empty;
+            EndpointTransportBox.SelectedIndex = 0;
+            EndpointHttpRiskCheckBox.IsChecked = false;
+        }
+        finally
+        {
+            _updatingEndpointControls = false;
+        }
+
+        RemoveEndpointButton.IsEnabled = false;
+    }
+
+    private void UpdateEndpointRemoveButton()
+    {
+        RemoveEndpointButton.IsEnabled = EndpointListView.SelectedItem is ListViewItem
+        {
+            Tag: EndpointDescriptor { Kind: EndpointKind.Remote }
+        };
+    }
+
+    private static string FormatEndpointSecurity(EndpointTransportSecurity security) => security switch
+    {
+        EndpointTransportSecurity.HttpsSystemTrust => LocalizationService.Get("EndpointSecurityHttpsSystemTrust"),
+        EndpointTransportSecurity.HttpsCustomCertificate => LocalizationService.Get("EndpointSecurityHttpsCustomCa"),
+        EndpointTransportSecurity.HttpExplicitlyConfirmed => LocalizationService.Get("EndpointSecurityHttpConfirmed"),
+        _ => LocalizationService.Get("EndpointSecurityLoopback")
+    };
 
     private async void SaveNetworkSwitchButton_Click(object sender, RoutedEventArgs e)
     {

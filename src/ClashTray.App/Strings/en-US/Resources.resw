@@ -333,4 +333,30 @@ Upload {4} B · Download {5} B</value></data>
   <data name="EasterEggEnabledHint" xml:space="preserve"><value>The bonus theme is on; switch freely in the theme menu.</value></data>
   <data name="EasterEggSaveFailedFormat" xml:space="preserve"><value>Failed to save the bonus theme: {0}</value></data>
   <data name="ThemeSwitchFailedFormat" xml:space="preserve"><value>Failed to switch theme: {0}</value></data>
+
+  <!-- Remote endpoint metadata -->
+  <data name="EndpointManagementHeader.Text" xml:space="preserve"><value>Remote Mihomo endpoints</value></data>
+  <data name="EndpointManagementHint.Text" xml:space="preserve"><value>Manage endpoint metadata here. Remote endpoints cannot control this computer's core, system proxy, or TUN; HTTPS uses Windows system trust by default.</value></data>
+  <data name="EndpointListView.AutomationProperties.Name" xml:space="preserve"><value>Mihomo endpoint list</value></data>
+  <data name="EndpointNameBox.Header" xml:space="preserve"><value>Display name</value></data>
+  <data name="EndpointUriBox.Header" xml:space="preserve"><value>Controller origin</value></data>
+  <data name="EndpointTransportBox.Header" xml:space="preserve"><value>Transport security</value></data>
+  <data name="EndpointHttpsSystemTrustItem.Content" xml:space="preserve"><value>HTTPS (Windows system trust)</value></data>
+  <data name="EndpointHttpExplicitItem.Content" xml:space="preserve"><value>HTTP (explicitly acknowledged risk)</value></data>
+  <data name="EndpointHttpRiskCheckBox.Content" xml:space="preserve"><value>I understand this endpoint uses cleartext HTTP and accept the risk</value></data>
+  <data name="EndpointTrustHint.Text" xml:space="preserve"><value>There is no “ignore HTTPS certificate errors” option. A private HTTPS endpoint's custom CA and secret will be configured in a separate protected editor.</value></data>
+  <data name="SaveEndpointButton.Content" xml:space="preserve"><value>Add endpoint</value></data>
+  <data name="RemoveEndpointButton.Content" xml:space="preserve"><value>Remove endpoint</value></data>
+  <data name="EndpointFieldsRequired" xml:space="preserve"><value>Enter an endpoint name and Controller origin.</value></data>
+  <data name="EndpointHttpRiskRequired" xml:space="preserve"><value>Explicitly acknowledge cleartext transport before using HTTP.</value></data>
+  <data name="EndpointUriInvalid" xml:space="preserve"><value>The Controller origin must be a valid absolute HTTP(S) URI.</value></data>
+  <data name="EndpointSaved" xml:space="preserve"><value>Endpoint metadata saved.</value></data>
+  <data name="EndpointRemoved" xml:space="preserve"><value>The endpoint and unreferenced local credentials were removed.</value></data>
+  <data name="EndpointNotFound" xml:space="preserve"><value>The endpoint no longer exists.</value></data>
+  <data name="EndpointSelectRemote" xml:space="preserve"><value>Select a remote endpoint.</value></data>
+  <data name="EndpointLocalSummary" xml:space="preserve"><value>Local Controller; cannot be removed</value></data>
+  <data name="EndpointSecurityHttpsSystemTrust" xml:space="preserve"><value>HTTPS / system trust</value></data>
+  <data name="EndpointSecurityHttpsCustomCa" xml:space="preserve"><value>HTTPS / custom CA</value></data>
+  <data name="EndpointSecurityHttpConfirmed" xml:space="preserve"><value>HTTP / risk acknowledged</value></data>
+  <data name="EndpointSecurityLoopback" xml:space="preserve"><value>Local loopback</value></data>
 </root>
