@@ -95,7 +95,13 @@
   <data name="ClearLogsButton.Content" xml:space="preserve"><value>清空</value></data>
   <data name="LogsSearchBox.PlaceholderText" xml:space="preserve"><value>搜索日志内容</value></data>
   <data name="LevelAllItem.Content" xml:space="preserve"><value>全部</value></data>
+  <data name="LogLevelInfoItem.Content" xml:space="preserve"><value>信息</value></data>
+  <data name="LogLevelWarningItem.Content" xml:space="preserve"><value>警告</value></data>
+  <data name="LogLevelErrorItem.Content" xml:space="preserve"><value>错误</value></data>
+  <data name="LogLevelDebugItem.Content" xml:space="preserve"><value>调试</value></data>
   <data name="SourceAllItem.Content" xml:space="preserve"><value>全部来源</value></data>
+  <data name="SourceClashTrayItem.Content" xml:space="preserve"><value>ClashTray</value></data>
+  <data name="SourceMihomoItem.Content" xml:space="preserve"><value>Mihomo</value></data>
   <data name="LogsListView.AutomationProperties.Name" xml:space="preserve"><value>日志列表</value></data>
   <data name="LogsEmptyListText.Text" xml:space="preserve"><value>暂无匹配的日志</value></data>
 
@@ -125,6 +131,12 @@
   <data name="SaveNetworkSwitchButton.Content" xml:space="preserve"><value>保存网络切换</value></data>
   <data name="ResumeNetworkSwitchButton.Content" xml:space="preserve"><value>恢复自动切换</value></data>
   <data name="PortsHeader.Text" xml:space="preserve"><value>端口与代理</value></data>
+  <data name="HttpPortBox.Header" xml:space="preserve"><value>HTTP</value></data>
+  <data name="SocksPortBox.Header" xml:space="preserve"><value>SOCKS</value></data>
+  <data name="MixedPortBox.Header" xml:space="preserve"><value>Mixed</value></data>
+  <data name="HttpPortLabel" xml:space="preserve"><value>HTTP</value></data>
+  <data name="SocksPortLabel" xml:space="preserve"><value>SOCKS</value></data>
+  <data name="MixedPortLabel" xml:space="preserve"><value>Mixed</value></data>
   <data name="ControllerPortBox.Header" xml:space="preserve"><value>控制器</value></data>
   <data name="ControllerPortLabel" xml:space="preserve"><value>控制器</value></data>
   <data name="BypassListBox.Header" xml:space="preserve"><value>系统代理绕过列表</value></data>

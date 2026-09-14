@@ -87,15 +87,15 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <NumberBox x:Name="HttpPortBox" Header="HTTP" Minimum="1" Maximum="65535" />
-                    <NumberBox x:Name="SocksPortBox" Grid.Column="1" Header="SOCKS" Minimum="1" Maximum="65535" />
+                    <NumberBox x:Name="HttpPortBox" x:Uid="HttpPortBox" Minimum="1" Maximum="65535" />
+                    <NumberBox x:Name="SocksPortBox" x:Uid="SocksPortBox" Grid.Column="1" Minimum="1" Maximum="65535" />
                 </Grid>
                 <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <NumberBox x:Name="MixedPortBox" Header="Mixed" Minimum="1" Maximum="65535" />
+                    <NumberBox x:Name="MixedPortBox" x:Uid="MixedPortBox" Minimum="1" Maximum="65535" />
                     <NumberBox x:Name="ControllerPortBox" Grid.Column="1" x:Uid="ControllerPortBox" Minimum="1" Maximum="65535" />
                 </Grid>
                 <TextBox x:Name="BypassListBox" x:Uid="BypassListBox" />
@@ -112,10 +112,10 @@
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <ComboBox x:Name="LogLevelBox" x:Uid="LogLevelBox" SelectedIndex="0">
-                        <ComboBoxItem Content="info" Tag="info" />
-                        <ComboBoxItem Content="warning" Tag="warning" />
-                        <ComboBoxItem Content="error" Tag="error" />
-                        <ComboBoxItem Content="debug" Tag="debug" />
+                        <ComboBoxItem x:Uid="LogLevelInfoItem" Tag="info" />
+                        <ComboBoxItem x:Uid="LogLevelWarningItem" Tag="warning" />
+                        <ComboBoxItem x:Uid="LogLevelErrorItem" Tag="error" />
+                        <ComboBoxItem x:Uid="LogLevelDebugItem" Tag="debug" />
                     </ComboBox>
                     <ComboBox x:Name="ThemeBox" Grid.Column="1" x:Uid="ThemeBox">
                         <ComboBoxItem x:Uid="ThemeSystemItem" Tag="system" />

@@ -516,9 +516,9 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
-        if (!TryReadPort(HttpPortBox, "HTTP", out int httpPort)
-            || !TryReadPort(SocksPortBox, "SOCKS", out int socksPort)
-            || !TryReadPort(MixedPortBox, "Mixed", out int mixedPort)
+        if (!TryReadPort(HttpPortBox, LocalizationService.Get("HttpPortLabel"), out int httpPort)
+            || !TryReadPort(SocksPortBox, LocalizationService.Get("SocksPortLabel"), out int socksPort)
+            || !TryReadPort(MixedPortBox, LocalizationService.Get("MixedPortLabel"), out int mixedPort)
             || !TryReadPort(ControllerPortBox, LocalizationService.Get("ControllerPortLabel"), out int controllerPort))
         {
             return;

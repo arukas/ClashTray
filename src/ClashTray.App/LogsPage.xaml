@@ -36,14 +36,14 @@
                 <TextBox x:Name="SearchBox" x:Uid="LogsSearchBox" TextChanged="SearchBox_TextChanged" />
                 <ComboBox x:Name="LevelBox" Grid.Column="1" SelectedIndex="0" SelectionChanged="LevelBox_SelectionChanged" MinWidth="84">
                     <ComboBoxItem x:Uid="LevelAllItem" Tag="all" />
-                    <ComboBoxItem Content="info" Tag="info" />
-                    <ComboBoxItem Content="warning" Tag="warning" />
-                    <ComboBoxItem Content="error" Tag="error" />
+                    <ComboBoxItem x:Uid="LogLevelInfoItem" Tag="info" />
+                    <ComboBoxItem x:Uid="LogLevelWarningItem" Tag="warning" />
+                    <ComboBoxItem x:Uid="LogLevelErrorItem" Tag="error" />
                 </ComboBox>
                 <ComboBox x:Name="SourceBox" Grid.Column="2" SelectedIndex="0" SelectionChanged="SourceBox_SelectionChanged" MinWidth="100">
                     <ComboBoxItem x:Uid="SourceAllItem" Tag="all" />
-                    <ComboBoxItem Content="ClashTray" Tag="ClashTray" />
-                    <ComboBoxItem Content="mihomo" Tag="mihomo" />
+                    <ComboBoxItem x:Uid="SourceClashTrayItem" Tag="ClashTray" />
+                    <ComboBoxItem x:Uid="SourceMihomoItem" Tag="mihomo" />
                 </ComboBox>
             </Grid>
         </Border>
