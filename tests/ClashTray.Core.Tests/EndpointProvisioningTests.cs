@@ -116,6 +116,94 @@ public sealed class EndpointProvisioningTests
         }
     }
 
+    [TestMethod]
+    public async Task UpdatingEndpointPreservesSecretAndRemovesCaWhenTrustModeChanges()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointStore endpointStore = new(paths);
+        EndpointSecretStore secretStore = new(paths);
+        EndpointCertificateStore certificateStore = new(paths);
+        EndpointProvisioningCoordinator coordinator = new(endpointStore, secretStore, certificateStore);
+        EndpointDescriptor custom = EndpointUriNormalizer.CreateRemoteDescriptor(
+                new EndpointId("office"),
+                "Office",
+                new Uri("https://office.example.test"))
+            with { Security = EndpointTransportSecurity.HttpsCustomCertificate };
+        using X509Certificate2 ca = CreateCaCertificate();
+
+        try
+        {
+            EndpointRecord created = await coordinator.ProvisionAsync(
+                custom,
+                "controller-secret",
+                ca.Export(X509ContentType.Cert),
+                null);
+            EndpointRecord updated = await coordinator.UpdateAsync(
+                new EndpointId("office"),
+                EndpointUriNormalizer.CreateRemoteDescriptor(
+                    new EndpointId("office"),
+                    "Office renamed",
+                    new Uri("https://new-office.example.test")),
+                secret: null,
+                customCaCertificate: null,
+                insecureHttpAcknowledgedAtUtc: null);
+
+            Assert.AreEqual("Office renamed", updated.Descriptor.DisplayName);
+            Assert.AreEqual("https://new-office.example.test/", updated.Descriptor.BaseUri.AbsoluteUri);
+            Assert.AreEqual(created.SecretReference, updated.SecretReference);
+            Assert.IsNull(updated.CertificateReference);
+            Assert.AreEqual("controller-secret", await secretStore.GetAsync(updated.SecretReference!));
+            Assert.IsNull(await certificateStore.GetAsync(created.CertificateReference!));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task UpdatingCustomHttpsWithoutNewCaPreservesExistingCa()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointStore endpointStore = new(paths);
+        EndpointSecretStore secretStore = new(paths);
+        EndpointCertificateStore certificateStore = new(paths);
+        EndpointProvisioningCoordinator coordinator = new(endpointStore, secretStore, certificateStore);
+        EndpointDescriptor custom = EndpointUriNormalizer.CreateRemoteDescriptor(
+                new EndpointId("office"),
+                "Office",
+                new Uri("https://office.example.test"))
+            with { Security = EndpointTransportSecurity.HttpsCustomCertificate };
+        using X509Certificate2 ca = CreateCaCertificate();
+        byte[] certificateBytes = ca.Export(X509ContentType.Cert);
+
+        try
+        {
+            EndpointRecord created = await coordinator.ProvisionAsync(
+                custom,
+                null,
+                certificateBytes,
+                null);
+            EndpointRecord updated = await coordinator.UpdateAsync(
+                created.Descriptor.Id,
+                custom with { DisplayName = "Office updated" },
+                secret: null,
+                customCaCertificate: null,
+                insecureHttpAcknowledgedAtUtc: null);
+
+            Assert.AreEqual(created.CertificateReference, updated.CertificateReference);
+            CollectionAssert.AreEqual(
+                certificateBytes,
+                await certificateStore.GetAsync(updated.CertificateReference!));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static X509Certificate2 CreateCaCertificate()
     {
         using RSA key = RSA.Create(2048);
