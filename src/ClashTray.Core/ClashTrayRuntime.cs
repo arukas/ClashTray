@@ -422,7 +422,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             .ToArray();
         _endpointStoreStatus = result.RemoteStoreStatus;
         _endpointStoreMessage = result.Message;
-        PublishAppSnapshot();
+        Publish();
         return result;
     }
 

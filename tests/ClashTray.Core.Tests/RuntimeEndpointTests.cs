@@ -131,7 +131,10 @@ public sealed class RuntimeEndpointTests
         await using ClashTrayRuntime runtime = new(paths);
         TaskCompletionSource<AppSnapshot> changed = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<RuntimeSnapshot> legacyChanged = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         runtime.AppSnapshotChanged += (_, snapshot) => changed.TrySetResult(snapshot);
+        runtime.SnapshotChanged += (_, snapshot) => legacyChanged.TrySetResult(snapshot);
         EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
             new EndpointId("office"),
             "Office",
@@ -142,11 +145,13 @@ public sealed class RuntimeEndpointTests
             await runtime.SaveRemoteEndpointAsync(new EndpointRecord(remote));
 
             AppSnapshot published = await changed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            RuntimeSnapshot publishedLegacy = await legacyChanged.Task.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.AreEqual(2, published.Endpoints.Count);
             Assert.AreEqual(EndpointId.Local, published.ActiveController.Endpoint.Id);
             Assert.AreEqual(EndpointId.Local, published.Endpoints[0].Id);
             Assert.AreEqual(new EndpointId("office"), published.Endpoints[1].Id);
             Assert.AreEqual(EndpointCapabilityDefaults.Local, published.ActiveController.Capabilities);
+            Assert.AreEqual(runtime.Snapshot.Core.State, publishedLegacy.Core.State);
         }
         finally
         {
