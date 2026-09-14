@@ -32,6 +32,9 @@ public sealed class EndpointStoreTests
             EndpointRecord actual = loaded.Endpoints[0];
             Assert.AreEqual(expected.Descriptor, actual.Descriptor);
             Assert.AreEqual("office-secret", actual.SecretReference);
+            Assert.IsNotNull(actual.CreatedAtUtc);
+            Assert.IsNotNull(actual.UpdatedAtUtc);
+            Assert.IsTrue(actual.UpdatedAtUtc >= actual.CreatedAtUtc);
         }
         finally
         {
@@ -89,6 +92,70 @@ public sealed class EndpointStoreTests
         try
         {
             await Assert.ThrowsExactlyAsync<ArgumentException>(() => store.SaveAsync([endpoint]));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task ExplicitHttpEndpointRequiresAndPersistsRiskAcknowledgement()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointStore store = new(paths);
+        EndpointDescriptor descriptor = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("lab"),
+            "Lab",
+            new Uri("http://lab.example.test"),
+            allowExplicitHttp: true);
+        EndpointRecord withoutAcknowledgement = new(descriptor);
+        DateTimeOffset acknowledgedAt = DateTimeOffset.UtcNow.AddMinutes(-2);
+        EndpointRecord acknowledged = withoutAcknowledgement with
+        {
+            InsecureHttpAcknowledgedAtUtc = acknowledgedAt
+        };
+
+        try
+        {
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => store.SaveAsync([withoutAcknowledgement]));
+            await store.SaveAsync([acknowledged]);
+
+            EndpointStoreLoadResult loaded = await store.LoadAsync();
+            Assert.AreEqual(acknowledgedAt, loaded.Endpoints.Single().InsecureHttpAcknowledgedAtUtc);
+            Assert.IsNotNull(loaded.Endpoints.Single().CreatedAtUtc);
+            Assert.IsNotNull(loaded.Endpoints.Single().UpdatedAtUtc);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task LegacyEndpointMetadataLoadsAndReceivesTimestampsOnNextSave()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        await File.WriteAllTextAsync(
+            paths.EndpointStoreFile,
+            "{\"schemaVersion\":1,\"endpoints\":[{\"id\":\"legacy\",\"displayName\":\"Legacy\",\"baseUri\":\"https://legacy.example.test/\",\"security\":1,\"isEnabled\":true}]}" );
+        EndpointStore store = new(paths);
+
+        try
+        {
+            EndpointStoreLoadResult loaded = await store.LoadAsync();
+
+            Assert.AreEqual(EndpointStoreLoadStatus.Loaded, loaded.Status);
+            Assert.IsNotNull(loaded.Endpoints.Single().CreatedAtUtc);
+            Assert.IsNotNull(loaded.Endpoints.Single().UpdatedAtUtc);
+
+            await store.SaveAsync(loaded.Endpoints);
+            string persisted = await File.ReadAllTextAsync(paths.EndpointStoreFile);
+            StringAssert.Contains(persisted, "createdAtUtc", StringComparison.Ordinal);
+            StringAssert.Contains(persisted, "updatedAtUtc", StringComparison.Ordinal);
         }
         finally
         {

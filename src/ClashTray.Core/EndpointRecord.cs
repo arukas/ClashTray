@@ -5,7 +5,10 @@ namespace ClashTray.Core;
 public sealed record EndpointRecord(
     EndpointDescriptor Descriptor,
     string? SecretReference = null,
-    string? CertificateReference = null);
+    string? CertificateReference = null,
+    DateTimeOffset? InsecureHttpAcknowledgedAtUtc = null,
+    DateTimeOffset? CreatedAtUtc = null,
+    DateTimeOffset? UpdatedAtUtc = null);
 
 public enum EndpointStoreLoadStatus
 {

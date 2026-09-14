@@ -91,17 +91,24 @@ public sealed class EndpointStore
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
-        ValidateDomain(endpoints);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        EndpointRecord[] normalizedEndpoints = endpoints
+            .Select(endpoint => NormalizeForPersistence(endpoint, now))
+            .ToArray();
+        ValidateDomain(normalizedEndpoints);
         PersistedEndpointSet persisted = new(
             CurrentSchemaVersion,
-            endpoints.Select(endpoint => new PersistedEndpoint(
+            normalizedEndpoints.Select(endpoint => new PersistedEndpoint(
                 endpoint.Descriptor.Id.Value,
                 endpoint.Descriptor.DisplayName,
                 endpoint.Descriptor.BaseUri.AbsoluteUri,
                 endpoint.Descriptor.Security,
                 endpoint.Descriptor.IsEnabled,
                 endpoint.SecretReference,
-                endpoint.CertificateReference)).ToArray());
+                endpoint.CertificateReference,
+                endpoint.InsecureHttpAcknowledgedAtUtc,
+                endpoint.CreatedAtUtc,
+                endpoint.UpdatedAtUtc)).ToArray());
         await AtomicFile.WriteJsonAsync(
             _paths.EndpointStoreFile,
             persisted,
@@ -120,13 +127,22 @@ public sealed class EndpointStore
             throw new IOException(loaded.Message);
         }
 
+        EndpointRecord? existing = loaded.Endpoints.FirstOrDefault(candidate =>
+            string.Equals(
+                candidate.Descriptor.Id.Value,
+                endpoint.Descriptor.Id.Value,
+                StringComparison.OrdinalIgnoreCase));
+        EndpointRecord endpointToSave = existing?.CreatedAtUtc is not null
+            && endpoint.CreatedAtUtc is null
+            ? endpoint with { CreatedAtUtc = existing.CreatedAtUtc }
+            : endpoint;
         List<EndpointRecord> endpoints = loaded.Endpoints
             .Where(existing => !string.Equals(
                 existing.Descriptor.Id.Value,
-                endpoint.Descriptor.Id.Value,
+                endpointToSave.Descriptor.Id.Value,
                 StringComparison.OrdinalIgnoreCase))
             .ToList();
-        endpoints.Add(endpoint);
+        endpoints.Add(endpointToSave);
         await SaveAsync(endpoints, cancellationToken);
     }
 
@@ -203,12 +219,27 @@ public sealed class EndpointStore
         return new EndpointRecord(
             descriptor,
             NormalizeOptionalReference(persisted.SecretReference, nameof(persisted.SecretReference)),
-            NormalizeOptionalReference(persisted.CertificateReference, nameof(persisted.CertificateReference)));
+            NormalizeOptionalReference(persisted.CertificateReference, nameof(persisted.CertificateReference)),
+            persisted.InsecureHttpAcknowledgedAtUtc,
+            persisted.CreatedAtUtc ?? DateTimeOffset.UtcNow,
+            persisted.UpdatedAtUtc ?? persisted.CreatedAtUtc ?? DateTimeOffset.UtcNow);
     }
 
-    private static void ValidateDomain(IReadOnlyList<EndpointRecord> endpoints)
+    private static EndpointRecord NormalizeForPersistence(
+        EndpointRecord endpoint,
+        DateTimeOffset now)
     {
-        if (endpoints.Count > MaxEndpoints)
+        ArgumentNullException.ThrowIfNull(endpoint);
+        return endpoint with
+        {
+            CreatedAtUtc = endpoint.CreatedAtUtc ?? now,
+            UpdatedAtUtc = now
+        };
+    }
+
+    private static void ValidateDomain(EndpointRecord[] endpoints)
+    {
+        if (endpoints.Length > MaxEndpoints)
         {
             throw new ArgumentException("远程端点数量不能超过 32 个。", nameof(endpoints));
         }
@@ -266,6 +297,36 @@ public sealed class EndpointStore
                     "Certificate references require custom HTTPS trust.",
                     nameof(endpoints));
             }
+
+            if (descriptor.Security == EndpointTransportSecurity.HttpExplicitlyConfirmed
+                && endpoint.InsecureHttpAcknowledgedAtUtc is null)
+            {
+                throw new ArgumentException(
+                    "Explicit HTTP endpoints require a risk acknowledgement timestamp.",
+                    nameof(endpoints));
+            }
+
+            if (descriptor.Security != EndpointTransportSecurity.HttpExplicitlyConfirmed
+                && endpoint.InsecureHttpAcknowledgedAtUtc is not null)
+            {
+                throw new ArgumentException(
+                    "HTTP risk acknowledgements are only valid for explicit HTTP endpoints.",
+                    nameof(endpoints));
+            }
+
+            if (endpoint.CreatedAtUtc is null || endpoint.UpdatedAtUtc is null)
+            {
+                throw new ArgumentException(
+                    "Endpoint timestamps are required for persistence.",
+                    nameof(endpoints));
+            }
+
+            if (endpoint.UpdatedAtUtc < endpoint.CreatedAtUtc)
+            {
+                throw new ArgumentException(
+                    "Endpoint update time cannot precede creation time.",
+                    nameof(endpoints));
+            }
         }
     }
 
@@ -312,5 +373,8 @@ public sealed class EndpointStore
         EndpointTransportSecurity Security,
         bool IsEnabled,
         string? SecretReference,
-        string? CertificateReference);
+        string? CertificateReference,
+        DateTimeOffset? InsecureHttpAcknowledgedAtUtc,
+        DateTimeOffset? CreatedAtUtc,
+        DateTimeOffset? UpdatedAtUtc);
 }
