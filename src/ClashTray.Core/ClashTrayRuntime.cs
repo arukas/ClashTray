@@ -2446,12 +2446,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         MihomoApiClient api,
         long generation,
         EndpointCommand command,
-        string staleSessionMessage) =>
-        _controllerSessions.EnsureCommandAllowed(
+        string staleSessionMessage)
+    {
+        EndpointId endpointId = _controllerSessions.Current?.Endpoint.Id ?? EndpointId.Local;
+        TargetCommand targetCommand = new(endpointId, generation, command);
+        _controllerSessions.EnsureTargetCommandAllowed(
             api,
-            generation,
-            command,
+            targetCommand,
             staleSessionMessage);
+    }
 
     private async Task ApplyProgramOverridesAsync(
         bool coreRunning,
