@@ -225,7 +225,10 @@ public sealed partial class MainWindow : Window
             : LocalizationService.Format("CoreVersionRunningFormat", core.Version, appVersion);
         bool dashboardAvailable = localController && coreRunning && _runtime?.DashboardAvailable == true;
         ControllerEndpointButton.Content = !localController
-            ? LocalizationService.Get("ControllerRemoteNotAvailable")
+            ? LocalizationService.Format(
+                "ControllerRemoteFormat",
+                _runtime?.AppSnapshot.ActiveController.Endpoint.DisplayName
+                    ?? LocalizationService.Get("ControllerRemoteNotAvailable"))
             : coreRunning
                 ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}/ui/"
                 : LocalizationService.Get("ControllerCoreNotRunning");

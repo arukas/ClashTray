@@ -197,6 +197,7 @@
   <data name="CoreVersionRunningFormat" xml:space="preserve"><value>Mihomo {0} · ClashTray {1}</value></data>
   <data name="ControllerCoreNotRunning" xml:space="preserve"><value>核心未运行</value></data>
   <data name="ControllerRemoteNotAvailable" xml:space="preserve"><value>远程端点不提供本机控制器</value></data>
+  <data name="ControllerRemoteFormat" xml:space="preserve"><value>远程 · {0}</value></data>
   <data name="RemoteCoreActionUnavailable" xml:space="preserve"><value>远程端点不能控制本机核心</value></data>
   <data name="RemoteLocalNetworkActionUnavailable" xml:space="preserve"><value>远程端点不能控制本机网络状态</value></data>
   <data name="ToolTipControllerNeedsCore" xml:space="preserve"><value>核心运行后可打开本机控制器</value></data>
@@ -362,6 +363,10 @@
   <data name="EndpointRemoved" xml:space="preserve"><value>端点及不再使用的本地凭据已删除。</value></data>
   <data name="EndpointNotFound" xml:space="preserve"><value>端点已不存在。</value></data>
   <data name="EndpointSelectRemote" xml:space="preserve"><value>请选择一个远程端点。</value></data>
+  <data name="EndpointConnect" xml:space="preserve"><value>连接</value></data>
+  <data name="EndpointCurrent" xml:space="preserve"><value>当前</value></data>
+  <data name="EndpointReturnLocal" xml:space="preserve"><value>切回本机</value></data>
+  <data name="EndpointSelected" xml:space="preserve"><value>已切换到 {0}。</value></data>
   <data name="EndpointLocalSummary" xml:space="preserve"><value>本机 Controller；不可删除</value></data>
   <data name="EndpointSecurityHttpsSystemTrust" xml:space="preserve"><value>HTTPS / 系统信任</value></data>
   <data name="EndpointSecurityHttpsCustomCa" xml:space="preserve"><value>HTTPS / 自定义 CA</value></data>

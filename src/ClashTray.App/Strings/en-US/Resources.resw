@@ -197,6 +197,7 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="CoreVersionRunningFormat" xml:space="preserve"><value>Mihomo {0} · ClashTray {1}</value></data>
   <data name="ControllerCoreNotRunning" xml:space="preserve"><value>Core not running</value></data>
   <data name="ControllerRemoteNotAvailable" xml:space="preserve"><value>Remote endpoint has no local controller</value></data>
+  <data name="ControllerRemoteFormat" xml:space="preserve"><value>Remote · {0}</value></data>
   <data name="RemoteCoreActionUnavailable" xml:space="preserve"><value>Remote endpoints cannot control the local core</value></data>
   <data name="RemoteLocalNetworkActionUnavailable" xml:space="preserve"><value>Remote endpoints cannot control local network state</value></data>
   <data name="ToolTipControllerNeedsCore" xml:space="preserve"><value>Open the local controller once the core is running</value></data>
@@ -362,6 +363,10 @@ Upload {4} B · Download {5} B</value></data>
   <data name="EndpointRemoved" xml:space="preserve"><value>The endpoint and unreferenced local credentials were removed.</value></data>
   <data name="EndpointNotFound" xml:space="preserve"><value>The endpoint no longer exists.</value></data>
   <data name="EndpointSelectRemote" xml:space="preserve"><value>Select a remote endpoint.</value></data>
+  <data name="EndpointConnect" xml:space="preserve"><value>Connect</value></data>
+  <data name="EndpointCurrent" xml:space="preserve"><value>Current</value></data>
+  <data name="EndpointReturnLocal" xml:space="preserve"><value>Use local</value></data>
+  <data name="EndpointSelected" xml:space="preserve"><value>Switched to {0}.</value></data>
   <data name="EndpointLocalSummary" xml:space="preserve"><value>Local Controller; cannot be removed</value></data>
   <data name="EndpointSecurityHttpsSystemTrust" xml:space="preserve"><value>HTTPS / system trust</value></data>
   <data name="EndpointSecurityHttpsCustomCa" xml:space="preserve"><value>HTTPS / custom CA</value></data>

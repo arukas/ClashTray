@@ -188,6 +188,27 @@ public sealed partial class SettingsPage : UserControl
         UpdateEndpointRemoveButton();
     }
 
+    private async void SelectEndpointButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: EndpointDescriptor endpoint })
+        {
+            return;
+        }
+
+        try
+        {
+            await _runtime.SelectEndpointAsync(endpoint.Id);
+            StatusText.Text = LocalizationService.Format(
+                "EndpointSelected",
+                endpoint.DisplayName);
+            UpdateEndpointList(_runtime.Endpoints);
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = ErrorSanitizer.Sanitize(exception);
+        }
+    }
+
     private void EndpointTransportBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (EndpointHttpRiskCheckBox is null)
@@ -223,9 +244,12 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
-        string signature = string.Join(
-            '\u001F',
-            endpoints.Select(endpoint => $"{endpoint.Id.Value}\u001E{endpoint.DisplayName}\u001E{endpoint.BaseUri.AbsoluteUri}\u001E{endpoint.Security}\u001E{endpoint.IsEnabled}"));
+        EndpointId activeEndpointId = _runtime.AppSnapshot.ActiveController.Endpoint.Id;
+        string signature = activeEndpointId.Value
+            + '\u001D'
+            + string.Join(
+                '\u001F',
+                endpoints.Select(endpoint => $"{endpoint.Id.Value}\u001E{endpoint.DisplayName}\u001E{endpoint.BaseUri.AbsoluteUri}\u001E{endpoint.Security}\u001E{endpoint.IsEnabled}"));
         if (string.Equals(_endpointSignature, signature, StringComparison.Ordinal))
         {
             return;
@@ -240,24 +264,48 @@ public sealed partial class SettingsPage : UserControl
             EndpointListView.Items.Clear();
             foreach (EndpointDescriptor endpoint in endpoints)
             {
-                StackPanel content = new() { Spacing = 1 };
-                content.Children.Add(new TextBlock
+                bool isActive = endpoint.Id == activeEndpointId;
+                StackPanel details = new() { Spacing = 1 };
+                details.Children.Add(new TextBlock
                 {
                     Text = endpoint.DisplayName,
                     FontWeight = Microsoft.UI.Text.FontWeights.SemiBold
                 });
-                content.Children.Add(new TextBlock
+                details.Children.Add(new TextBlock
                 {
                     Text = endpoint.Kind == EndpointKind.Local
                         ? LocalizationService.Get("EndpointLocalSummary")
                         : $"{endpoint.BaseUri.AbsoluteUri} · {FormatEndpointSecurity(endpoint.Security)}",
                     Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
                 });
+
+                Grid content = new() { ColumnSpacing = 8 };
+                content.ColumnDefinitions.Add(new ColumnDefinition());
+                content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                content.Children.Add(details);
+
+                Button select = new()
+                {
+                    Content = isActive
+                        ? LocalizationService.Get("EndpointCurrent")
+                        : endpoint.Kind == EndpointKind.Local
+                            ? LocalizationService.Get("EndpointReturnLocal")
+                            : LocalizationService.Get("EndpointConnect"),
+                    Tag = endpoint,
+                    IsEnabled = !isActive,
+                    Padding = new Thickness(8, 4, 8, 4),
+                    MinWidth = 0,
+                    Style = (Style)Application.Current.Resources["ClashTrayCompactButtonStyle"]
+                };
+                select.Click += SelectEndpointButton_Click;
+                Grid.SetColumn(select, 1);
+                content.Children.Add(select);
+
                 EndpointListView.Items.Add(new ListViewItem
                 {
                     Content = content,
                     Tag = endpoint,
-                    IsEnabled = endpoint.Kind == EndpointKind.Remote
+                    IsEnabled = true
                 });
             }
 
