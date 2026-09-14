@@ -282,6 +282,11 @@ public sealed class RuntimeEndpointTests
             Assert.AreEqual(0, runtime.AppSnapshot.ActiveController.Connections.Count);
             Assert.AreEqual(1, connector.CloseAllConnectionsCount);
 
+            await runtime.RefreshProviderAsync("RemoteProxy", rules: false);
+            Assert.AreEqual(1, connector.ProxyProviderRefreshCount);
+            await runtime.RefreshProviderAsync("RemoteRules", rules: true);
+            Assert.AreEqual(1, connector.RuleProviderRefreshCount);
+
             await runtime.UpdateRemoteEndpointAsync(
                 remote.Id,
                 remote with
@@ -331,6 +336,12 @@ public sealed class RuntimeEndpointTests
 
         public int CloseAllConnectionsCount =>
             Volatile.Read(ref _handler)?.CloseAllConnectionsCount ?? 0;
+
+        public int ProxyProviderRefreshCount =>
+            Volatile.Read(ref _handler)?.ProxyProviderRefreshCount ?? 0;
+
+        public int RuleProviderRefreshCount =>
+            Volatile.Read(ref _handler)?.RuleProviderRefreshCount ?? 0;
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage(
             "Reliability",
@@ -387,6 +398,8 @@ public sealed class RuntimeEndpointTests
             private int _remainingConnections = 2;
             private int _singleConnectionCloseCount;
             private int _closeAllConnectionsCount;
+            private int _proxyProviderRefreshCount;
+            private int _ruleProviderRefreshCount;
 
             public int ModePatchCount => Volatile.Read(ref _modePatchCount);
 
@@ -399,6 +412,12 @@ public sealed class RuntimeEndpointTests
 
             public int CloseAllConnectionsCount =>
                 Volatile.Read(ref _closeAllConnectionsCount);
+
+            public int ProxyProviderRefreshCount =>
+                Volatile.Read(ref _proxyProviderRefreshCount);
+
+            public int RuleProviderRefreshCount =>
+                Volatile.Read(ref _ruleProviderRefreshCount);
 
             public void SetTraffic(long uploadBytes, long downloadBytes)
             {
@@ -462,6 +481,17 @@ public sealed class RuntimeEndpointTests
                 {
                     Volatile.Write(ref _remainingConnections, 0);
                     Interlocked.Increment(ref _closeAllConnectionsCount);
+                }
+
+                if (request.Method == HttpMethod.Put
+                    && request.RequestUri?.AbsolutePath == "/providers/proxies/RemoteProxy")
+                {
+                    Interlocked.Increment(ref _proxyProviderRefreshCount);
+                }
+                else if (request.Method == HttpMethod.Put
+                    && request.RequestUri?.AbsolutePath == "/providers/rules/RemoteRules")
+                {
+                    Interlocked.Increment(ref _ruleProviderRefreshCount);
                 }
 
                 int remainingConnections = Volatile.Read(ref _remainingConnections);

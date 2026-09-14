@@ -1799,6 +1799,40 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
+            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+                EndpointCommand.RefreshProvider,
+                "刷新 Provider 期间远程端点会话已切换，请重试。");
+            if (remoteSession is not null)
+            {
+                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+                if (rules)
+                {
+                    await remoteSession.Api.RefreshRuleProviderAsync(name, cancellationToken);
+                }
+                else
+                {
+                    await remoteSession.Api.RefreshProviderAsync(name, cancellationToken);
+                }
+
+                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
+                {
+                    throw new InvalidOperationException(
+                        "刷新 Provider 期间远程端点会话已切换，请重试。");
+                }
+
+                if (!await RefreshRemoteControllerSnapshotAsync(
+                        remoteSession,
+                        remoteStatus,
+                        cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException(
+                        "远程 Provider 刷新结果无法确认，请重试。");
+                }
+
+                return;
+            }
+
             if (_api is null)
             {
                 return;
