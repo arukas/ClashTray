@@ -149,8 +149,7 @@ public sealed partial class MainWindow : Window
         ArgumentNullException.ThrowIfNull(snapshot);
         _activeEndpointKind = snapshot.ActiveController.Endpoint.Kind;
         UpdateSnapshot(RuntimeSnapshotAdapter.ToRuntimeSnapshot(
-            snapshot,
-            _runtime?.Snapshot.NetworkSwitch));
+            snapshot));
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)

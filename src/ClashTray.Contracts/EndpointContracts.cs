@@ -124,7 +124,8 @@ public sealed record LocalDeviceSnapshot(
     SubscriptionState Subscription,
     bool DesiredSystemProxyEnabled,
     bool DesiredTunEnabled,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    NetworkSwitchStatus? NetworkSwitch = null);
 
 public sealed record ControllerSessionSnapshot(
     EndpointDescriptor Endpoint,

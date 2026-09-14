@@ -34,7 +34,7 @@ public static class RuntimeSnapshotAdapter
             controller.RuleProviders,
             controller.Logs,
             error,
-            networkSwitch);
+            networkSwitch ?? snapshot.LocalDevice.NetworkSwitch);
     }
 
     public static AppSnapshot ToAppSnapshot(
@@ -74,7 +74,8 @@ public static class RuntimeSnapshotAdapter
             snapshot.Subscription,
             settings.SystemProxyEnabled,
             settings.TunEnabled,
-            snapshot.ErrorMessage ?? snapshot.Core.ErrorMessage);
+            snapshot.ErrorMessage ?? snapshot.Core.ErrorMessage,
+            snapshot.NetworkSwitch);
 
         ControllerSessionSnapshot controller = new(
             localEndpoint,

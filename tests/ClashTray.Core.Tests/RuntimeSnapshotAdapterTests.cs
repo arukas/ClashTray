@@ -28,7 +28,14 @@ public sealed class RuntimeSnapshotAdapterTests
                 3,
                 4096,
                 null),
-            [configuration]);
+            [configuration],
+            new NetworkSwitchStatus(
+                Available: true,
+                State: NetworkSwitchState.ManualOverride,
+                PermissionState: NetworkPermissionState.Allowed,
+                Context: null,
+                LastDecision: null,
+                ErrorMessage: null));
         AppSettings settings = new(
             ActiveConfigurationId: configuration.Id,
             ControllerPort: 9191,
@@ -56,6 +63,10 @@ public sealed class RuntimeSnapshotAdapterTests
         Assert.AreSame(snapshot.ProxyGroups, projected.ActiveController.ProxyGroups);
         Assert.AreEqual("en-US", projected.Language);
         Assert.AreEqual("dark", projected.Theme);
+        Assert.AreSame(snapshot.NetworkSwitch, projected.LocalDevice.NetworkSwitch);
+
+        RuntimeSnapshot roundTrip = RuntimeSnapshotAdapter.ToRuntimeSnapshot(projected);
+        Assert.AreSame(snapshot.NetworkSwitch, roundTrip.NetworkSwitch);
     }
 
     [TestMethod]
@@ -170,7 +181,8 @@ public sealed class RuntimeSnapshotAdapterTests
 
     private static RuntimeSnapshot CreateSnapshot(
         CoreStatus core,
-        IReadOnlyList<ConfigurationProfile> configurations) =>
+        IReadOnlyList<ConfigurationProfile> configurations,
+        NetworkSwitchStatus? networkSwitch = null) =>
         new(
             core,
             SystemProxyState.Off,
@@ -184,5 +196,6 @@ public sealed class RuntimeSnapshotAdapterTests
             [],
             [],
             [],
-            null);
+            null,
+            networkSwitch);
 }
