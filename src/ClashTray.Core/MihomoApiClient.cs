@@ -261,7 +261,7 @@ public sealed class MihomoApiClient
 
     public Uri BuildWebSocketUri(string path)
     {
-        Uri requestUri = new Uri(_controllerUri, path);
+        Uri requestUri = BuildControllerUri(path);
         UriBuilder builder = new UriBuilder(requestUri)
         {
             Scheme = _controllerUri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws",
@@ -271,13 +271,28 @@ public sealed class MihomoApiClient
 
     private HttpRequestMessage CreateRequest(HttpMethod method, string path)
     {
-        HttpRequestMessage request = new HttpRequestMessage(method, new Uri(_controllerUri, path));
+        HttpRequestMessage request = new HttpRequestMessage(method, BuildControllerUri(path));
         if (_secret.Length > 0)
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _secret);
         }
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return request;
+    }
+
+    private Uri BuildControllerUri(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (Uri.TryCreate(path, UriKind.Absolute, out _)
+            || path.StartsWith("//", StringComparison.Ordinal)
+            || path.Contains('\\', StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Mihomo controller paths must remain relative to the configured controller.",
+                nameof(path));
+        }
+
+        return new Uri(_controllerUri, path.TrimStart('/'));
     }
 
     private static Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)

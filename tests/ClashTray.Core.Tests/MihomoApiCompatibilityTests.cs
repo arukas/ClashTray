@@ -212,6 +212,22 @@ public sealed class MihomoApiCompatibilityTests
     }
 
     [TestMethod]
+    public async Task ControllerPathsCannotEscapeConfiguredOrigin()
+    {
+        using RecordingHandler handler = new RecordingHandler();
+        using HttpClient httpClient = new HttpClient(handler);
+        MihomoApiClient api = new MihomoApiClient(
+            httpClient,
+            new Uri("https://controller.example.test/"),
+            "test-secret");
+
+        Assert.ThrowsExactly<ArgumentException>(() => api.BuildWebSocketUri("https://other.example.test/logs"));
+        Assert.ThrowsExactly<ArgumentException>(() => api.BuildWebSocketUri("//other.example.test/logs"));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() => api.GetAsync("https://other.example.test/version"));
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() => api.GetAsync("/\\other.example.test/version"));
+    }
+
+    [TestMethod]
     public void LogsParserReadsOfficialStructuredSingleMessage()
     {
         using JsonDocument document = JsonDocument.Parse(
