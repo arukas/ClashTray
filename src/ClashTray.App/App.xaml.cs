@@ -58,6 +58,7 @@ public partial class App : Application, IAsyncDisposable
         _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
         _instanceCoordinator.ActivationRequested += OnActivationRequested;
         _runtime.SnapshotChanged += OnRuntimeSnapshotChanged;
+        _runtime.AppSnapshotChanged += OnAppSnapshotChanged;
 
         _mainWindow = new MainWindow(this);
         _mainWindow.Activate();
@@ -305,9 +306,13 @@ public partial class App : Application, IAsyncDisposable
     {
         _dispatcherQueue?.TryEnqueue(() =>
         {
-            _mainWindow?.UpdateSnapshot(snapshot);
             UpdateTrayState(snapshot);
         });
+    }
+
+    private void OnAppSnapshotChanged(object? sender, AppSnapshot snapshot)
+    {
+        _dispatcherQueue?.TryEnqueue(() => _mainWindow?.UpdateAppSnapshot(snapshot));
     }
 
     private void UpdateTrayState(RuntimeSnapshot snapshot)

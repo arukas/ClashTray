@@ -66,6 +66,12 @@ public sealed class AppSnapshotComposerTests
         Assert.AreEqual(EndpointId.Local, projected.Endpoints[0].Id);
         Assert.AreEqual(new EndpointId("office"), projected.ActiveController.Endpoint.Id);
         Assert.AreEqual(ProxyMode.Global, projected.ActiveController.Status!.Mode);
+
+        RuntimeSnapshot legacyProjection = RuntimeSnapshotAdapter.ToRuntimeSnapshot(projected);
+        Assert.AreEqual(ProxyMode.Global, legacyProjection.Core.Mode);
+        Assert.AreEqual(3, legacyProjection.Core.UploadBytes);
+        Assert.AreEqual(SystemProxyState.Off, legacyProjection.SystemProxy);
+        Assert.AreEqual(localConfiguration.Id, legacyProjection.Configurations.Single().Id);
     }
 
     [TestMethod]

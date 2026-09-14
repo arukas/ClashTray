@@ -43,6 +43,7 @@ public sealed partial class MainWindow : Window
     private bool _updatingSnapshot;
     private bool _updatingThemeControls;
     private bool _pageRefreshInProgress;
+    private EndpointKind _activeEndpointKind = EndpointKind.Local;
     private readonly Queue<(double Up, double Down)> _trafficHistory = new();
     private DateTime _lastTrafficSample;
 
@@ -70,7 +71,7 @@ public sealed partial class MainWindow : Window
         ProxyPageContent.Content = _proxyPage;
         ApplyTheme(runtime.Settings.Theme);
         NavigateTo(_proxyPage, PanelPage.Proxy);
-        UpdateSnapshot(runtime.Snapshot);
+        UpdateAppSnapshot(runtime.AppSnapshot);
     }
 
     public void HandleDeactivation()
@@ -143,17 +144,27 @@ public sealed partial class MainWindow : Window
         StopThemeTracking();
     }
 
+    public void UpdateAppSnapshot(AppSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        _activeEndpointKind = snapshot.ActiveController.Endpoint.Kind;
+        UpdateSnapshot(RuntimeSnapshotAdapter.ToRuntimeSnapshot(
+            snapshot,
+            _runtime?.Snapshot.NetworkSwitch));
+    }
+
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ApplyTheme(_runtime?.Settings.Theme ?? "system");
         CoreStatus core = snapshot.Core;
         _updatingSnapshot = true;
+        bool localController = _activeEndpointKind == EndpointKind.Local;
         bool coreBusy = core.State is CoreState.Validating
             or CoreState.Starting
             or CoreState.Stopping
             or CoreState.Restarting;
-        CoreActionButton.IsEnabled = !coreBusy;
+        CoreActionButton.IsEnabled = localController && !coreBusy;
         SystemProxySwitch.IsEnabled = snapshot.SystemProxy is not (SystemProxyState.Enabling or SystemProxyState.Disabling);
         TunSwitch.IsEnabled = snapshot.Tun is not (TunState.Enabling or TunState.Disabling);
         bool coreRunning = core.State == CoreState.Running;
@@ -178,10 +189,13 @@ public sealed partial class MainWindow : Window
             Glyph = core.State == CoreState.Running ? "\uF305" : "\uE768",
             FontSize = 16
         };
-        ToolTipService.SetToolTip(CoreActionButton,
-            core.State == CoreState.Running
-                ? LocalizationService.Get("ToolTipRestartCore")
-                : LocalizationService.Get("ToolTipStartCore"));
+        ToolTipService.SetToolTip(
+            CoreActionButton,
+            !localController
+                ? LocalizationService.Get("RemoteCoreActionUnavailable")
+                : core.State == CoreState.Running
+                    ? LocalizationService.Get("ToolTipRestartCore")
+                    : LocalizationService.Get("ToolTipStartCore"));
         StatusDot.Fill = new SolidColorBrush(core.State switch
         {
             CoreState.Running => Colors.Green,
@@ -197,21 +211,29 @@ public sealed partial class MainWindow : Window
         CoreVersionText.Text = string.IsNullOrWhiteSpace(core.Version)
             ? LocalizationService.Format("CoreVersionIdleFormat", appVersion)
             : LocalizationService.Format("CoreVersionRunningFormat", core.Version, appVersion);
-        bool dashboardAvailable = coreRunning && _runtime?.DashboardAvailable == true;
-        ControllerEndpointButton.Content = coreRunning
-            ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}/ui/"
-            : LocalizationService.Get("ControllerCoreNotRunning");
-        ControllerEndpointButton.IsEnabled = coreRunning;
+        bool dashboardAvailable = localController && coreRunning && _runtime?.DashboardAvailable == true;
+        ControllerEndpointButton.Content = !localController
+            ? LocalizationService.Get("ControllerRemoteNotAvailable")
+            : coreRunning
+                ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}/ui/"
+                : LocalizationService.Get("ControllerCoreNotRunning");
+        ControllerEndpointButton.IsEnabled = localController && coreRunning;
         ToolTipService.SetToolTip(
             ControllerEndpointButton,
-            !coreRunning
+            !localController
+                ? LocalizationService.Get("ControllerRemoteNotAvailable")
+                : !coreRunning
                 ? LocalizationService.Get("ToolTipControllerNeedsCore")
                 : dashboardAvailable
                     ? LocalizationService.Get("ToolTipControllerOpenDashboard")
                     : LocalizationService.Get("ToolTipControllerMissingDashboard"));
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
             ControllerEndpointButton,
-            dashboardAvailable ? LocalizationService.Get("AutomationOpenDashboard") : LocalizationService.Get("AutomationOpenOrCopyController"));
+            !localController
+                ? LocalizationService.Get("ControllerRemoteNotAvailable")
+                : dashboardAvailable
+                    ? LocalizationService.Get("AutomationOpenDashboard")
+                    : LocalizationService.Get("AutomationOpenOrCopyController"));
         ConnectionCountText.Text = core.ConnectionCount.ToString(CultureInfo.InvariantCulture);
         TrafficText.Text = core.TrafficAvailable
             ? $"↑ {FormatRate(core.UploadBytesPerSecond)}  ↓ {FormatRate(core.DownloadBytesPerSecond)}"

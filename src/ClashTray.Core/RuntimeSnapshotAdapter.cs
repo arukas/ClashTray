@@ -4,6 +4,39 @@ namespace ClashTray.Core;
 
 public static class RuntimeSnapshotAdapter
 {
+    public static RuntimeSnapshot ToRuntimeSnapshot(
+        AppSnapshot snapshot,
+        NetworkSwitchStatus? networkSwitch = null)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        ControllerSessionSnapshot controller = snapshot.ActiveController;
+        CoreStatus core = controller.Status ?? CreateFallbackCoreStatus(controller);
+        string? error = controller.ErrorMessage
+            ?? snapshot.LocalDevice.ErrorMessage
+            ?? snapshot.ErrorMessage;
+        if (!string.Equals(core.ErrorMessage, error, StringComparison.Ordinal))
+        {
+            core = core with { ErrorMessage = error };
+        }
+
+        return new RuntimeSnapshot(
+            core,
+            snapshot.LocalDevice.SystemProxy,
+            snapshot.LocalDevice.Tun,
+            snapshot.LocalDevice.Subscription,
+            snapshot.LocalDevice.Configurations,
+            controller.ProxyGroups,
+            controller.ProxyNodes,
+            controller.Connections,
+            controller.Rules,
+            controller.Providers,
+            controller.RuleProviders,
+            controller.Logs,
+            error,
+            networkSwitch);
+    }
+
     public static AppSnapshot ToAppSnapshot(
         RuntimeSnapshot snapshot,
         AppSettings settings,
@@ -66,6 +99,34 @@ public static class RuntimeSnapshotAdapter
             settings.Language,
             settings.Theme,
             snapshot.ErrorMessage);
+    }
+
+    private static CoreStatus CreateFallbackCoreStatus(ControllerSessionSnapshot controller)
+    {
+        CoreState state = controller.State switch
+        {
+            EndpointSessionState.Connected => CoreState.Running,
+            EndpointSessionState.Connecting => CoreState.Starting,
+            EndpointSessionState.Reconnecting => CoreState.Restarting,
+            EndpointSessionState.AuthenticationFailed
+                or EndpointSessionState.CertificateFailed
+                or EndpointSessionState.Incompatible
+                or EndpointSessionState.Failed => CoreState.Failed,
+            _ => CoreState.Stopped
+        };
+
+        return new CoreStatus(
+            state,
+            Version: null,
+            ConfigurationName: null,
+            ProxyMode.Rule,
+            UploadBytesPerSecond: 0,
+            DownloadBytesPerSecond: 0,
+            UploadBytes: 0,
+            DownloadBytes: 0,
+            ConnectionCount: 0,
+            MemoryBytes: 0,
+            controller.ErrorMessage);
     }
 
     private static List<EndpointDescriptor> BuildEndpointList(

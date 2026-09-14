@@ -196,6 +196,8 @@
   <data name="CoreVersionIdleFormat" xml:space="preserve"><value>ClashTray {0} · Mihomo 未启动</value></data>
   <data name="CoreVersionRunningFormat" xml:space="preserve"><value>Mihomo {0} · ClashTray {1}</value></data>
   <data name="ControllerCoreNotRunning" xml:space="preserve"><value>核心未运行</value></data>
+  <data name="ControllerRemoteNotAvailable" xml:space="preserve"><value>远程端点不提供本机控制器</value></data>
+  <data name="RemoteCoreActionUnavailable" xml:space="preserve"><value>远程端点不能控制本机核心</value></data>
   <data name="ToolTipControllerNeedsCore" xml:space="preserve"><value>核心运行后可打开本机控制器</value></data>
   <data name="ToolTipControllerOpenDashboard" xml:space="preserve"><value>在默认浏览器打开 MetaCubeXD</value></data>
   <data name="ToolTipControllerMissingDashboard" xml:space="preserve"><value>MetaCubeXD 资源缺失；点击复制本机控制器地址</value></data>
