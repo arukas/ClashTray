@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using ClashTray.Contracts;
 using ClashTray.Core;
 using Microsoft.UI.Dispatching;
@@ -15,11 +16,23 @@ public partial class App : Application, IAsyncDisposable
     private readonly string? _smokeDirectory;
     private bool _disposed;
 
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification = "The runtime takes ownership of the network context source and disposes it with the application lifecycle.")]
     internal App(SingleInstanceCoordinator instanceCoordinator, string? smokeDirectory = null)
     {
         _instanceCoordinator = instanceCoordinator;
         _smokeDirectory = smokeDirectory;
-        _runtime = new ClashTrayRuntime(smokeDirectory is null ? null : new AppPaths(Path.Combine(smokeDirectory, "user"), Path.Combine(smokeDirectory, "service")));
+        AppPaths? runtimePaths = smokeDirectory is null
+            ? null
+            : new AppPaths(
+                Path.Combine(smokeDirectory, "user"),
+                Path.Combine(smokeDirectory, "service"));
+        INetworkContextSource? networkContextSource = smokeDirectory is null
+            ? new WindowsNetworkContextSource()
+            : null;
+        _runtime = new ClashTrayRuntime(runtimePaths, networkContextSource);
         UnhandledException += (_, e) =>
         {
             string directory = _smokeDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClashTray", "logs");

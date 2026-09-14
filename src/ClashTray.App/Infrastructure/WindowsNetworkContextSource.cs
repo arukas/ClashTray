@@ -10,7 +10,7 @@ namespace ClashTray.App;
 [SuppressMessage(
     "Performance",
     "CA1812:Avoid uninstantiated internal classes",
-    Justification = "The App composition root will own this platform adapter when network switching is wired into the runtime.")]
+    Justification = "The App composition root owns this platform adapter for the normal tray runtime.")]
 internal sealed class WindowsNetworkContextSource : INetworkContextSource
 {
     private const uint EthernetIanaInterfaceType = 6;
