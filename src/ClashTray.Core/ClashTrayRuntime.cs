@@ -4044,11 +4044,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 .Select(configuration => configuration.Id)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase));
 
-    private void OnNetworkSwitchStatusChanged(object? sender, NetworkSwitchStatus status)
-    {
-        _snapshot = _snapshot with { NetworkSwitch = status };
-        Publish();
-    }
+    private void OnNetworkSwitchStatusChanged(object? sender, NetworkSwitchStatus status) => Publish();
 
     private string? FindCoreVersion()
     {
@@ -4243,7 +4239,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             Core = _snapshot.Core with { ErrorMessage = coreError },
             ErrorMessage = error,
-            Logs = _logBuffer.Snapshot()
+            Logs = _logBuffer.Snapshot(),
+            NetworkSwitch = _networkSwitchRuntimeController.Status
         };
         SnapshotChanged?.Invoke(this, _snapshot);
         PublishAppSnapshot();
