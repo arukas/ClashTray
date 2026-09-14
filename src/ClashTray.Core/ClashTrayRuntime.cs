@@ -1554,6 +1554,42 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
+            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+                EndpointCommand.TestDelay,
+                "测速期间远程端点会话已切换，请重新测速。");
+            if (remoteSession is not null)
+            {
+                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+                using JsonDocument remoteResponse = await remoteSession.Api.TestDelayAsync(
+                    proxy,
+                    new Uri("https://www.gstatic.com/generate_204"),
+                    5000,
+                    cancellationToken);
+                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
+                {
+                    throw new InvalidOperationException(
+                        "测速期间远程端点会话已切换，请重新测速。");
+                }
+
+                int? remoteDelay = remoteResponse.RootElement.TryGetProperty(
+                        "delay",
+                        out JsonElement remoteDelayElement)
+                    && remoteDelayElement.TryGetInt32(out int remoteMilliseconds)
+                    ? remoteMilliseconds
+                    : null;
+                if (!await RefreshRemoteControllerSnapshotAsync(
+                        remoteSession,
+                        remoteStatus,
+                        cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException(
+                        "远程节点测速结果无法确认，请重试。");
+                }
+
+                return remoteDelay;
+            }
+
             (MihomoApiClient api, long generation) = CaptureControllerSession();
             EnsureControllerCommand(
                 api,
@@ -1590,6 +1626,38 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(token);
         try
         {
+            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+                EndpointCommand.TestDelay,
+                "测速期间远程端点会话已切换，请重新测速。");
+            if (remoteSession is not null)
+            {
+                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+                using JsonDocument remoteResponse = await remoteSession.Api.TestGroupDelayAsync(
+                    group,
+                    new Uri("https://www.gstatic.com/generate_204"),
+                    5000,
+                    token);
+                IReadOnlyDictionary<string, int?> remoteDelays =
+                    MihomoDataParser.ParseGroupDelays(remoteResponse);
+                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
+                {
+                    throw new InvalidOperationException(
+                        "测速期间远程端点会话已切换，请重新测速。");
+                }
+
+                if (!await RefreshRemoteControllerSnapshotAsync(
+                        remoteSession,
+                        remoteStatus,
+                        token)
+                    .ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException(
+                        "远程代理组测速结果无法确认，请重试。");
+                }
+
+                return remoteDelays;
+            }
+
             (MihomoApiClient api, long generation) = CaptureControllerSession();
             EnsureControllerCommand(
                 api,

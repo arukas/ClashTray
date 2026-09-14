@@ -263,6 +263,16 @@ public sealed class RuntimeEndpointTests
                     .Current);
             Assert.AreEqual(1, connector.ProxySelectionCount);
 
+            IReadOnlyDictionary<string, int?> groupDelays =
+                await runtime.TestProxyGroupDelayAsync("Auto");
+            Assert.AreEqual(123, groupDelays["node"]);
+            Assert.AreEqual(456, groupDelays["backup"]);
+            Assert.AreEqual(1, connector.DelayRequestCount);
+
+            int? nodeDelay = await runtime.TestProxyDelayAsync("backup");
+            Assert.AreEqual(123, nodeDelay);
+            Assert.AreEqual(2, connector.DelayRequestCount);
+
             await runtime.UpdateRemoteEndpointAsync(
                 remote.Id,
                 remote with
@@ -304,6 +314,8 @@ public sealed class RuntimeEndpointTests
         public int ModePatchCount => Volatile.Read(ref _handler)?.ModePatchCount ?? 0;
 
         public int ProxySelectionCount => Volatile.Read(ref _handler)?.ProxySelectionCount ?? 0;
+
+        public int DelayRequestCount => Volatile.Read(ref _handler)?.DelayRequestCount ?? 0;
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage(
             "Reliability",
@@ -356,10 +368,13 @@ public sealed class RuntimeEndpointTests
             private int _modePatchCount;
             private string _proxy = "node";
             private int _proxySelectionCount;
+            private int _delayRequestCount;
 
             public int ModePatchCount => Volatile.Read(ref _modePatchCount);
 
             public int ProxySelectionCount => Volatile.Read(ref _proxySelectionCount);
+
+            public int DelayRequestCount => Volatile.Read(ref _delayRequestCount);
 
             public void SetTraffic(long uploadBytes, long downloadBytes)
             {
@@ -406,6 +421,12 @@ public sealed class RuntimeEndpointTests
                     Interlocked.Increment(ref _proxySelectionCount);
                 }
 
+                if (request.RequestUri?.AbsolutePath is "/group/Auto/delay"
+                    or "/proxies/backup/delay")
+                {
+                    Interlocked.Increment(ref _delayRequestCount);
+                }
+
                 string body = request.RequestUri?.AbsolutePath switch
                 {
                     "/configs" => "{\"mode\":\""
@@ -414,6 +435,8 @@ public sealed class RuntimeEndpointTests
                     "/proxies" => "{\"proxies\":{\"Auto\":{\"type\":\"Selector\",\"now\":\""
                         + Volatile.Read(ref _proxy)
                         + "\",\"all\":[\"node\",\"backup\"]},\"node\":{\"type\":\"Direct\"},\"backup\":{\"type\":\"Direct\"}}}",
+                    "/proxies/backup/delay" => """{"delay":123}""",
+                    "/group/Auto/delay" => """{"node":123,"backup":456}""",
                     "/traffic" => $$"""{"upTotal":{{uploadBytes}},"downTotal":{{downloadBytes}},"up":1,"down":2}"""
                         + "\n",
                     "/memory" => """{"inuse":22}"""
