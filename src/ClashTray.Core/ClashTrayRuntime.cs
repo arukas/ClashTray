@@ -2790,6 +2790,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             LogControllerFailure("后台数据刷新", "/metrics", exception, 0);
+            _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
+            Publish();
         }
     }
 
