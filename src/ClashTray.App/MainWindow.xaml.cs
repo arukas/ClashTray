@@ -165,8 +165,20 @@ public sealed partial class MainWindow : Window
             or CoreState.Stopping
             or CoreState.Restarting;
         CoreActionButton.IsEnabled = localController && !coreBusy;
-        SystemProxySwitch.IsEnabled = snapshot.SystemProxy is not (SystemProxyState.Enabling or SystemProxyState.Disabling);
-        TunSwitch.IsEnabled = snapshot.Tun is not (TunState.Enabling or TunState.Disabling);
+        SystemProxySwitch.IsEnabled = localController
+            && snapshot.SystemProxy is not (SystemProxyState.Enabling or SystemProxyState.Disabling);
+        TunSwitch.IsEnabled = localController
+            && snapshot.Tun is not (TunState.Enabling or TunState.Disabling);
+        ToolTipService.SetToolTip(
+            SystemProxySwitch,
+            localController
+                ? null
+                : LocalizationService.Get("RemoteLocalNetworkActionUnavailable"));
+        ToolTipService.SetToolTip(
+            TunSwitch,
+            localController
+                ? null
+                : LocalizationService.Get("RemoteLocalNetworkActionUnavailable"));
         bool coreRunning = core.State == CoreState.Running;
         RuleModeButton.IsEnabled = coreRunning;
         GlobalModeButton.IsEnabled = coreRunning;
@@ -477,7 +489,20 @@ public sealed partial class MainWindow : Window
 
     private async void SystemProxySwitch_Toggled(object sender, RoutedEventArgs e)
     {
-        if (_updatingSnapshot || _runtime is null || SystemProxySwitch.IsOn == (_runtime.Snapshot.SystemProxy == SystemProxyState.On))
+        if (_updatingSnapshot || _runtime is null)
+        {
+            return;
+        }
+
+        if (_activeEndpointKind != EndpointKind.Local)
+        {
+            _updatingSnapshot = true;
+            SystemProxySwitch.IsOn = _runtime.Snapshot.SystemProxy == SystemProxyState.On;
+            _updatingSnapshot = false;
+            return;
+        }
+
+        if (SystemProxySwitch.IsOn == (_runtime.Snapshot.SystemProxy == SystemProxyState.On))
         {
             return;
         }
@@ -490,7 +515,20 @@ public sealed partial class MainWindow : Window
 
     private async void TunSwitch_Toggled(object sender, RoutedEventArgs e)
     {
-        if (_updatingSnapshot || _runtime is null || TunSwitch.IsOn == (_runtime.Snapshot.Tun == TunState.On))
+        if (_updatingSnapshot || _runtime is null)
+        {
+            return;
+        }
+
+        if (_activeEndpointKind != EndpointKind.Local)
+        {
+            _updatingSnapshot = true;
+            TunSwitch.IsOn = _runtime.Snapshot.Tun == TunState.On;
+            _updatingSnapshot = false;
+            return;
+        }
+
+        if (TunSwitch.IsOn == (_runtime.Snapshot.Tun == TunState.On))
         {
             return;
         }
