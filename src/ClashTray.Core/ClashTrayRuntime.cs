@@ -1180,11 +1180,20 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public void ClearNetworkSwitchManualOverride()
+    public async Task ClearNetworkSwitchManualOverrideAsync(
+        CancellationToken cancellationToken = default)
     {
-        if (_networkSwitchRuntimeController.IsInitialized)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            _networkSwitchRuntimeController.ClearManualOverride();
+            if (_networkSwitchRuntimeController.IsInitialized)
+            {
+                _networkSwitchRuntimeController.ClearManualOverride();
+            }
+        }
+        finally
+        {
+            _operationLock.Release();
         }
     }
 

@@ -415,11 +415,11 @@ public sealed partial class SettingsPage : UserControl
         }
     }
 
-    private void ResumeNetworkSwitchButton_Click(object sender, RoutedEventArgs e)
+    private async void ResumeNetworkSwitchButton_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            _runtime.ClearNetworkSwitchManualOverride();
+            await _runtime.ClearNetworkSwitchManualOverrideAsync();
             NetworkSwitchStateText.Text = LocalizationService.Get("NetworkSwitchResumeRequested");
         }
         catch (Exception exception)

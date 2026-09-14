@@ -817,6 +817,50 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task NetworkSwitchManualOverrideClearWaitsForSettingsOperation()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        BlockingSettingsStore settings = new(new AppSettings());
+        await using ClashTrayRuntime runtime = new(paths, null, null, settings);
+        Task? settingsUpdate = null;
+        Task? clearOverride = null;
+
+        try
+        {
+            await runtime.InitializeAsync();
+            settings.BlockNextSave();
+            settingsUpdate = runtime.UpdateSettingsAsync(runtime.Settings with { Theme = "dark" });
+            await settings.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            clearOverride = runtime.ClearNetworkSwitchManualOverrideAsync();
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+            Assert.IsFalse(clearOverride.IsCompleted);
+
+            settings.ReleaseSave();
+            await Task.WhenAll(settingsUpdate, clearOverride);
+        }
+        finally
+        {
+            settings.ReleaseSave();
+            if (settingsUpdate is not null)
+            {
+                await settingsUpdate.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (clearOverride is not null)
+            {
+                await clearOverride.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public void MihomoDataParserPreservesZeroTrafficTotals()
     {
         using JsonDocument document = JsonDocument.Parse(
