@@ -287,6 +287,11 @@ public sealed class RuntimeEndpointTests
             await runtime.RefreshProviderAsync("RemoteRules", rules: true);
             Assert.AreEqual(1, connector.RuleProviderRefreshCount);
 
+            await runtime.ClearFakeIpCacheAsync();
+            Assert.AreEqual(1, connector.FakeIpCacheClearCount);
+            await runtime.ClearDnsCacheAsync();
+            Assert.AreEqual(1, connector.DnsCacheClearCount);
+
             await runtime.UpdateRemoteEndpointAsync(
                 remote.Id,
                 remote with
@@ -342,6 +347,12 @@ public sealed class RuntimeEndpointTests
 
         public int RuleProviderRefreshCount =>
             Volatile.Read(ref _handler)?.RuleProviderRefreshCount ?? 0;
+
+        public int FakeIpCacheClearCount =>
+            Volatile.Read(ref _handler)?.FakeIpCacheClearCount ?? 0;
+
+        public int DnsCacheClearCount =>
+            Volatile.Read(ref _handler)?.DnsCacheClearCount ?? 0;
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage(
             "Reliability",
@@ -400,6 +411,8 @@ public sealed class RuntimeEndpointTests
             private int _closeAllConnectionsCount;
             private int _proxyProviderRefreshCount;
             private int _ruleProviderRefreshCount;
+            private int _fakeIpCacheClearCount;
+            private int _dnsCacheClearCount;
 
             public int ModePatchCount => Volatile.Read(ref _modePatchCount);
 
@@ -418,6 +431,12 @@ public sealed class RuntimeEndpointTests
 
             public int RuleProviderRefreshCount =>
                 Volatile.Read(ref _ruleProviderRefreshCount);
+
+            public int FakeIpCacheClearCount =>
+                Volatile.Read(ref _fakeIpCacheClearCount);
+
+            public int DnsCacheClearCount =>
+                Volatile.Read(ref _dnsCacheClearCount);
 
             public void SetTraffic(long uploadBytes, long downloadBytes)
             {
@@ -492,6 +511,17 @@ public sealed class RuntimeEndpointTests
                     && request.RequestUri?.AbsolutePath == "/providers/rules/RemoteRules")
                 {
                     Interlocked.Increment(ref _ruleProviderRefreshCount);
+                }
+
+                if (request.Method == HttpMethod.Post
+                    && request.RequestUri?.AbsolutePath == "/cache/fakeip/flush")
+                {
+                    Interlocked.Increment(ref _fakeIpCacheClearCount);
+                }
+                else if (request.Method == HttpMethod.Post
+                    && request.RequestUri?.AbsolutePath == "/cache/dns/flush")
+                {
+                    Interlocked.Increment(ref _dnsCacheClearCount);
                 }
 
                 int remainingConnections = Volatile.Read(ref _remainingConnections);
