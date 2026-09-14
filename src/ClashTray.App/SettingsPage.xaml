@@ -65,8 +65,11 @@
                 <TextBox x:Name="EndpointUriBox" x:Uid="EndpointUriBox" />
                 <ComboBox x:Name="EndpointTransportBox" x:Uid="EndpointTransportBox" SelectionChanged="EndpointTransportBox_SelectionChanged" SelectedIndex="0">
                     <ComboBoxItem x:Uid="EndpointHttpsSystemTrustItem" Tag="https-system" />
+                    <ComboBoxItem x:Uid="EndpointHttpsCustomItem" Tag="https-custom" />
                     <ComboBoxItem x:Uid="EndpointHttpExplicitItem" Tag="http-explicit" />
                 </ComboBox>
+                <PasswordBox x:Name="EndpointSecretBox" x:Uid="EndpointSecretBox" />
+                <TextBox x:Name="EndpointCustomCaBox" x:Uid="EndpointCustomCaBox" AcceptsReturn="True" TextWrapping="Wrap" Height="96" IsEnabled="False" />
                 <CheckBox x:Name="EndpointHttpRiskCheckBox" x:Uid="EndpointHttpRiskCheckBox" IsEnabled="False" />
                 <TextBlock x:Uid="EndpointTrustHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
                 <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Left">

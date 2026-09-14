@@ -344,11 +344,16 @@
   <data name="EndpointHttpsSystemTrustItem.Content" xml:space="preserve"><value>HTTPS（Windows 系统信任）</value></data>
   <data name="EndpointHttpExplicitItem.Content" xml:space="preserve"><value>HTTP（仅限已确认风险的端点）</value></data>
   <data name="EndpointHttpRiskCheckBox.Content" xml:space="preserve"><value>我确认此端点使用明文 HTTP，且风险由我承担</value></data>
-  <data name="EndpointTrustHint.Text" xml:space="preserve"><value>不会提供“忽略 HTTPS 证书错误”。私有 HTTPS 端点的自定义 CA 与 secret 将在安全编辑流程中单独配置。</value></data>
+  <data name="EndpointSecretBox.Header" xml:space="preserve"><value>Controller secret（可选）</value></data>
+  <data name="EndpointCustomCaBox.Header" xml:space="preserve"><value>自定义 CA 证书（PEM，可选）</value></data>
+  <data name="EndpointHttpsCustomItem.Content" xml:space="preserve"><value>HTTPS（自定义 CA）</value></data>
+  <data name="EndpointTrustHint.Text" xml:space="preserve"><value>secret 使用 Windows DPAPI 保护；自定义 CA 只对当前端点生效。不会提供“忽略 HTTPS 证书错误”，也不会修改 Windows 全局证书库。</value></data>
   <data name="SaveEndpointButton.Content" xml:space="preserve"><value>添加端点</value></data>
   <data name="RemoveEndpointButton.Content" xml:space="preserve"><value>删除端点</value></data>
   <data name="EndpointFieldsRequired" xml:space="preserve"><value>请填写端点名称和 Controller 根地址。</value></data>
   <data name="EndpointHttpRiskRequired" xml:space="preserve"><value>使用 HTTP 前必须明确确认明文传输风险。</value></data>
+  <data name="EndpointCustomCaRequired" xml:space="preserve"><value>选择自定义 CA 时，请粘贴 CA 证书内容。</value></data>
+  <data name="EndpointCustomCaOnly" xml:space="preserve"><value>只有选择 HTTPS（自定义 CA）时才能填写 CA 证书。</value></data>
   <data name="EndpointUriInvalid" xml:space="preserve"><value>Controller 根地址必须是有效的绝对 HTTP(S) 地址。</value></data>
   <data name="EndpointSaved" xml:space="preserve"><value>端点元数据已保存。</value></data>
   <data name="EndpointRemoved" xml:space="preserve"><value>端点及不再使用的本地凭据已删除。</value></data>

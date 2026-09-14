@@ -344,11 +344,16 @@ Upload {4} B · Download {5} B</value></data>
   <data name="EndpointHttpsSystemTrustItem.Content" xml:space="preserve"><value>HTTPS (Windows system trust)</value></data>
   <data name="EndpointHttpExplicitItem.Content" xml:space="preserve"><value>HTTP (explicitly acknowledged risk)</value></data>
   <data name="EndpointHttpRiskCheckBox.Content" xml:space="preserve"><value>I understand this endpoint uses cleartext HTTP and accept the risk</value></data>
-  <data name="EndpointTrustHint.Text" xml:space="preserve"><value>There is no “ignore HTTPS certificate errors” option. A private HTTPS endpoint's custom CA and secret will be configured in a separate protected editor.</value></data>
+  <data name="EndpointSecretBox.Header" xml:space="preserve"><value>Controller secret (optional)</value></data>
+  <data name="EndpointCustomCaBox.Header" xml:space="preserve"><value>Custom CA certificate (PEM, optional)</value></data>
+  <data name="EndpointHttpsCustomItem.Content" xml:space="preserve"><value>HTTPS (custom CA)</value></data>
+  <data name="EndpointTrustHint.Text" xml:space="preserve"><value>The secret is protected with Windows DPAPI; a custom CA applies only to this endpoint. There is no “ignore HTTPS certificate errors” option, and the Windows global certificate store is not changed.</value></data>
   <data name="SaveEndpointButton.Content" xml:space="preserve"><value>Add endpoint</value></data>
   <data name="RemoveEndpointButton.Content" xml:space="preserve"><value>Remove endpoint</value></data>
   <data name="EndpointFieldsRequired" xml:space="preserve"><value>Enter an endpoint name and Controller origin.</value></data>
   <data name="EndpointHttpRiskRequired" xml:space="preserve"><value>Explicitly acknowledge cleartext transport before using HTTP.</value></data>
+  <data name="EndpointCustomCaRequired" xml:space="preserve"><value>Paste a CA certificate when custom CA trust is selected.</value></data>
+  <data name="EndpointCustomCaOnly" xml:space="preserve"><value>Enter a CA certificate only when HTTPS (custom CA) is selected.</value></data>
   <data name="EndpointUriInvalid" xml:space="preserve"><value>The Controller origin must be a valid absolute HTTP(S) URI.</value></data>
   <data name="EndpointSaved" xml:space="preserve"><value>Endpoint metadata saved.</value></data>
   <data name="EndpointRemoved" xml:space="preserve"><value>The endpoint and unreferenced local credentials were removed.</value></data>

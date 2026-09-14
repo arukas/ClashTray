@@ -1,5 +1,6 @@
 using ClashTray.Core;
 using ClashTray.Contracts;
+using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -58,6 +59,22 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
+        bool customHttps = string.Equals(
+            (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
+            "https-custom",
+            StringComparison.Ordinal);
+        if (customHttps && string.IsNullOrWhiteSpace(EndpointCustomCaBox.Text))
+        {
+            StatusText.Text = LocalizationService.Get("EndpointCustomCaRequired");
+            return;
+        }
+
+        if (!customHttps && !string.IsNullOrWhiteSpace(EndpointCustomCaBox.Text))
+        {
+            StatusText.Text = LocalizationService.Get("EndpointCustomCaOnly");
+            return;
+        }
+
         if (!Uri.TryCreate(EndpointUriBox.Text.Trim(), UriKind.Absolute, out Uri? endpointUri)
             || endpointUri is null)
         {
@@ -72,10 +89,17 @@ public sealed partial class SettingsPage : UserControl
                 EndpointNameBox.Text.Trim(),
                 endpointUri,
                 allowExplicitHttp: explicitHttp);
-            EndpointRecord record = new(
+            string? secret = string.IsNullOrEmpty(EndpointSecretBox.Password)
+                ? null
+                : EndpointSecretBox.Password;
+            ReadOnlyMemory<byte>? customCa = customHttps
+                ? Encoding.UTF8.GetBytes(EndpointCustomCaBox.Text)
+                : null;
+            await _runtime.ProvisionRemoteEndpointAsync(
                 descriptor,
-                InsecureHttpAcknowledgedAtUtc: explicitHttp ? DateTimeOffset.UtcNow : null);
-            await _runtime.SaveRemoteEndpointAsync(record);
+                secret,
+                customCa,
+                explicitHttp ? DateTimeOffset.UtcNow : null);
             UpdateEndpointList(_runtime.Endpoints);
             ClearEndpointEditor();
             StatusText.Text = LocalizationService.Get("EndpointSaved");
@@ -126,10 +150,15 @@ public sealed partial class SettingsPage : UserControl
                 .OfType<ComboBoxItem>()
                 .FirstOrDefault(item => string.Equals(
                     item.Tag?.ToString(),
-                    endpoint.Security == EndpointTransportSecurity.HttpExplicitlyConfirmed
-                        ? "http-explicit"
-                        : "https-system",
+                    endpoint.Security switch
+                    {
+                        EndpointTransportSecurity.HttpExplicitlyConfirmed => "http-explicit",
+                        EndpointTransportSecurity.HttpsCustomCertificate => "https-custom",
+                        _ => "https-system"
+                    },
                     StringComparison.Ordinal));
+            EndpointSecretBox.Password = string.Empty;
+            EndpointCustomCaBox.Text = string.Empty;
             EndpointHttpRiskCheckBox.IsChecked = endpoint.Security == EndpointTransportSecurity.HttpExplicitlyConfirmed;
         }
 
@@ -147,10 +176,20 @@ public sealed partial class SettingsPage : UserControl
             (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
             "http-explicit",
             StringComparison.Ordinal);
+        bool customHttps = string.Equals(
+            (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
+            "https-custom",
+            StringComparison.Ordinal);
         EndpointHttpRiskCheckBox.IsEnabled = explicitHttp;
+        EndpointCustomCaBox.IsEnabled = customHttps;
         if (!explicitHttp)
         {
             EndpointHttpRiskCheckBox.IsChecked = false;
+        }
+
+        if (!customHttps)
+        {
+            EndpointCustomCaBox.Text = string.Empty;
         }
     }
 
@@ -224,6 +263,8 @@ public sealed partial class SettingsPage : UserControl
             EndpointNameBox.Text = string.Empty;
             EndpointUriBox.Text = string.Empty;
             EndpointTransportBox.SelectedIndex = 0;
+            EndpointSecretBox.Password = string.Empty;
+            EndpointCustomCaBox.Text = string.Empty;
             EndpointHttpRiskCheckBox.IsChecked = false;
         }
         finally
