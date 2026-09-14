@@ -49,6 +49,15 @@
 
         <Border Style="{StaticResource ClashTrayCardStyle}">
             <StackPanel Spacing="8">
+                <TextBlock x:Uid="NetworkSwitchRulesHeader" FontWeight="SemiBold" />
+                <TextBlock x:Uid="NetworkSwitchRulesHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <ListView x:Name="NetworkSwitchRulesListView" x:Uid="NetworkSwitchRulesListView" SelectionMode="None" />
+                <Button x:Name="AddNetworkRuleButton" x:Uid="AddNetworkRuleButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="AddNetworkRuleButton_Click" HorizontalAlignment="Left" />
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <StackPanel Spacing="8">
                 <TextBlock x:Uid="PortsHeader" FontWeight="SemiBold" />
                 <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>

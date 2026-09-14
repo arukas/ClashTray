@@ -115,6 +115,10 @@
   <data name="ProgramOverridesHint.Text" xml:space="preserve"><value>面板中的系统代理、TUN、允许局域网连接和 IPv6 设置由 ClashTray 保存并优先控制；配置文件中的对应选项不会覆盖程序选择。</value></data>
   <data name="SaveSettingsButton.Content" xml:space="preserve"><value>保存设置</value></data>
   <data name="NetworkSwitchHeader.Text" xml:space="preserve"><value>按网络自动切换配置</value></data>
+  <data name="NetworkSwitchRulesHeader.Text" xml:space="preserve"><value>SSID 规则</value></data>
+  <data name="NetworkSwitchRulesHint.Text" xml:space="preserve"><value>匹配精确的 Wi-Fi 名称。关闭的规则会保留但不会参与选择；不可用的目标会保留并提示，不会被自动应用。</value></data>
+  <data name="NetworkSwitchRulesListView.AutomationProperties.Name" xml:space="preserve"><value>SSID 网络切换规则</value></data>
+  <data name="AddNetworkRuleButton.Content" xml:space="preserve"><value>添加 SSID 规则</value></data>
   <data name="NetworkSwitchEnabledSwitch.Header" xml:space="preserve"><value>网络变化后自动切换配置</value></data>
   <data name="NetworkSwitchDefaultConfigurationBox.Header" xml:space="preserve"><value>默认配置</value></data>
   <data name="NetworkSwitchHint.Text" xml:space="preserve"><value>SSID 规则将在单独的区域编辑。自动切换会等待网络稳定；手动选择配置后会暂时覆盖自动切换。</value></data>
@@ -150,6 +154,16 @@
   <data name="CoreSha256Box.PlaceholderText" xml:space="preserve"><value>64 位十六进制校验值</value></data>
   <data name="InstallCoreButton.Content" xml:space="preserve"><value>校验并安装核心</value></data>
   <data name="NetworkSwitchNoDefault" xml:space="preserve"><value>不设置默认配置</value></data>
+  <data name="NetworkSwitchSsidHeader" xml:space="preserve"><value>Wi-Fi 名称</value></data>
+  <data name="NetworkSwitchSsidPlaceholder" xml:space="preserve"><value>精确 SSID</value></data>
+  <data name="NetworkSwitchTargetHeader" xml:space="preserve"><value>目标配置</value></data>
+  <data name="NetworkSwitchRuleEnabled" xml:space="preserve"><value>启用规则</value></data>
+  <data name="NetworkSwitchRemoveRule" xml:space="preserve"><value>删除</value></data>
+  <data name="NetworkSwitchNoTarget" xml:space="preserve"><value>选择一个配置</value></data>
+  <data name="NetworkSwitchRuleLimit" xml:space="preserve"><value>最多支持 128 条网络规则。</value></data>
+  <data name="NetworkSwitchSsidRequired" xml:space="preserve"><value>请为每条网络规则填写 SSID。</value></data>
+  <data name="NetworkSwitchTargetRequired" xml:space="preserve"><value>请为每条网络规则选择目标配置。</value></data>
+  <data name="NetworkSwitchDuplicateSsid" xml:space="preserve"><value>启用的 SSID 规则不能重复。</value></data>
   <data name="NetworkSwitchMissingConfigurationFormat" xml:space="preserve"><value>不可用：{0}</value></data>
   <data name="NetworkSwitchUnavailable" xml:space="preserve"><value>网络上下文不可用</value></data>
   <data name="NetworkSwitchStateDisabled" xml:space="preserve"><value>自动切换已暂停</value></data>

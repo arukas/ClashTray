@@ -115,6 +115,10 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="ProgramOverridesHint.Text" xml:space="preserve"><value>System proxy, TUN, allow-LAN and IPv6 options in this panel are saved and controlled by ClashTray; matching options in configuration files do not override these choices.</value></data>
   <data name="SaveSettingsButton.Content" xml:space="preserve"><value>Save settings</value></data>
   <data name="NetworkSwitchHeader.Text" xml:space="preserve"><value>Network-based configuration switching</value></data>
+  <data name="NetworkSwitchRulesHeader.Text" xml:space="preserve"><value>SSID rules</value></data>
+  <data name="NetworkSwitchRulesHint.Text" xml:space="preserve"><value>Match the exact Wi-Fi name. Disabled rules are retained but never selected; an unavailable target is kept visible and will be reported instead of being applied.</value></data>
+  <data name="NetworkSwitchRulesListView.AutomationProperties.Name" xml:space="preserve"><value>SSID network switching rules</value></data>
+  <data name="AddNetworkRuleButton.Content" xml:space="preserve"><value>Add SSID rule</value></data>
   <data name="NetworkSwitchEnabledSwitch.Header" xml:space="preserve"><value>Switch configuration automatically when the network changes</value></data>
   <data name="NetworkSwitchDefaultConfigurationBox.Header" xml:space="preserve"><value>Default configuration</value></data>
   <data name="NetworkSwitchHint.Text" xml:space="preserve"><value>SSID rules are edited separately. Automatic switching waits for a stable network and uses a temporary manual override after you choose a configuration.</value></data>
@@ -150,6 +154,16 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="CoreSha256Box.PlaceholderText" xml:space="preserve"><value>64-digit hexadecimal checksum</value></data>
   <data name="InstallCoreButton.Content" xml:space="preserve"><value>Verify and install core</value></data>
   <data name="NetworkSwitchNoDefault" xml:space="preserve"><value>No default configuration</value></data>
+  <data name="NetworkSwitchSsidHeader" xml:space="preserve"><value>Wi-Fi name</value></data>
+  <data name="NetworkSwitchSsidPlaceholder" xml:space="preserve"><value>Exact SSID</value></data>
+  <data name="NetworkSwitchTargetHeader" xml:space="preserve"><value>Target configuration</value></data>
+  <data name="NetworkSwitchRuleEnabled" xml:space="preserve"><value>Rule enabled</value></data>
+  <data name="NetworkSwitchRemoveRule" xml:space="preserve"><value>Remove</value></data>
+  <data name="NetworkSwitchNoTarget" xml:space="preserve"><value>Select a configuration</value></data>
+  <data name="NetworkSwitchRuleLimit" xml:space="preserve"><value>Up to 128 network rules are supported.</value></data>
+  <data name="NetworkSwitchSsidRequired" xml:space="preserve"><value>Enter an SSID for every network rule.</value></data>
+  <data name="NetworkSwitchTargetRequired" xml:space="preserve"><value>Select a target configuration for every network rule.</value></data>
+  <data name="NetworkSwitchDuplicateSsid" xml:space="preserve"><value>Enabled SSID rules must be unique.</value></data>
   <data name="NetworkSwitchMissingConfigurationFormat" xml:space="preserve"><value>Unavailable: {0}</value></data>
   <data name="NetworkSwitchUnavailable" xml:space="preserve"><value>Network context is not available</value></data>
   <data name="NetworkSwitchStateDisabled" xml:space="preserve"><value>Automatic switching is paused</value></data>
