@@ -1693,6 +1693,32 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
+            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+                EndpointCommand.CloseConnection,
+                "关闭连接期间远程端点会话已切换，请重试。");
+            if (remoteSession is not null)
+            {
+                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+                await remoteSession.Api.CloseConnectionAsync(id, cancellationToken);
+                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
+                {
+                    throw new InvalidOperationException(
+                        "关闭连接期间远程端点会话已切换，请重试。");
+                }
+
+                if (!await RefreshRemoteControllerSnapshotAsync(
+                        remoteSession,
+                        remoteStatus,
+                        cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException(
+                        "远程连接关闭结果无法确认，请重试。");
+                }
+
+                return;
+            }
+
             if (_api is null)
             {
                 return;
@@ -1720,6 +1746,32 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
+            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+                EndpointCommand.CloseConnection,
+                "关闭连接期间远程端点会话已切换，请重试。");
+            if (remoteSession is not null)
+            {
+                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+                await remoteSession.Api.CloseAllConnectionsAsync(cancellationToken);
+                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
+                {
+                    throw new InvalidOperationException(
+                        "关闭连接期间远程端点会话已切换，请重试。");
+                }
+
+                if (!await RefreshRemoteControllerSnapshotAsync(
+                        remoteSession,
+                        remoteStatus,
+                        cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException(
+                        "远程连接清理结果无法确认，请重试。");
+                }
+
+                return;
+            }
+
             if (_api is null)
             {
                 return;

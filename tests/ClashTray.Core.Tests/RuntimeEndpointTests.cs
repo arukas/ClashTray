@@ -273,6 +273,15 @@ public sealed class RuntimeEndpointTests
             Assert.AreEqual(123, nodeDelay);
             Assert.AreEqual(2, connector.DelayRequestCount);
 
+            Assert.AreEqual(2, runtime.AppSnapshot.ActiveController.Connections.Count);
+            await runtime.CloseConnectionAsync("c1");
+            Assert.AreEqual(1, runtime.AppSnapshot.ActiveController.Connections.Count);
+            Assert.AreEqual(1, connector.SingleConnectionCloseCount);
+
+            await runtime.CloseAllConnectionsAsync();
+            Assert.AreEqual(0, runtime.AppSnapshot.ActiveController.Connections.Count);
+            Assert.AreEqual(1, connector.CloseAllConnectionsCount);
+
             await runtime.UpdateRemoteEndpointAsync(
                 remote.Id,
                 remote with
@@ -316,6 +325,12 @@ public sealed class RuntimeEndpointTests
         public int ProxySelectionCount => Volatile.Read(ref _handler)?.ProxySelectionCount ?? 0;
 
         public int DelayRequestCount => Volatile.Read(ref _handler)?.DelayRequestCount ?? 0;
+
+        public int SingleConnectionCloseCount =>
+            Volatile.Read(ref _handler)?.SingleConnectionCloseCount ?? 0;
+
+        public int CloseAllConnectionsCount =>
+            Volatile.Read(ref _handler)?.CloseAllConnectionsCount ?? 0;
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage(
             "Reliability",
@@ -369,12 +384,21 @@ public sealed class RuntimeEndpointTests
             private string _proxy = "node";
             private int _proxySelectionCount;
             private int _delayRequestCount;
+            private int _remainingConnections = 2;
+            private int _singleConnectionCloseCount;
+            private int _closeAllConnectionsCount;
 
             public int ModePatchCount => Volatile.Read(ref _modePatchCount);
 
             public int ProxySelectionCount => Volatile.Read(ref _proxySelectionCount);
 
             public int DelayRequestCount => Volatile.Read(ref _delayRequestCount);
+
+            public int SingleConnectionCloseCount =>
+                Volatile.Read(ref _singleConnectionCloseCount);
+
+            public int CloseAllConnectionsCount =>
+                Volatile.Read(ref _closeAllConnectionsCount);
 
             public void SetTraffic(long uploadBytes, long downloadBytes)
             {
@@ -427,6 +451,20 @@ public sealed class RuntimeEndpointTests
                     Interlocked.Increment(ref _delayRequestCount);
                 }
 
+                if (request.Method == HttpMethod.Delete
+                    && request.RequestUri?.AbsolutePath == "/connections/c1")
+                {
+                    Volatile.Write(ref _remainingConnections, 1);
+                    Interlocked.Increment(ref _singleConnectionCloseCount);
+                }
+                else if (request.Method == HttpMethod.Delete
+                    && request.RequestUri?.AbsolutePath == "/connections")
+                {
+                    Volatile.Write(ref _remainingConnections, 0);
+                    Interlocked.Increment(ref _closeAllConnectionsCount);
+                }
+
+                int remainingConnections = Volatile.Read(ref _remainingConnections);
                 string body = request.RequestUri?.AbsolutePath switch
                 {
                     "/configs" => "{\"mode\":\""
@@ -441,6 +479,8 @@ public sealed class RuntimeEndpointTests
                         + "\n",
                     "/memory" => """{"inuse":22}"""
                         + "\n",
+                    "/connections" when remainingConnections == 2 => """{"connections":[{"id":"c1","metadata":{"network":"tcp","sourceIP":"10.0.0.2","destinationIP":"example.test"},"chains":["Auto"],"rule":"MATCH","upload":1,"download":2,"start":"2026-09-15T00:00:00Z"},{"id":"c2","metadata":{"network":"tcp","sourceIP":"10.0.0.3","destinationIP":"example.test"},"chains":["Auto"],"rule":"MATCH","upload":3,"download":4,"start":"2026-09-15T00:00:01Z"}]}""",
+                    "/connections" when remainingConnections == 1 => """{"connections":[{"id":"c2","metadata":{"network":"tcp","sourceIP":"10.0.0.3","destinationIP":"example.test"},"chains":["Auto"],"rule":"MATCH","upload":3,"download":4,"start":"2026-09-15T00:00:01Z"}]}""",
                     "/connections" => """{"connections":[]}""",
                     "/rules" => """{"rules":[]}""",
                     "/providers/proxies" => """{"providers":{}}""",
