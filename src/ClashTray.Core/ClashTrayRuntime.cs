@@ -2325,7 +2325,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 RuleProviders = ruleProviders,
                 Logs = _logBuffer.Snapshot()
             };
-            _throttledPublisher.Request();
+            await _throttledPublisher.RequestAsync(cancellationToken);
         }
         finally
         {
@@ -3513,7 +3513,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         _logBuffer.Add(entry);
         _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
-        _throttledPublisher.Request();
+        _throttledPublisher.Queue();
     }
 
     private bool IsCoreRunningForSettings() =>

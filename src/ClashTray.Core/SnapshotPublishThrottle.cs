@@ -11,6 +11,7 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
     private readonly TimeSpan _interval;
     private readonly Task _workerTask;
     private bool _pending;
+    private TaskCompletionSource? _pendingCompletion;
     private DateTimeOffset _lastPublished = DateTimeOffset.MinValue;
 
     public SnapshotPublishThrottle(
@@ -30,7 +31,7 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
         _workerTask = RunAsync();
     }
 
-    public void Request()
+    public void Queue()
     {
         lock (_gate)
         {
@@ -44,9 +45,42 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
         }
     }
 
+    public Task RequestAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Task pendingPublish;
+        lock (_gate)
+        {
+            if (_stopCts.IsCancellationRequested)
+            {
+                return Task.FromCanceled(_stopCts.Token);
+            }
+
+            _pendingCompletion ??= new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            pendingPublish = _pendingCompletion.Task;
+            if (!_pending)
+            {
+                _pending = true;
+                _signal.Release();
+            }
+        }
+
+        return pendingPublish.WaitAsync(cancellationToken);
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _stopCts.CancelAsync();
+        TaskCompletionSource? pendingCompletion;
+        lock (_gate)
+        {
+            pendingCompletion = _pendingCompletion;
+            _pendingCompletion = null;
+            _pending = false;
+        }
+
+        pendingCompletion?.TrySetCanceled(_stopCts.Token);
         _signal.Release();
         try
         {
@@ -72,6 +106,7 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
                 while (true)
                 {
                     TimeSpan delay;
+                    TaskCompletionSource? completion = null;
                     lock (_gate)
                     {
                         if (!_pending)
@@ -85,6 +120,8 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
                         {
                             _pending = false;
                             _lastPublished = now;
+                            completion = _pendingCompletion;
+                            _pendingCompletion = null;
                         }
                     }
 
@@ -94,12 +131,54 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
                         continue;
                     }
 
-                    _publish();
+                    try
+                    {
+                        _publish();
+                        completion?.TrySetResult();
+                    }
+                    catch (Exception exception)
+                    {
+                        completion?.TrySetException(exception);
+                        FailPending(exception);
+                        throw;
+                    }
                 }
             }
         }
         catch (OperationCanceledException) when (_stopCts.IsCancellationRequested)
         {
+            CancelPending();
         }
+        catch (Exception exception)
+        {
+            FailPending(exception);
+            throw;
+        }
+    }
+
+    private void CancelPending()
+    {
+        TaskCompletionSource? pendingCompletion;
+        lock (_gate)
+        {
+            pendingCompletion = _pendingCompletion;
+            _pendingCompletion = null;
+            _pending = false;
+        }
+
+        pendingCompletion?.TrySetCanceled(_stopCts.Token);
+    }
+
+    private void FailPending(Exception exception)
+    {
+        TaskCompletionSource? pendingCompletion;
+        lock (_gate)
+        {
+            pendingCompletion = _pendingCompletion;
+            _pendingCompletion = null;
+            _pending = false;
+        }
+
+        pendingCompletion?.TrySetException(exception);
     }
 }
