@@ -96,3 +96,11 @@ public sealed record NetworkSwitchDecision(
     string? TargetConfigurationId = null,
     string? RuleId = null,
     string? Message = null);
+
+public sealed record NetworkSwitchStatus(
+    bool Available,
+    NetworkSwitchState State,
+    NetworkPermissionState PermissionState,
+    NetworkContextSnapshot? Context,
+    NetworkSwitchDecision? LastDecision,
+    string? ErrorMessage);

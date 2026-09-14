@@ -31,6 +31,7 @@ public sealed class NetworkSwitchEventPipeline : IAsyncDisposable
     private readonly object _stateGate = new();
     private Task? _worker;
     private NetworkSwitchDecision? _lastDecision;
+    private NetworkContextSnapshot? _latestContext;
     private DateTimeOffset? _cooldownUntilUtc;
     private string? _manualOverrideConfigurationId;
     private long? _manualOverrideRevision;
@@ -81,6 +82,36 @@ public sealed class NetworkSwitchEventPipeline : IAsyncDisposable
             {
                 return _lastDecision;
             }
+        }
+    }
+
+    public NetworkContextSnapshot? LatestContext
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _latestContext;
+            }
+        }
+    }
+
+    public void ReevaluateCurrentContext()
+    {
+        NetworkContextSnapshot? current;
+        lock (_stateGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            current = _latestContext;
+            if (current is not null)
+            {
+                _lastProcessedRevision = current.Revision - 1;
+            }
+        }
+
+        if (current is not null)
+        {
+            Enqueue(current);
         }
     }
 
@@ -176,7 +207,16 @@ public sealed class NetworkSwitchEventPipeline : IAsyncDisposable
             return;
         }
 
-        _contexts.Writer.TryWrite(context);
+        lock (_stateGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _latestContext = context;
+            _contexts.Writer.TryWrite(context);
+        }
     }
 
     private async Task ProcessAsync(CancellationToken cancellationToken)
