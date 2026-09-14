@@ -732,6 +732,44 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task ReimportingActiveConfigurationRefreshesSnapshotAfterNoOpSelection()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationStore store = new(paths);
+        string source = await WriteConfigAsync(root, "active.yaml");
+        ConfigurationProfile initial = await store.ImportLocalAsync(source, "old name");
+        TestSettingsStore settings = new(new AppSettings(ActiveConfigurationId: initial.Id));
+        await using ClashTrayRuntime runtime = new(
+            paths,
+            null,
+            null,
+            settings,
+            candidateValidator: new AcceptingCandidateValidator());
+
+        try
+        {
+            await runtime.InitializeAsync();
+            Assert.AreEqual(
+                "old name",
+                runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Name);
+
+            await runtime.ImportLocalConfigurationAsync(source, "new name");
+
+            Assert.AreEqual(
+                "new name",
+                runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Name);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public void MihomoDataParserPreservesZeroTrafficTotals()
     {
         using JsonDocument document = JsonDocument.Parse(

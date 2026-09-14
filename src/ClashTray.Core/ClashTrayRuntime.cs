@@ -1137,12 +1137,26 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task SetActiveConfigurationAsync(string id, CancellationToken cancellationToken = default)
     {
-        await ExecuteConfigurationSwitchAsync(
-            ConfigurationSwitchRequest.Create(ConfigurationSwitchSource.Manual, id),
-            cancellationToken);
-        if (_networkSwitchRuntimeController.IsInitialized)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            _networkSwitchRuntimeController.SetManualOverrideForCurrentNetwork(id);
+            ConfigurationSwitchResult result = await ExecuteConfigurationSwitchAsync(
+                ConfigurationSwitchRequest.Create(ConfigurationSwitchSource.Manual, id),
+                cancellationToken,
+                operationLockHeld: true);
+            if (result.Outcome == ConfigurationSwitchOutcome.NoOp)
+            {
+                await RefreshConfigurationSnapshotAsync(cancellationToken);
+            }
+
+            if (_networkSwitchRuntimeController.IsInitialized)
+            {
+                _networkSwitchRuntimeController.SetManualOverrideForCurrentNetwork(id);
+            }
+        }
+        finally
+        {
+            _operationLock.Release();
         }
     }
 
