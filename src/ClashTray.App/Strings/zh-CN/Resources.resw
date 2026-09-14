@@ -114,6 +114,12 @@
   <data name="RestartOnChangeHint.Text" xml:space="preserve"><value>核心运行时修改端口、控制器端口、TCP 并发或日志级别会自动受控重启；修改 Mixed 端口会先恢复再重新应用系统代理。</value></data>
   <data name="ProgramOverridesHint.Text" xml:space="preserve"><value>面板中的系统代理、TUN、允许局域网连接和 IPv6 设置由 ClashTray 保存并优先控制；配置文件中的对应选项不会覆盖程序选择。</value></data>
   <data name="SaveSettingsButton.Content" xml:space="preserve"><value>保存设置</value></data>
+  <data name="NetworkSwitchHeader.Text" xml:space="preserve"><value>按网络自动切换配置</value></data>
+  <data name="NetworkSwitchEnabledSwitch.Header" xml:space="preserve"><value>网络变化后自动切换配置</value></data>
+  <data name="NetworkSwitchDefaultConfigurationBox.Header" xml:space="preserve"><value>默认配置</value></data>
+  <data name="NetworkSwitchHint.Text" xml:space="preserve"><value>SSID 规则将在单独的区域编辑。自动切换会等待网络稳定；手动选择配置后会暂时覆盖自动切换。</value></data>
+  <data name="SaveNetworkSwitchButton.Content" xml:space="preserve"><value>保存网络切换</value></data>
+  <data name="ResumeNetworkSwitchButton.Content" xml:space="preserve"><value>恢复自动切换</value></data>
   <data name="PortsHeader.Text" xml:space="preserve"><value>端口与代理</value></data>
   <data name="ControllerPortBox.Header" xml:space="preserve"><value>控制器</value></data>
   <data name="ControllerPortLabel" xml:space="preserve"><value>控制器</value></data>
@@ -143,6 +149,25 @@
   <data name="CoreSha256Box.Header" xml:space="preserve"><value>ZIP SHA-256</value></data>
   <data name="CoreSha256Box.PlaceholderText" xml:space="preserve"><value>64 位十六进制校验值</value></data>
   <data name="InstallCoreButton.Content" xml:space="preserve"><value>校验并安装核心</value></data>
+  <data name="NetworkSwitchNoDefault" xml:space="preserve"><value>不设置默认配置</value></data>
+  <data name="NetworkSwitchMissingConfigurationFormat" xml:space="preserve"><value>不可用：{0}</value></data>
+  <data name="NetworkSwitchUnavailable" xml:space="preserve"><value>网络上下文不可用</value></data>
+  <data name="NetworkSwitchStateDisabled" xml:space="preserve"><value>自动切换已暂停</value></data>
+  <data name="NetworkSwitchStateWaiting" xml:space="preserve"><value>等待网络稳定</value></data>
+  <data name="NetworkSwitchStatePermission" xml:space="preserve"><value>需要 Windows 权限才能读取网络</value></data>
+  <data name="NetworkSwitchStateAmbiguous" xml:space="preserve"><value>有多个活动网络，需要进一步处理</value></data>
+  <data name="NetworkSwitchStateEvaluating" xml:space="preserve"><value>正在评估网络规则</value></data>
+  <data name="NetworkSwitchStateSwitching" xml:space="preserve"><value>正在切换配置</value></data>
+  <data name="NetworkSwitchStateManual" xml:space="preserve"><value>手动配置覆盖已生效</value></data>
+  <data name="NetworkSwitchStateCooling" xml:space="preserve"><value>自动切换后正在冷却</value></data>
+  <data name="NetworkSwitchStateFailed" xml:space="preserve"><value>自动切换失败</value></data>
+  <data name="NetworkSwitchNoNetwork" xml:space="preserve"><value>未识别到 SSID</value></data>
+  <data name="NetworkSwitchStatusFormat" xml:space="preserve"><value>{0} · 网络：{1}</value></data>
+  <data name="NetworkSwitchEnableConfirmTitle" xml:space="preserve"><value>启用按网络自动切换？</value></data>
+  <data name="NetworkSwitchEnableConfirmContent" xml:space="preserve"><value>网络稳定后，ClashTray 可能会切换当前 Mihomo 配置。此选项不会修改系统代理或 TUN 设置。</value></data>
+  <data name="NetworkSwitchEnableConfirmPrimary" xml:space="preserve"><value>启用</value></data>
+  <data name="NetworkSwitchSaved" xml:space="preserve"><value>网络切换设置已保存。</value></data>
+  <data name="NetworkSwitchResumeRequested" xml:space="preserve"><value>下一次网络评估时会恢复自动切换。</value></data>
 
   <!-- Runtime text: core states and header -->
   <data name="CoreStateRunning" xml:space="preserve"><value>运行中</value></data>

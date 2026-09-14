@@ -35,6 +35,20 @@
 
         <Border Style="{StaticResource ClashTrayCardStyle}">
             <StackPanel Spacing="8">
+                <TextBlock x:Uid="NetworkSwitchHeader" FontWeight="SemiBold" />
+                <ToggleSwitch x:Name="NetworkSwitchEnabledSwitch" x:Uid="NetworkSwitchEnabledSwitch" />
+                <ComboBox x:Name="NetworkSwitchDefaultConfigurationBox" x:Uid="NetworkSwitchDefaultConfigurationBox" />
+                <TextBlock x:Name="NetworkSwitchStateText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                <TextBlock x:Uid="NetworkSwitchHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Left">
+                    <Button x:Name="SaveNetworkSwitchButton" x:Uid="SaveNetworkSwitchButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveNetworkSwitchButton_Click" />
+                    <Button x:Name="ResumeNetworkSwitchButton" x:Uid="ResumeNetworkSwitchButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ResumeNetworkSwitchButton_Click" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <StackPanel Spacing="8">
                 <TextBlock x:Uid="PortsHeader" FontWeight="SemiBold" />
                 <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>

@@ -10,8 +10,10 @@ public sealed partial class SettingsPage : UserControl
     private readonly ClashTrayRuntime _runtime;
     private AppSettings? _loadedSettings;
     private bool _saving;
+    private bool _savingNetworkSwitch;
     private IReadOnlyList<ProviderStatus>? _providers;
     private IReadOnlyList<ProviderStatus>? _ruleProviders;
+    private NetworkSwitchRuleSet? _loadedNetworkRules;
 
     public SettingsPage(ClashTrayRuntime runtime)
     {
@@ -26,6 +28,67 @@ public sealed partial class SettingsPage : UserControl
         ArgumentNullException.ThrowIfNull(snapshot);
         LoadSettings(_runtime.Settings);
         UpdateProviders(snapshot);
+        UpdateNetworkSwitch(snapshot);
+    }
+
+    private async void SaveNetworkSwitchButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_savingNetworkSwitch)
+        {
+            return;
+        }
+
+        NetworkSwitchRuleSet current = _runtime.NetworkSwitchRules;
+        bool enabled = NetworkSwitchEnabledSwitch.IsOn;
+        if (enabled && !current.AutomaticSwitchingEnabled)
+        {
+            ContentDialog confirmation = new()
+            {
+                XamlRoot = XamlRoot,
+                Title = LocalizationService.Get("NetworkSwitchEnableConfirmTitle"),
+                Content = LocalizationService.Get("NetworkSwitchEnableConfirmContent"),
+                PrimaryButtonText = LocalizationService.Get("NetworkSwitchEnableConfirmPrimary"),
+                CloseButtonText = LocalizationService.Get("DialogCancel")
+            };
+            if (await confirmation.ShowAsync() != ContentDialogResult.Primary)
+            {
+                NetworkSwitchEnabledSwitch.IsOn = current.AutomaticSwitchingEnabled;
+                return;
+            }
+        }
+
+        string? defaultConfigurationId = (NetworkSwitchDefaultConfigurationBox.SelectedItem as ComboBoxItem)?.Tag as string;
+        NetworkSwitchRuleSet next = new(enabled, defaultConfigurationId, current.Rules);
+        _savingNetworkSwitch = true;
+        SaveNetworkSwitchButton.IsEnabled = false;
+        try
+        {
+            await _runtime.UpdateNetworkSwitchRulesAsync(next);
+            _loadedNetworkRules = next;
+            NetworkSwitchStateText.Text = LocalizationService.Get("NetworkSwitchSaved");
+        }
+        catch (Exception exception)
+        {
+            NetworkSwitchStateText.Text = ErrorSanitizer.Sanitize(exception);
+        }
+        finally
+        {
+            _savingNetworkSwitch = false;
+            SaveNetworkSwitchButton.IsEnabled = true;
+        }
+    }
+
+    private void ResumeNetworkSwitchButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _runtime.ClearNetworkSwitchManualOverride();
+            NetworkSwitchStateText.Text = LocalizationService.Get("NetworkSwitchResumeRequested");
+        }
+        catch (Exception exception)
+        {
+            NetworkSwitchStateText.Text = ErrorSanitizer.Sanitize(exception);
+        }
     }
 
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
@@ -298,6 +361,103 @@ public sealed partial class SettingsPage : UserControl
         }
 
         _loadedSettings = settings;
+    }
+
+    private void UpdateNetworkSwitch(RuntimeSnapshot snapshot)
+    {
+        if (NetworkSwitchEnabledSwitch is null)
+        {
+            return;
+        }
+
+        NetworkSwitchRuleSet rules = _runtime.NetworkSwitchRules;
+        if (_loadedNetworkRules is null || !NetworkSwitchRulesEqual(_loadedNetworkRules, rules))
+        {
+            NetworkSwitchEnabledSwitch.IsOn = rules.AutomaticSwitchingEnabled;
+            PopulateDefaultConfigurations(snapshot.Configurations, rules.DefaultConfigurationId);
+            _loadedNetworkRules = rules;
+        }
+
+        NetworkSwitchStateText.Text = FormatNetworkSwitchStatus(snapshot.NetworkSwitch);
+        ResumeNetworkSwitchButton.IsEnabled = snapshot.NetworkSwitch?.LastDecision?.State == NetworkSwitchState.ManualOverride;
+    }
+
+    private void PopulateDefaultConfigurations(
+        IReadOnlyList<ConfigurationProfile> configurations,
+        string? selectedConfigurationId)
+    {
+        NetworkSwitchDefaultConfigurationBox.Items.Clear();
+        NetworkSwitchDefaultConfigurationBox.Items.Add(new ComboBoxItem
+        {
+            Content = LocalizationService.Get("NetworkSwitchNoDefault")
+        });
+
+        foreach (ConfigurationProfile configuration in configurations)
+        {
+            NetworkSwitchDefaultConfigurationBox.Items.Add(new ComboBoxItem
+            {
+                Content = configuration.Name,
+                Tag = configuration.Id
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(selectedConfigurationId)
+            && !configurations.Any(configuration =>
+                string.Equals(configuration.Id, selectedConfigurationId, StringComparison.OrdinalIgnoreCase)))
+        {
+            NetworkSwitchDefaultConfigurationBox.Items.Add(new ComboBoxItem
+            {
+                Content = LocalizationService.Format("NetworkSwitchMissingConfigurationFormat", selectedConfigurationId),
+                Tag = selectedConfigurationId
+            });
+        }
+
+        NetworkSwitchDefaultConfigurationBox.SelectedItem = NetworkSwitchDefaultConfigurationBox.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(item.Tag as string, selectedConfigurationId, StringComparison.OrdinalIgnoreCase))
+            ?? NetworkSwitchDefaultConfigurationBox.Items.FirstOrDefault();
+    }
+
+    private static bool NetworkSwitchRulesEqual(NetworkSwitchRuleSet left, NetworkSwitchRuleSet right)
+    {
+        if (left.AutomaticSwitchingEnabled != right.AutomaticSwitchingEnabled
+            || !string.Equals(left.DefaultConfigurationId, right.DefaultConfigurationId, StringComparison.OrdinalIgnoreCase)
+            || left.Rules.Count != right.Rules.Count)
+        {
+            return false;
+        }
+
+        return left.Rules.SequenceEqual(right.Rules);
+    }
+
+    private static string FormatNetworkSwitchStatus(NetworkSwitchStatus? status)
+    {
+        if (status is null)
+        {
+            return LocalizationService.Get("NetworkSwitchUnavailable");
+        }
+
+        string state = status.State switch
+        {
+            NetworkSwitchState.Disabled => LocalizationService.Get("NetworkSwitchStateDisabled"),
+            NetworkSwitchState.WaitingForNetwork => LocalizationService.Get("NetworkSwitchStateWaiting"),
+            NetworkSwitchState.PermissionRequired => LocalizationService.Get("NetworkSwitchStatePermission"),
+            NetworkSwitchState.AmbiguousNetwork => LocalizationService.Get("NetworkSwitchStateAmbiguous"),
+            NetworkSwitchState.Evaluating => LocalizationService.Get("NetworkSwitchStateEvaluating"),
+            NetworkSwitchState.Switching => LocalizationService.Get("NetworkSwitchStateSwitching"),
+            NetworkSwitchState.ManualOverride => LocalizationService.Get("NetworkSwitchStateManual"),
+            NetworkSwitchState.CoolingDown => LocalizationService.Get("NetworkSwitchStateCooling"),
+            NetworkSwitchState.Failed => LocalizationService.Get("NetworkSwitchStateFailed"),
+            _ => LocalizationService.Get("NetworkSwitchUnavailable")
+        };
+        if (!status.Available)
+        {
+            return state;
+        }
+
+        string network = status.Context?.CurrentSsid
+            ?? LocalizationService.Get("NetworkSwitchNoNetwork");
+        return LocalizationService.Format("NetworkSwitchStatusFormat", state, network);
     }
 
     private void UpdateStartupStatus(AppSettings settings)
