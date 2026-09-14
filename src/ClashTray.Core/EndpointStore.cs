@@ -256,7 +256,16 @@ public sealed class EndpointStore
                 throw new ArgumentException("Custom certificate endpoints require a certificate reference.", nameof(endpoints));
             }
 
-            _ = NormalizeOptionalReference(endpoint.CertificateReference, nameof(endpoint.CertificateReference));
+            string? certificateReference = NormalizeOptionalReference(
+                endpoint.CertificateReference,
+                nameof(endpoint.CertificateReference));
+            if (descriptor.Security != EndpointTransportSecurity.HttpsCustomCertificate
+                && certificateReference is not null)
+            {
+                throw new ArgumentException(
+                    "Certificate references require custom HTTPS trust.",
+                    nameof(endpoints));
+            }
         }
     }
 

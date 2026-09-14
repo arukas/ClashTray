@@ -74,6 +74,29 @@ public sealed class EndpointStoreTests
     }
 
     [TestMethod]
+    public async Task EndpointStoreRejectsCertificateReferencesForSystemTrustEndpoints()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointStore store = new(paths);
+        EndpointRecord endpoint = new(
+            EndpointUriNormalizer.CreateRemoteDescriptor(
+                new EndpointId("secure"),
+                "Secure",
+                new Uri("https://secure.example.test")),
+            CertificateReference: "unused-ca");
+
+        try
+        {
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => store.SaveAsync([endpoint]));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
     public async Task CorruptEndpointMetadataIsQuarantined()
     {
         string root = CreateRoot();
