@@ -298,6 +298,165 @@ public sealed class EndpointStoreTests
         }
     }
 
+    [TestMethod]
+    public async Task EndpointRemovalDisconnectsActiveSessionAndDeletesUniqueProtectedMaterial()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointStore endpointStore = new(paths);
+        EndpointSecretStore secretStore = new(paths);
+        EndpointCertificateStore certificateStore = new(paths);
+        EndpointDescriptor endpoint = EndpointUriNormalizer.CreateRemoteDescriptor(
+                new EndpointId("office"),
+                "Office",
+                new Uri("https://office.example.test"))
+            with { Security = EndpointTransportSecurity.HttpsCustomCertificate };
+        RecordingEndpointConnector connector = new();
+        await using EndpointSessionManager sessions = new(
+            ControllerEndpointFactory.CreateLocal(9090),
+            connector);
+        EndpointRemovalCoordinator coordinator = new(
+            endpointStore,
+            secretStore,
+            certificateStore,
+            sessions);
+        using RSA key = RSA.Create(2048);
+        CertificateRequest request = new(
+            "CN=ClashTray Test CA",
+            key,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        using X509Certificate2 certificate = request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            DateTimeOffset.UtcNow.AddHours(1));
+
+        try
+        {
+            await endpointStore.UpsertAsync(new EndpointRecord(endpoint, "office-secret", "office-ca"));
+            await secretStore.SetAsync("office-secret", "secret-value");
+            await certificateStore.SetAsync("office-ca", certificate.Export(X509ContentType.Cert));
+            await sessions.SelectAsync(endpoint);
+
+            EndpointRemovalResult result = await coordinator.RemoveAsync(endpoint.Id);
+
+            Assert.IsTrue(result.Removed);
+            Assert.IsTrue(result.SessionDisconnected);
+            Assert.IsTrue(result.SecretRemoved);
+            Assert.IsTrue(result.CertificateRemoved);
+            Assert.IsNull(sessions.Current);
+            Assert.AreEqual(EndpointId.Local, sessions.Status.Endpoint.Id);
+            Assert.AreEqual(0, (await endpointStore.LoadAsync()).Endpoints.Count);
+            Assert.IsNull(await secretStore.GetAsync("office-secret"));
+            Assert.IsNull(await certificateStore.GetAsync("office-ca"));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task EndpointRemovalPreservesProtectedMaterialStillReferencedByAnotherEndpoint()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointStore endpointStore = new(paths);
+        EndpointSecretStore secretStore = new(paths);
+        EndpointCertificateStore certificateStore = new(paths);
+        EndpointDescriptor first = EndpointUriNormalizer.CreateRemoteDescriptor(
+                new EndpointId("first"),
+                "First",
+                new Uri("https://first.example.test"))
+            with { Security = EndpointTransportSecurity.HttpsCustomCertificate };
+        EndpointDescriptor second = EndpointUriNormalizer.CreateRemoteDescriptor(
+                new EndpointId("second"),
+                "Second",
+                new Uri("https://second.example.test"))
+            with { Security = EndpointTransportSecurity.HttpsCustomCertificate };
+        using RSA key = RSA.Create(2048);
+        CertificateRequest request = new(
+            "CN=ClashTray Test CA",
+            key,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        using X509Certificate2 certificate = request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            DateTimeOffset.UtcNow.AddHours(1));
+
+        try
+        {
+            await endpointStore.SaveAsync([
+                new EndpointRecord(first, "shared-secret", "shared-ca"),
+                new EndpointRecord(second, "shared-secret", "shared-ca")]);
+            await secretStore.SetAsync("shared-secret", "secret-value");
+            await certificateStore.SetAsync("shared-ca", certificate.Export(X509ContentType.Cert));
+            EndpointRemovalCoordinator coordinator = new(
+                endpointStore,
+                secretStore,
+                certificateStore);
+
+            EndpointRemovalResult result = await coordinator.RemoveAsync(first.Id);
+
+            Assert.IsTrue(result.Removed);
+            Assert.IsFalse(result.SecretRemoved);
+            Assert.IsFalse(result.CertificateRemoved);
+            Assert.AreEqual("secret-value", await secretStore.GetAsync("shared-secret"));
+            Assert.IsNotNull(await certificateStore.GetAsync("shared-ca"));
+            EndpointStoreLoadResult loaded = await endpointStore.LoadAsync();
+            Assert.AreEqual(second.Id, loaded.Endpoints.Single().Descriptor.Id);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task EndpointRemovalRejectsThePermanentLocalEndpoint()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointRemovalCoordinator coordinator = new(
+            new EndpointStore(paths),
+            new EndpointSecretStore(paths),
+            new EndpointCertificateStore(paths));
+
+        try
+        {
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => coordinator.RemoveAsync(EndpointId.Local));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private sealed class RecordingEndpointConnector : IEndpointSessionConnector
+    {
+        [System.Diagnostics.CodeAnalysis.SuppressMessage(
+            "Reliability",
+            "CA2000:Dispose objects before losing scope",
+            Justification = "The created transport is transferred to EndpointSession, which owns and disposes it.")]
+        public Task<EndpointSession> ConnectAsync(
+            EndpointDescriptor endpoint,
+            long generation,
+            long selectionRevision,
+            CancellationToken cancellationToken)
+        {
+            EndpointDescriptor transportEndpoint = endpoint.Security == EndpointTransportSecurity.HttpsCustomCertificate
+                ? endpoint with { Security = EndpointTransportSecurity.HttpsSystemTrust }
+                : endpoint;
+            EndpointTransport transport = EndpointTransportFactory.Create(transportEndpoint);
+            return Task.FromResult(new EndpointSession(
+                transport,
+                EndpointCapabilityDefaults.Remote,
+                generation,
+                selectionRevision));
+        }
+    }
+
     private static EndpointDescriptor EndpointDescriptorForLocal() => new(
         EndpointId.Local,
         EndpointKind.Local,
