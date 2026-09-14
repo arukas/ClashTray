@@ -195,6 +195,13 @@ public sealed class EndpointCertificateStore
         }
 
         using X509Certificate2 certificate = ParseCertificate(certificateBytes);
+        if (!IsCertificateAuthority(certificate))
+        {
+            throw new ArgumentException(
+                "Endpoint certificate must be a CA certificate.",
+                nameof(certificateBytes));
+        }
+
         return certificate.Export(X509ContentType.Cert);
     }
 
@@ -210,6 +217,14 @@ public sealed class EndpointCertificateStore
             return X509Certificate2.CreateFromPem(pem);
         }
     }
+
+    private static bool IsCertificateAuthority(X509Certificate2 certificate) =>
+        certificate.Extensions
+            .OfType<X509BasicConstraintsExtension>()
+            .Any(extension => extension.CertificateAuthority)
+        && certificate.Extensions
+            .OfType<X509KeyUsageExtension>()
+            .All(extension => (extension.KeyUsages & X509KeyUsageFlags.KeyCertSign) != 0);
 
     private EndpointCertificateStoreLoadResult QuarantineCorrupt(string message)
     {

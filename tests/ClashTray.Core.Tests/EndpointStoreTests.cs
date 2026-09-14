@@ -269,6 +269,35 @@ public sealed class EndpointStoreTests
         }
     }
 
+    [TestMethod]
+    public async Task CertificateStoreRejectsNonCaCertificates()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointCertificateStore store = new(paths);
+        using RSA key = RSA.Create(2048);
+        CertificateRequest request = new(
+            "CN=ClashTray Test Leaf",
+            key,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        using X509Certificate2 leaf = request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddMinutes(-1),
+            DateTimeOffset.UtcNow.AddHours(1));
+
+        try
+        {
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => store.SetAsync(
+                "leaf",
+                leaf.Export(X509ContentType.Cert)));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static EndpointDescriptor EndpointDescriptorForLocal() => new(
         EndpointId.Local,
         EndpointKind.Local,
