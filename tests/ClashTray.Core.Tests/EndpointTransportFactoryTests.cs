@@ -169,10 +169,12 @@ public sealed class EndpointTransportFactoryTests
         SubjectAlternativeNameBuilder subjectAlternativeName = new();
         subjectAlternativeName.AddDnsName(dnsName);
         request.CertificateExtensions.Add(subjectAlternativeName.Build());
+        DateTimeOffset issuerNotBefore = new DateTimeOffset(ca.NotBefore).ToUniversalTime();
+        DateTimeOffset issuerNotAfter = new DateTimeOffset(ca.NotAfter).ToUniversalTime();
         return request.Create(
             ca,
-            DateTimeOffset.UtcNow.AddMinutes(-1),
-            DateTimeOffset.UtcNow.AddHours(1),
+            issuerNotBefore.AddSeconds(1),
+            issuerNotAfter.AddSeconds(-1),
             [1, 2, 3, 4]);
     }
 }
