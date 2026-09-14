@@ -243,6 +243,26 @@ public sealed class RuntimeEndpointTests
             Assert.AreEqual(ProxyMode.Direct, modeSnapshot.ActiveController.Status?.Mode);
             Assert.AreEqual(1, connector.ModePatchCount);
 
+            TaskCompletionSource<AppSnapshot> proxyChanged = new(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            runtime.AppSnapshotChanged += (_, snapshot) =>
+            {
+                if (snapshot.ActiveController.ProxyGroups
+                    .FirstOrDefault(item => item.Name == "Auto")
+                    ?.Current == "backup")
+                {
+                    proxyChanged.TrySetResult(snapshot);
+                }
+            };
+            await runtime.SelectProxyAsync("Auto", "backup");
+            AppSnapshot proxySnapshot = await proxyChanged.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.AreEqual(
+                "backup",
+                proxySnapshot.ActiveController.ProxyGroups
+                    .Single(item => item.Name == "Auto")
+                    .Current);
+            Assert.AreEqual(1, connector.ProxySelectionCount);
+
             await runtime.UpdateRemoteEndpointAsync(
                 remote.Id,
                 remote with
@@ -282,6 +302,8 @@ public sealed class RuntimeEndpointTests
         private SnapshotHandler? _handler;
 
         public int ModePatchCount => Volatile.Read(ref _handler)?.ModePatchCount ?? 0;
+
+        public int ProxySelectionCount => Volatile.Read(ref _handler)?.ProxySelectionCount ?? 0;
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage(
             "Reliability",
@@ -332,8 +354,12 @@ public sealed class RuntimeEndpointTests
             private long _downloadBytes = 12;
             private string _mode = "global";
             private int _modePatchCount;
+            private string _proxy = "node";
+            private int _proxySelectionCount;
 
             public int ModePatchCount => Volatile.Read(ref _modePatchCount);
+
+            public int ProxySelectionCount => Volatile.Read(ref _proxySelectionCount);
 
             public void SetTraffic(long uploadBytes, long downloadBytes)
             {
@@ -364,12 +390,30 @@ public sealed class RuntimeEndpointTests
                     Interlocked.Increment(ref _modePatchCount);
                 }
 
+                if (request.Method == HttpMethod.Put
+                    && request.RequestUri?.AbsolutePath == "/proxies/Auto")
+                {
+                    using JsonDocument payload = JsonDocument.Parse(
+                        await request.Content!.ReadAsStringAsync(cancellationToken));
+                    string? requestedProxy = payload.RootElement
+                        .GetProperty("name")
+                        .GetString();
+                    if (!string.IsNullOrWhiteSpace(requestedProxy))
+                    {
+                        Volatile.Write(ref _proxy, requestedProxy);
+                    }
+
+                    Interlocked.Increment(ref _proxySelectionCount);
+                }
+
                 string body = request.RequestUri?.AbsolutePath switch
                 {
                     "/configs" => "{\"mode\":\""
                         + Volatile.Read(ref _mode)
                         + "\",\"tun\":{\"enable\":false}}",
-                    "/proxies" => """{"proxies":{"Auto":{"type":"Selector","now":"node","all":["node"]},"node":{"type":"Direct"}}}""",
+                    "/proxies" => "{\"proxies\":{\"Auto\":{\"type\":\"Selector\",\"now\":\""
+                        + Volatile.Read(ref _proxy)
+                        + "\",\"all\":[\"node\",\"backup\"]},\"node\":{\"type\":\"Direct\"},\"backup\":{\"type\":\"Direct\"}}}",
                     "/traffic" => $$"""{"upTotal":{{uploadBytes}},"downTotal":{{downloadBytes}},"up":1,"down":2}"""
                         + "\n",
                     "/memory" => """{"inuse":22}"""

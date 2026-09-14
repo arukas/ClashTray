@@ -1459,6 +1459,32 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
+            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+                EndpointCommand.SwitchProxy,
+                "节点切换期间远程端点会话已切换，请重新选择节点。");
+            if (remoteSession is not null)
+            {
+                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+                await remoteSession.Api.SelectProxyAsync(group, proxy, cancellationToken);
+                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
+                {
+                    throw new InvalidOperationException(
+                        "节点切换期间远程端点会话已切换，请重新选择节点。");
+                }
+
+                if (!await RefreshRemoteControllerSnapshotAsync(
+                        remoteSession,
+                        remoteStatus,
+                        cancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException(
+                        "远程端点节点切换结果无法确认，请重试。");
+                }
+
+                return;
+            }
+
             (MihomoApiClient api, long generation) = CaptureControllerSession();
             EnsureControllerCommand(
                 api,
