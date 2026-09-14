@@ -1421,43 +1421,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            EndpointSession? remoteSession = routeToRemote
-                ? CaptureActiveRemoteSession(
-                    EndpointCommand.SwitchMode,
-                    "模式切换期间远程端点会话已切换，请重试。")
-                : null;
-            if (remoteSession is not null)
-            {
-                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-                await remoteSession.Api.SetModeAsync(mode, cancellationToken);
-                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
-                {
-                    throw new InvalidOperationException("模式切换期间远程端点会话已切换，请重试。");
-                }
-
-                if (!await RefreshRemoteControllerSnapshotAsync(
-                        remoteSession,
-                        remoteStatus,
-                        cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException("远程端点模式切换结果无法确认，请重试。");
-                }
-
-                return;
-            }
-
-            (MihomoApiClient api, long generation) = CaptureControllerSession();
-            EnsureControllerCommand(
-                api,
-                generation,
+            await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.SwitchMode,
-                "模式切换期间核心会话已切换，请重试。");
-
-            await api.SetModeAsync(mode, cancellationToken);
-            EnsureControllerSession(api, generation, "模式切换期间核心会话已切换，请重试。");
-            await RefreshFromApiAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "模式切换期间核心会话已切换，请重试。");
+                "模式切换期间核心会话已切换，请重试。",
+                "远程端点模式切换结果无法确认，请重试。",
+                (api, _, token) => api.SetModeAsync(mode, token),
+                (session, token) => session.Api.SetModeAsync(mode, token),
+                cancellationToken,
+                routeToRemote);
         }
         finally
         {
@@ -1470,78 +1441,57 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            EndpointSession? remoteSession = CaptureActiveRemoteSession(
-                EndpointCommand.SwitchProxy,
-                "节点切换期间远程端点会话已切换，请重新选择节点。");
-            if (remoteSession is not null)
-            {
-                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-                await remoteSession.Api.SelectProxyAsync(group, proxy, cancellationToken);
-                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
-                {
-                    throw new InvalidOperationException(
-                        "节点切换期间远程端点会话已切换，请重新选择节点。");
-                }
-
-                if (!await RefreshRemoteControllerSnapshotAsync(
-                        remoteSession,
-                        remoteStatus,
-                        cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException(
-                        "远程端点节点切换结果无法确认，请重试。");
-                }
-
-                return;
-            }
-
-            (MihomoApiClient api, long generation) = CaptureControllerSession();
-            EnsureControllerCommand(
-                api,
-                generation,
-                EndpointCommand.SwitchProxy,
-                "节点切换期间核心会话已切换，请重新选择节点。");
             string? previousProxy = _snapshot.ProxyGroups
                 .FirstOrDefault(item => string.Equals(item.Name, group, StringComparison.Ordinal))
                 ?.Current;
-
-            await api.SelectProxyAsync(group, proxy, cancellationToken);
-            EnsureControllerSession(api, generation, "节点切换期间核心会话已切换，请重新选择节点。");
-
             Exception? disconnectException = null;
             bool selectionChanged = previousProxy is not null
                 && !string.Equals(previousProxy, proxy, StringComparison.Ordinal);
-            if (_settings.DisconnectConnectionsAfterProxySwitch && selectionChanged)
-            {
-                try
+
+            await ExecuteControllerMutationAndRefreshAsync(
+                EndpointCommand.SwitchProxy,
+                "节点切换期间核心会话已切换，请重新选择节点。",
+                "远程端点节点切换结果无法确认，请重试。",
+                async (api, generation, token) =>
                 {
-                    EnsureControllerCommand(
+                    await api.SelectProxyAsync(group, proxy, token);
+                    EnsureControllerSession(
                         api,
                         generation,
-                        EndpointCommand.CloseConnection,
                         "节点切换期间核心会话已切换，请重新选择节点。");
-                    await api.CloseAllConnectionsAsync(cancellationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception exception)
-                {
-                    EnsureControllerSession(api, generation, "节点切换期间核心会话已切换，请重新选择节点。");
-                    disconnectException = exception;
-                    _logBuffer.Add(new LogEntry(
-                        DateTimeOffset.UtcNow,
-                        "ClashTray",
-                        "error",
-                        $"节点已切换，但未能断开旧连接：{ErrorSanitizer.Sanitize(exception)}"));
-                }
-            }
+                    if (_settings.DisconnectConnectionsAfterProxySwitch && selectionChanged)
+                    {
+                        try
+                        {
+                            EnsureControllerCommand(
+                                api,
+                                generation,
+                                EndpointCommand.CloseConnection,
+                                "节点切换期间核心会话已切换，请重新选择节点。");
+                            await api.CloseAllConnectionsAsync(token);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception exception)
+                        {
+                            EnsureControllerSession(
+                                api,
+                                generation,
+                                "节点切换期间核心会话已切换，请重新选择节点。");
+                            disconnectException = exception;
+                            _logBuffer.Add(new LogEntry(
+                                DateTimeOffset.UtcNow,
+                                "ClashTray",
+                                "error",
+                                $"节点已切换，但未能断开旧连接：{ErrorSanitizer.Sanitize(exception)}"));
+                        }
+                    }
+                },
+                (session, token) => session.Api.SelectProxyAsync(group, proxy, token),
+                cancellationToken);
 
-            EnsureControllerSession(api, generation, "节点切换期间核心会话已切换，请重新选择节点。");
-            await RefreshFromApiAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "节点切换期间核心会话已切换，请重新选择节点。");
             if (disconnectException is not null)
             {
                 const string message = "节点已切换，但未能断开旧连接。";
@@ -1704,47 +1654,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+            await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.CloseConnection,
-                "关闭连接期间远程端点会话已切换，请重试。");
-            if (remoteSession is not null)
-            {
-                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-                await remoteSession.Api.CloseConnectionAsync(id, cancellationToken);
-                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
-                {
-                    throw new InvalidOperationException(
-                        "关闭连接期间远程端点会话已切换，请重试。");
-                }
-
-                if (!await RefreshRemoteControllerSnapshotAsync(
-                        remoteSession,
-                        remoteStatus,
-                        cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException(
-                        "远程连接关闭结果无法确认，请重试。");
-                }
-
-                return;
-            }
-
-            if (_api is null)
-            {
-                return;
-            }
-
-            (MihomoApiClient api, long generation) = CaptureControllerSession();
-            EnsureControllerCommand(
-                api,
-                generation,
-                EndpointCommand.CloseConnection,
-                "关闭连接期间核心会话已切换，请重试。");
-            await api.CloseConnectionAsync(id, cancellationToken);
-            EnsureControllerSession(api, generation, "关闭连接期间核心会话已切换，请重试。");
-            await RefreshFromApiAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "关闭连接期间核心会话已切换，请重试。");
+                "关闭连接期间核心会话已切换，请重试。",
+                "远程连接关闭结果无法确认，请重试。",
+                (api, _, token) => api.CloseConnectionAsync(id, token),
+                (session, token) => session.Api.CloseConnectionAsync(id, token),
+                cancellationToken);
         }
         finally
         {
@@ -1757,47 +1673,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+            await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.CloseConnection,
-                "关闭连接期间远程端点会话已切换，请重试。");
-            if (remoteSession is not null)
-            {
-                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-                await remoteSession.Api.CloseAllConnectionsAsync(cancellationToken);
-                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
-                {
-                    throw new InvalidOperationException(
-                        "关闭连接期间远程端点会话已切换，请重试。");
-                }
-
-                if (!await RefreshRemoteControllerSnapshotAsync(
-                        remoteSession,
-                        remoteStatus,
-                        cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException(
-                        "远程连接清理结果无法确认，请重试。");
-                }
-
-                return;
-            }
-
-            if (_api is null)
-            {
-                return;
-            }
-
-            (MihomoApiClient api, long generation) = CaptureControllerSession();
-            EnsureControllerCommand(
-                api,
-                generation,
-                EndpointCommand.CloseConnection,
-                "关闭连接期间核心会话已切换，请重试。");
-            await api.CloseAllConnectionsAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "关闭连接期间核心会话已切换，请重试。");
-            await RefreshFromApiAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "关闭连接期间核心会话已切换，请重试。");
+                "关闭连接期间核心会话已切换，请重试。",
+                "远程连接清理结果无法确认，请重试。",
+                (api, _, token) => api.CloseAllConnectionsAsync(token),
+                (session, token) => session.Api.CloseAllConnectionsAsync(token),
+                cancellationToken);
         }
         finally
         {
@@ -1810,63 +1692,17 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+            await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.RefreshProvider,
-                "刷新 Provider 期间远程端点会话已切换，请重试。");
-            if (remoteSession is not null)
-            {
-                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-                if (rules)
-                {
-                    await remoteSession.Api.RefreshRuleProviderAsync(name, cancellationToken);
-                }
-                else
-                {
-                    await remoteSession.Api.RefreshProviderAsync(name, cancellationToken);
-                }
-
-                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
-                {
-                    throw new InvalidOperationException(
-                        "刷新 Provider 期间远程端点会话已切换，请重试。");
-                }
-
-                if (!await RefreshRemoteControllerSnapshotAsync(
-                        remoteSession,
-                        remoteStatus,
-                        cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException(
-                        "远程 Provider 刷新结果无法确认，请重试。");
-                }
-
-                return;
-            }
-
-            if (_api is null)
-            {
-                return;
-            }
-
-            (MihomoApiClient api, long generation) = CaptureControllerSession();
-            EnsureControllerCommand(
-                api,
-                generation,
-                EndpointCommand.RefreshProvider,
-                "刷新 Provider 期间核心会话已切换，请重试。");
-            if (rules)
-            {
-                await api.RefreshRuleProviderAsync(name, cancellationToken);
-            }
-            else
-            {
-                await api.RefreshProviderAsync(name, cancellationToken);
-            }
-
-            EnsureControllerSession(api, generation, "刷新 Provider 期间核心会话已切换，请重试。");
-            await RefreshFromApiAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "刷新 Provider 期间核心会话已切换，请重试。");
+                "刷新 Provider 期间核心会话已切换，请重试。",
+                "远程 Provider 刷新结果无法确认，请重试。",
+                (api, _, token) => rules
+                    ? api.RefreshRuleProviderAsync(name, token)
+                    : api.RefreshProviderAsync(name, token),
+                (session, token) => rules
+                    ? session.Api.RefreshRuleProviderAsync(name, token)
+                    : session.Api.RefreshProviderAsync(name, token),
+                cancellationToken);
         }
         finally
         {
@@ -1886,47 +1722,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+            await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.ClearCache,
-                "清理 FakeIP 缓存期间远程端点会话已切换，请重试。");
-            if (remoteSession is not null)
-            {
-                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-                await remoteSession.Api.ClearFakeIpCacheAsync(cancellationToken);
-                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
-                {
-                    throw new InvalidOperationException(
-                        "清理 FakeIP 缓存期间远程端点会话已切换，请重试。");
-                }
-
-                if (!await RefreshRemoteControllerSnapshotAsync(
-                        remoteSession,
-                        remoteStatus,
-                        cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException(
-                        "远程 FakeIP 缓存清理结果无法确认，请重试。");
-                }
-
-                return;
-            }
-
-            if (_api is null)
-            {
-                return;
-            }
-
-            (MihomoApiClient api, long generation) = CaptureControllerSession();
-            EnsureControllerCommand(
-                api,
-                generation,
-                EndpointCommand.ClearCache,
-                "清理 FakeIP 缓存期间核心会话已切换，请重试。");
-            await api.ClearFakeIpCacheAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "清理 FakeIP 缓存期间核心会话已切换，请重试。");
-            await RefreshFromApiAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "清理 FakeIP 缓存期间核心会话已切换，请重试。");
+                "清理 FakeIP 缓存期间核心会话已切换，请重试。",
+                "远程 FakeIP 缓存清理结果无法确认，请重试。",
+                (api, _, token) => api.ClearFakeIpCacheAsync(token),
+                (session, token) => session.Api.ClearFakeIpCacheAsync(token),
+                cancellationToken);
         }
         finally
         {
@@ -2254,47 +2056,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+            await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.ClearCache,
-                "清理 DNS 缓存期间远程端点会话已切换，请重试。");
-            if (remoteSession is not null)
-            {
-                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-                await remoteSession.Api.ClearDnsCacheAsync(cancellationToken);
-                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
-                {
-                    throw new InvalidOperationException(
-                        "清理 DNS 缓存期间远程端点会话已切换，请重试。");
-                }
-
-                if (!await RefreshRemoteControllerSnapshotAsync(
-                        remoteSession,
-                        remoteStatus,
-                        cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException(
-                        "远程 DNS 缓存清理结果无法确认，请重试。");
-                }
-
-                return;
-            }
-
-            if (_api is null)
-            {
-                return;
-            }
-
-            (MihomoApiClient api, long generation) = CaptureControllerSession();
-            EnsureControllerCommand(
-                api,
-                generation,
-                EndpointCommand.ClearCache,
-                "清理 DNS 缓存期间核心会话已切换，请重试。");
-            await api.ClearDnsCacheAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "清理 DNS 缓存期间核心会话已切换，请重试。");
-            await RefreshFromApiAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "清理 DNS 缓存期间核心会话已切换，请重试。");
+                "清理 DNS 缓存期间核心会话已切换，请重试。",
+                "远程 DNS 缓存清理结果无法确认，请重试。",
+                (api, _, token) => api.ClearDnsCacheAsync(token),
+                (session, token) => session.Api.ClearDnsCacheAsync(token),
+                cancellationToken);
         }
         finally
         {
@@ -2307,47 +2075,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            EndpointSession? remoteSession = CaptureActiveRemoteSession(
+            await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.UpdateGeo,
-                "更新 Geo 数据库期间远程端点会话已切换，请重试。");
-            if (remoteSession is not null)
-            {
-                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-                await remoteSession.Api.UpdateGeoAsync(cancellationToken);
-                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
-                {
-                    throw new InvalidOperationException(
-                        "更新 Geo 数据库期间远程端点会话已切换，请重试。");
-                }
-
-                if (!await RefreshRemoteControllerSnapshotAsync(
-                        remoteSession,
-                        remoteStatus,
-                        cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException(
-                        "远程 Geo 数据库更新结果无法确认，请重试。");
-                }
-
-                return;
-            }
-
-            if (_api is null)
-            {
-                return;
-            }
-
-            (MihomoApiClient api, long generation) = CaptureControllerSession();
-            EnsureControllerCommand(
-                api,
-                generation,
-                EndpointCommand.UpdateGeo,
-                "更新 Geo 数据库期间核心会话已切换，请重试。");
-            await api.UpdateGeoAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "更新 Geo 数据库期间核心会话已切换，请重试。");
-            await RefreshFromApiAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "更新 Geo 数据库期间核心会话已切换，请重试。");
+                "更新 Geo 数据库期间核心会话已切换，请重试。",
+                "远程 Geo 数据库更新结果无法确认，请重试。",
+                (api, _, token) => api.UpdateGeoAsync(token),
+                (session, token) => session.Api.UpdateGeoAsync(token),
+                cancellationToken);
         }
         finally
         {
@@ -3384,6 +3118,64 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             session.Capabilities,
             command);
         return session;
+    }
+
+    private async Task ExecuteControllerMutationAndRefreshAsync(
+        EndpointCommand command,
+        string staleSessionMessage,
+        string remoteRefreshFailureMessage,
+        Func<MihomoApiClient, long, CancellationToken, Task> localOperation,
+        Func<EndpointSession, CancellationToken, Task> remoteOperation,
+        CancellationToken cancellationToken,
+        bool routeToRemote = true,
+        bool includeRulesAndProviders = true)
+    {
+        ArgumentNullException.ThrowIfNull(localOperation);
+        ArgumentNullException.ThrowIfNull(remoteOperation);
+
+        EndpointSession? remoteSession = routeToRemote
+            ? CaptureActiveRemoteSession(command, staleSessionMessage)
+            : null;
+        if (remoteSession is not null)
+        {
+            EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+            await remoteOperation(remoteSession, cancellationToken).ConfigureAwait(false);
+            if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
+            {
+                throw new InvalidOperationException(staleSessionMessage);
+            }
+
+            if (!await RefreshRemoteControllerSnapshotAsync(
+                    remoteSession,
+                    remoteStatus,
+                    cancellationToken)
+                .ConfigureAwait(false))
+            {
+                throw new InvalidOperationException(remoteRefreshFailureMessage);
+            }
+
+            return;
+        }
+
+        if (_api is null)
+        {
+            if (!routeToRemote)
+            {
+                _ = CaptureControllerSession();
+            }
+
+            return;
+        }
+
+        (MihomoApiClient api, long generation) = CaptureControllerSession();
+        EnsureControllerCommand(api, generation, command, staleSessionMessage);
+        await localOperation(api, generation, cancellationToken).ConfigureAwait(false);
+        EnsureControllerSession(api, generation, staleSessionMessage);
+        await RefreshFromApiAsync(
+                cancellationToken,
+                includeRulesAndProviders)
+            .ConfigureAwait(false);
+        EnsureControllerSession(api, generation, staleSessionMessage);
     }
 
     private async Task StopRemoteRefreshAsync()
