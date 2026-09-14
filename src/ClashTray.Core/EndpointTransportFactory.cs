@@ -269,12 +269,8 @@ internal static class EndpointCertificateValidator
             return false;
         }
 
-        if (errors == SslPolicyErrors.None)
-        {
-            return true;
-        }
-
-        if ((errors & SslPolicyErrors.RemoteCertificateChainErrors) == 0)
+        if (errors != SslPolicyErrors.None
+            && (errors & SslPolicyErrors.RemoteCertificateChainErrors) == 0)
         {
             return false;
         }

@@ -120,6 +120,16 @@ public sealed class EndpointTransportFactoryTests
         Assert.IsFalse(EndpointCertificateValidator.Validate(
             server,
             chain: null,
+            SslPolicyErrors.None,
+            wrongCa));
+        Assert.IsTrue(EndpointCertificateValidator.Validate(
+            server,
+            chain: null,
+            SslPolicyErrors.None,
+            ca));
+        Assert.IsFalse(EndpointCertificateValidator.Validate(
+            server,
+            chain: null,
             SslPolicyErrors.RemoteCertificateNameMismatch,
             ca));
     }
