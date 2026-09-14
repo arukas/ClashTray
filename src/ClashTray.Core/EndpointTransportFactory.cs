@@ -24,7 +24,8 @@ public sealed class EndpointTransport : IDisposable
         Uri webSocketUri,
         HttpClient httpClient,
         string? authorizationValue,
-        X509Certificate2? customCaCertificate)
+        X509Certificate2? customCaCertificate,
+        bool bypassesSystemProxy)
     {
         Endpoint = endpoint;
         BaseUri = baseUri;
@@ -32,6 +33,7 @@ public sealed class EndpointTransport : IDisposable
         _httpClient = httpClient;
         _authorizationValue = authorizationValue;
         _customCaCertificate = customCaCertificate;
+        BypassesSystemProxy = bypassesSystemProxy;
     }
 
     public EndpointDescriptor Endpoint { get; }
@@ -39,6 +41,8 @@ public sealed class EndpointTransport : IDisposable
     public Uri BaseUri { get; }
 
     public Uri WebSocketUri { get; }
+
+    public bool BypassesSystemProxy { get; }
 
     public HttpClient HttpClient
     {
@@ -53,6 +57,7 @@ public sealed class EndpointTransport : IDisposable
     {
         ThrowIfDisposed();
         ClientWebSocket socket = new();
+        socket.Options.Proxy = null;
         if (_authorizationValue is not null)
         {
             socket.Options.SetRequestHeader("Authorization", _authorizationValue);
@@ -134,6 +139,7 @@ public static class EndpointTransportFactory
 
         X509Certificate2? customCaCertificate = CloneCustomCaCertificate(options.CustomCaCertificate);
         HttpClientHandler handler = new();
+        handler.UseProxy = false;
         handler.CheckCertificateRevocationList = true;
         HttpClient? httpClient = null;
         try
@@ -167,7 +173,8 @@ public static class EndpointTransportFactory
                 webSocketUri,
                 httpClient,
                 authorizationValue,
-                customCaCertificate);
+                customCaCertificate,
+                bypassesSystemProxy: !handler.UseProxy);
         }
         catch
         {

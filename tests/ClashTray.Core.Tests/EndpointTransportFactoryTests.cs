@@ -25,6 +25,7 @@ public sealed class EndpointTransportFactoryTests
         Assert.AreEqual("wss://mihomo.example.test/controller/", transport.WebSocketUri.AbsoluteUri);
         Assert.AreEqual("Bearer", transport.HttpClient.DefaultRequestHeaders.Authorization?.Scheme);
         Assert.AreEqual("test-secret", transport.HttpClient.DefaultRequestHeaders.Authorization?.Parameter);
+        Assert.IsTrue(transport.BypassesSystemProxy);
         Assert.AreEqual(
             "wss://mihomo.example.test/controller/logs?level=debug",
             transport.BuildWebSocketUri("/logs?level=debug").AbsoluteUri);
@@ -47,6 +48,7 @@ public sealed class EndpointTransportFactoryTests
         Assert.AreEqual(EndpointTransportSecurity.HttpExplicitlyConfirmed, endpoint.Security);
         Assert.AreEqual("http://mihomo.example.test/controller/", transport.BaseUri.AbsoluteUri);
         Assert.AreEqual("ws://mihomo.example.test/controller/", transport.WebSocketUri.AbsoluteUri);
+        Assert.IsTrue(transport.BypassesSystemProxy);
         Assert.AreEqual(
             "ws://mihomo.example.test/controller/logs",
             transport.BuildWebSocketUri("logs").AbsoluteUri);
