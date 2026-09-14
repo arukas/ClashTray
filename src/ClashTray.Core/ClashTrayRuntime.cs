@@ -2440,12 +2440,23 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     break;
                 }
 
-                await RefreshFromApiAsync(
-                    _runtimeCts.Token,
-                    includeRulesAndProviders: false);
-                await ApplyProgramOverridesAsync(coreRunning: true, cancellationToken: _runtimeCts.Token);
-                retryDelay = TimeSpan.FromSeconds(2);
-                retryCount = 0;
+                await _operationLock.WaitAsync(_runtimeCts.Token);
+                try
+                {
+                    await RefreshFromApiAsync(
+                        _runtimeCts.Token,
+                        includeRulesAndProviders: false);
+                    await ApplyProgramOverridesAsync(
+                        coreRunning: true,
+                        cancellationToken: _runtimeCts.Token,
+                        operationLockHeld: true);
+                    retryDelay = TimeSpan.FromSeconds(2);
+                    retryCount = 0;
+                }
+                finally
+                {
+                    _operationLock.Release();
+                }
             }
             catch (OperationCanceledException) when (_runtimeCts.IsCancellationRequested)
             {
