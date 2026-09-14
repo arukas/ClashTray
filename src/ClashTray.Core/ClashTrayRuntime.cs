@@ -1107,22 +1107,31 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             return;
         }
 
-        await _configurationStore.ReloadAsync(profile, cancellationToken);
-        bool isActive = profile.IsActive
-            || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
-        if (isActive)
+        await _operationLock.WaitAsync(cancellationToken);
+        try
         {
-            await ExecuteConfigurationSwitchAsync(
-                ConfigurationSwitchRequest.Create(
-                    ConfigurationSwitchSource.Manual,
-                    profile.Id,
-                    restartCore: _snapshot.Core.State == CoreState.Running,
-                    forceApply: true),
-                cancellationToken);
+            await _configurationStore.ReloadAsync(profile, cancellationToken);
+            bool isActive = profile.IsActive
+                || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
+            if (isActive)
+            {
+                await ExecuteConfigurationSwitchAsync(
+                    ConfigurationSwitchRequest.Create(
+                        ConfigurationSwitchSource.Manual,
+                        profile.Id,
+                        restartCore: _snapshot.Core.State == CoreState.Running,
+                        forceApply: true),
+                    cancellationToken,
+                    operationLockHeld: true);
+            }
+            else
+            {
+                await RefreshConfigurationSnapshotAsync(cancellationToken);
+            }
         }
-        else
+        finally
         {
-            await RefreshConfigurationSnapshotAsync(cancellationToken);
+            _operationLock.Release();
         }
     }
 

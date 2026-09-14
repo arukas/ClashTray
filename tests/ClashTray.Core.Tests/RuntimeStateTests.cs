@@ -675,6 +675,63 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task ReloadConfigurationSerializesRefreshDuringValidation()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationStore store = new(paths);
+        ConfigurationProfile imported = await store.ImportLocalAsync(
+            await WriteConfigAsync(root, "reload.yaml"),
+            "reload");
+        BlockingCandidateValidator validator = new();
+        TestSettingsStore settings = new(new AppSettings());
+        await using ClashTrayRuntime runtime = new(
+            paths,
+            null,
+            null,
+            settings,
+            null,
+            validator);
+        Task? reload = null;
+        Task? refresh = null;
+
+        try
+        {
+            await runtime.InitializeAsync();
+            ConfigurationProfile profile = runtime.Snapshot.Configurations
+                .Single(configuration => configuration.Id == imported.Id);
+            validator.BlockNextValidation();
+            reload = runtime.ReloadConfigurationAsync(profile);
+            await validator.ValidationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            refresh = runtime.RefreshDataAsync();
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+            Assert.IsFalse(refresh.IsCompleted);
+
+            validator.ReleaseValidation();
+            await Task.WhenAll(reload, refresh);
+        }
+        finally
+        {
+            validator.ReleaseValidation();
+            if (reload is not null)
+            {
+                await reload.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (refresh is not null)
+            {
+                await refresh.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public void MihomoDataParserPreservesZeroTrafficTotals()
     {
         using JsonDocument document = JsonDocument.Parse(
@@ -1348,6 +1405,31 @@ public sealed class RuntimeStateTests
     {
         public Task ValidateAsync(string candidatePath, CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
+    }
+
+    private sealed class BlockingCandidateValidator : IConfigurationCandidateValidator
+    {
+        private readonly TaskCompletionSource<bool> _releaseValidation = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _blockNextValidation;
+
+        public TaskCompletionSource<bool> ValidationEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void BlockNextValidation() => Volatile.Write(ref _blockNextValidation, 1);
+
+        public void ReleaseValidation() => _releaseValidation.TrySetResult(true);
+
+        public async Task ValidateAsync(
+            string candidatePath,
+            CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(ref _blockNextValidation, 0) == 1)
+            {
+                ValidationEntered.TrySetResult(true);
+                await _releaseValidation.Task.WaitAsync(cancellationToken);
+            }
+        }
     }
 
     private sealed class RejectingCandidateValidator : IConfigurationCandidateValidator
