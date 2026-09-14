@@ -96,6 +96,19 @@ public sealed class EndpointCommandPolicyTests
     }
 
     [TestMethod]
+    public void UnknownEndpointKindIsDeniedEvenWhenCapabilitiesAreOverReported()
+    {
+        EndpointCommandDecision decision = EndpointCommandPolicy.Evaluate(
+            (EndpointKind)int.MaxValue,
+            EndpointCapabilityDefaults.Local,
+            EndpointCommand.ObserveStatus);
+
+        Assert.IsFalse(decision.Allowed);
+        Assert.AreEqual(ErrorCode.UnsupportedEndpointCommand, decision.ErrorCode);
+        Assert.AreEqual(EndpointCapability.None, decision.RequiredCapability);
+    }
+
+    [TestMethod]
     public void EnsureAllowedExposesStableDenialDetails()
     {
         EndpointCommandDeniedException exception = Assert.ThrowsExactly<EndpointCommandDeniedException>(() =>

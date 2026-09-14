@@ -83,6 +83,11 @@ public static class EndpointCommandPolicy
         EndpointCapability capabilities,
         EndpointCommand command)
     {
+        if (endpointKind is not (EndpointKind.Local or EndpointKind.Remote))
+        {
+            return EndpointCommandDecision.Deny(ErrorCode.UnsupportedEndpointCommand);
+        }
+
         if (!TryGetRequiredCapability(command, out EndpointCapability requiredCapability))
         {
             return EndpointCommandDecision.Deny(ErrorCode.UnsupportedEndpointCommand);
