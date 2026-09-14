@@ -155,6 +155,116 @@ public sealed class EndpointTransportFactoryTests
             () => transport.BuildWebSocketUri("https://other.example.test/logs"));
     }
 
+    [TestMethod]
+    public async Task OptionsResolverLoadsSecretAndCustomCaWithoutConnecting()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointSecretStore secretStore = new(paths);
+        EndpointCertificateStore certificateStore = new(paths);
+        EndpointTransportOptionsResolver resolver = new(secretStore, certificateStore);
+        using X509Certificate2 ca = CreateCaCertificate("ClashTray Resolver CA");
+        EndpointDescriptor descriptor = EndpointUriNormalizer.CreateRemoteDescriptor(
+                new EndpointId("private"),
+                "Private",
+                new Uri("https://controller.example.test"))
+            with { Security = EndpointTransportSecurity.HttpsCustomCertificate };
+
+        try
+        {
+            await secretStore.SetAsync("private-secret", "controller-secret");
+            await certificateStore.SetAsync(
+                "private-ca",
+                ca.Export(X509ContentType.Cert));
+            EndpointRecord record = new(
+                descriptor,
+                SecretReference: "private-secret",
+                CertificateReference: "private-ca");
+
+            using EndpointTransportOptionsLease lease = await resolver.ResolveAsync(record);
+
+            Assert.AreEqual("controller-secret", lease.Options.Secret);
+            Assert.IsNotNull(lease.Options.CustomCaCertificate);
+            Assert.AreEqual(ca.Thumbprint, lease.Options.CustomCaCertificate!.Thumbprint);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task OptionsResolverUsesSystemTrustWithoutLoadingACustomCa()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointSecretStore secretStore = new(paths);
+        EndpointCertificateStore certificateStore = new(paths);
+        EndpointTransportOptionsResolver resolver = new(secretStore, certificateStore);
+        EndpointDescriptor descriptor = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("public"),
+            "Public",
+            new Uri("https://controller.example.test"));
+
+        try
+        {
+            await secretStore.SetAsync("public-secret", "controller-secret");
+            EndpointTransportOptionsLease lease = await resolver.ResolveAsync(new EndpointRecord(
+                descriptor,
+                SecretReference: "public-secret"));
+            using (lease)
+            {
+                Assert.AreEqual("controller-secret", lease.Options.Secret);
+                Assert.IsNull(lease.Options.CustomCaCertificate);
+            }
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task OptionsResolverRejectsUnacknowledgedExplicitHttp()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointTransportOptionsResolver resolver = new(
+            new EndpointSecretStore(paths),
+            new EndpointCertificateStore(paths));
+        EndpointDescriptor descriptor = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("lab"),
+            "Lab",
+            new Uri("http://controller.example.test"),
+            allowExplicitHttp: true);
+
+        try
+        {
+            EndpointSessionConnectException exception = await Assert.ThrowsExactlyAsync<EndpointSessionConnectException>(
+                () => resolver.ResolveAsync(new EndpointRecord(descriptor)));
+
+            Assert.AreEqual(EndpointSessionState.Failed, exception.FailureState);
+            StringAssert.Contains(exception.Message, "明文", StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static string CreateRoot() => Path.Combine(
+        Path.GetTempPath(),
+        "ClashTrayTests",
+        Guid.NewGuid().ToString("N"));
+
+    private static void DeleteRoot(string root)
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static X509Certificate2 CreateCaCertificate(string commonName)
         => CreateCertificateAuthority(
             commonName,
