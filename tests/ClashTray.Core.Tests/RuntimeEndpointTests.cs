@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core.Tests;
@@ -183,28 +185,34 @@ public sealed class RuntimeEndpointTests
         {
             await runtime.SaveRemoteEndpointAsync(new EndpointRecord(remote));
             List<EndpointSessionState> publishedStates = [];
+            TaskCompletionSource<AppSnapshot> refreshed = new(
+                TaskCreationOptions.RunContinuationsAsynchronously);
             runtime.AppSnapshotChanged += (_, snapshot) =>
             {
                 if (snapshot.ActiveController.Endpoint.Id == remote.Id)
                 {
                     publishedStates.Add(snapshot.ActiveController.State);
+                    if (snapshot.ActiveController.Status?.Mode == ProxyMode.Global)
+                    {
+                        refreshed.TrySetResult(snapshot);
+                    }
                 }
             };
 
             EndpointSession? session = await runtime.SelectEndpointAsync(remote.Id);
+            AppSnapshot remoteSnapshot = await refreshed.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             Assert.IsNotNull(session);
             Assert.AreEqual(CoreState.Missing, runtime.AppSnapshot.LocalDevice.CoreState);
             Assert.AreEqual(remote.Id, runtime.AppSnapshot.ActiveController.Endpoint.Id);
             Assert.AreEqual(EndpointSessionState.Connected, runtime.AppSnapshot.ActiveController.State);
             Assert.AreEqual(EndpointCapabilityDefaults.Remote, runtime.AppSnapshot.ActiveController.Capabilities);
-            CollectionAssert.AreEqual(
-                new[]
-                {
-                    EndpointSessionState.Connecting,
-                    EndpointSessionState.Connected
-                },
-                publishedStates);
+            Assert.AreEqual(ProxyMode.Global, remoteSnapshot.ActiveController.Status?.Mode);
+            Assert.AreEqual(11, remoteSnapshot.ActiveController.Status?.UploadBytes);
+            Assert.AreEqual(22, remoteSnapshot.ActiveController.Status?.MemoryBytes);
+            Assert.AreEqual(1, remoteSnapshot.ActiveController.ProxyGroups.Count);
+            CollectionAssert.Contains(publishedStates, EndpointSessionState.Connecting);
+            CollectionAssert.Contains(publishedStates, EndpointSessionState.Connected);
 
             await runtime.UpdateRemoteEndpointAsync(
                 remote.Id,
@@ -253,12 +261,56 @@ public sealed class RuntimeEndpointTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            EndpointTransport transport = EndpointTransportFactory.Create(endpoint);
+            HttpClient client = new(new SnapshotHandler(), disposeHandler: true)
+            {
+                BaseAddress = endpoint.BaseUri
+            };
+            Uri webSocketUri = new UriBuilder(endpoint.BaseUri)
+            {
+                Scheme = endpoint.BaseUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+                    ? "wss"
+                    : "ws"
+            }.Uri;
+            EndpointTransport transport = new(
+                endpoint,
+                endpoint.BaseUri,
+                webSocketUri,
+                client,
+                authorizationValue: null,
+                customCaCertificate: null,
+                bypassesSystemProxy: true);
             return Task.FromResult(new EndpointSession(
                 transport,
                 EndpointCapabilityDefaults.Remote,
                 generation,
                 selectionRevision));
+        }
+
+        private sealed class SnapshotHandler : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string body = request.RequestUri?.AbsolutePath switch
+                {
+                    "/configs" => """{"mode":"global","tun":{"enable":false}}""",
+                    "/proxies" => """{"proxies":{"Auto":{"type":"Selector","now":"node","all":["node"]},"node":{"type":"Direct"}}}""",
+                    "/traffic" => """{"upTotal":11,"downTotal":12,"up":1,"down":2}""",
+                    "/memory" => """{"inuse":22}""",
+                    "/connections" => """{"connections":[]}""",
+                    "/rules" => """{"rules":[]}""",
+                    "/providers/proxies" => """{"providers":{}}""",
+                    "/providers/rules" => """{"providers":{}}""",
+                    "/logs" => "[]",
+                    _ => "{}"
+                };
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json")
+                });
+            }
         }
     }
 }

@@ -47,6 +47,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private IReadOnlyList<EndpointDescriptor> _remoteEndpointDescriptors = [];
     private EndpointStoreLoadStatus _endpointStoreStatus = EndpointStoreLoadStatus.FirstRun;
     private string? _endpointStoreMessage;
+    private readonly object _remoteRefreshGate = new();
+    private readonly SemaphoreSlim _remoteRefreshLifecycleLock = new(1, 1);
+    private CancellationTokenSource? _remoteRefreshCts;
+    private Task? _remoteRefreshTask;
+    private RemoteControllerData? _remoteControllerData;
     private bool _usingServiceCore;
     private bool _coreHealthConfirmed;
     private readonly object _proxyRecoveryGate = new();
@@ -58,6 +63,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         bool Succeeded,
         IReadOnlyList<ProxyGroup> Groups,
         IReadOnlyList<ProxyNode> Nodes);
+
+    private sealed record RemoteControllerData(
+        long Generation,
+        long SelectionRevision,
+        MihomoControllerSnapshotData Snapshot);
 
     private readonly record struct TrafficDataResult(bool Succeeded, TrafficSnapshot? Value);
 
@@ -2164,6 +2174,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _endpointSessions.StatusChanged -= OnEndpointSessionStatusChanged;
+        await StopRemoteRefreshAsync();
         await _endpointSessions.DisposeAsync();
         _networkSwitchRuntimeController.StatusChanged -= OnNetworkSwitchStatusChanged;
         await _networkSwitchRuntimeController.DisposeAsync();
@@ -2235,6 +2246,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _httpClient.Dispose();
         _subscriptionOperationLock.Dispose();
         _dataRefreshLock.Dispose();
+        _remoteRefreshLifecycleLock.Dispose();
         await _configurationSwitchCoordinator.DisposeAsync();
         _operationLock.Dispose();
         _runtimeCts.Dispose();
@@ -2672,7 +2684,228 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         object? sender,
         EndpointSessionStatusEventArgs status)
     {
+        CancellationTokenSource? previousRefresh;
+        lock (_remoteRefreshGate)
+        {
+            previousRefresh = _remoteRefreshCts;
+            _remoteRefreshCts = null;
+            _remoteControllerData = null;
+        }
+
+        if (previousRefresh is not null)
+        {
+            _ = CancelRemoteRefreshAsync(previousRefresh);
+        }
         PublishAppSnapshot();
+        _ = RestartRemoteRefreshAsync(status);
+    }
+
+    private async Task CancelRemoteRefreshAsync(CancellationTokenSource refreshCts)
+    {
+        try
+        {
+            await refreshCts.CancelAsync().ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (Exception exception)
+        {
+            LogControllerFailure("远程 Controller 刷新取消", "/configs 或 /proxies", exception, 0);
+        }
+    }
+
+    private async Task RestartRemoteRefreshAsync(EndpointSessionStatusEventArgs requestedStatus)
+    {
+        try
+        {
+            await _remoteRefreshLifecycleLock.WaitAsync(_runtimeCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_runtimeCts.IsCancellationRequested)
+        {
+            return;
+        }
+
+        try
+        {
+            CancellationTokenSource? previousRefresh;
+            Task? previousTask;
+            lock (_remoteRefreshGate)
+            {
+                previousRefresh = _remoteRefreshCts;
+                previousTask = _remoteRefreshTask;
+                _remoteRefreshCts = null;
+                _remoteRefreshTask = null;
+            }
+
+            if (previousRefresh is not null)
+            {
+                await previousRefresh.CancelAsync().ConfigureAwait(false);
+            }
+            if (previousTask is not null)
+            {
+                try
+                {
+                    await previousTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception exception)
+                {
+                    LogControllerFailure("远程 Controller 刷新", "/configs 或 /proxies", exception, 0);
+                }
+            }
+
+            previousRefresh?.Dispose();
+            if (requestedStatus.State != EndpointSessionState.Connected)
+            {
+                return;
+            }
+
+            EndpointSession? session = _endpointSessions.Current;
+            EndpointSessionStatusEventArgs currentStatus = _endpointSessions.Status;
+            if (session is null
+                || currentStatus.Endpoint.Id != requestedStatus.Endpoint.Id
+                || currentStatus.Generation != requestedStatus.Generation
+                || currentStatus.SelectionRevision != requestedStatus.SelectionRevision
+                || currentStatus.State != EndpointSessionState.Connected)
+            {
+                return;
+            }
+
+            MihomoControllerSnapshotData? previousData = null;
+            lock (_remoteRefreshGate)
+            {
+                if (_remoteControllerData is { } currentData
+                    && currentData.Generation == requestedStatus.Generation
+                    && currentData.SelectionRevision == requestedStatus.SelectionRevision)
+                {
+                    previousData = currentData.Snapshot;
+                }
+            }
+
+            CancellationTokenSource refreshCts = CancellationTokenSource.CreateLinkedTokenSource(
+                _runtimeCts.Token);
+            Task refreshTask = RefreshRemoteControllerAsync(
+                session,
+                requestedStatus,
+                refreshCts,
+                previousData);
+            lock (_remoteRefreshGate)
+            {
+                _remoteRefreshCts = refreshCts;
+                _remoteRefreshTask = refreshTask;
+            }
+        }
+        finally
+        {
+            _remoteRefreshLifecycleLock.Release();
+        }
+    }
+
+    private async Task RefreshRemoteControllerAsync(
+        EndpointSession session,
+        EndpointSessionStatusEventArgs status,
+        CancellationTokenSource refreshCts,
+        MihomoControllerSnapshotData? previousData)
+    {
+        try
+        {
+            MihomoControllerSnapshotData snapshot = await MihomoControllerSnapshotReader.ReadAsync(
+                    session.Api,
+                    session.Handshake.Version,
+                    $"mihomo/{status.Endpoint.DisplayName}",
+                    previousData,
+                    refreshCts.Token)
+                .ConfigureAwait(false);
+
+            if (!IsCurrentRemoteSession(session, status))
+            {
+                return;
+            }
+
+            lock (_remoteRefreshGate)
+            {
+                _remoteControllerData = new RemoteControllerData(
+                    status.Generation,
+                    status.SelectionRevision,
+                    snapshot);
+            }
+
+            PublishAppSnapshot();
+        }
+        catch (OperationCanceledException) when (refreshCts.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            if (IsCurrentRemoteSession(session, status))
+            {
+                LogControllerFailure("远程 Controller 刷新", "/configs 或 /proxies", exception, 0);
+                PublishAppSnapshot();
+            }
+        }
+    }
+
+    private bool IsCurrentRemoteSession(
+        EndpointSession session,
+        EndpointSessionStatusEventArgs status)
+    {
+        EndpointSession? current = _endpointSessions.Current;
+        EndpointSessionStatusEventArgs currentStatus = _endpointSessions.Status;
+        return ReferenceEquals(current, session)
+            && current.Generation == status.Generation
+            && current.SelectionRevision == status.SelectionRevision
+            && currentStatus.Endpoint.Id == status.Endpoint.Id
+            && currentStatus.Generation == status.Generation
+            && currentStatus.SelectionRevision == status.SelectionRevision
+            && currentStatus.State == EndpointSessionState.Connected;
+    }
+
+    private async Task StopRemoteRefreshAsync()
+    {
+        await _remoteRefreshLifecycleLock.WaitAsync(CancellationToken.None)
+            .ConfigureAwait(false);
+        try
+        {
+            CancellationTokenSource? refreshCts;
+            Task? refreshTask;
+            lock (_remoteRefreshGate)
+            {
+                refreshCts = _remoteRefreshCts;
+                refreshTask = _remoteRefreshTask;
+                _remoteRefreshCts = null;
+                _remoteRefreshTask = null;
+                _remoteControllerData = null;
+            }
+
+            if (refreshCts is not null)
+            {
+                await refreshCts.CancelAsync().ConfigureAwait(false);
+            }
+            if (refreshTask is not null)
+            {
+                try
+                {
+                    await refreshTask.ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception exception)
+                {
+                    LogControllerFailure("远程 Controller 刷新", "/configs 或 /proxies", exception, 0);
+                }
+            }
+
+            refreshCts?.Dispose();
+        }
+        finally
+        {
+            _remoteRefreshLifecycleLock.Release();
+        }
     }
 
     private void SetController(MihomoApiClient? api)
