@@ -175,7 +175,8 @@ public sealed class RuntimeEndpointTests
             null,
             null,
             null,
-            connector);
+            connector,
+            (_, cancellationToken) => Task.Delay(TimeSpan.FromMilliseconds(20), cancellationToken));
         EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
             new EndpointId("office"),
             "Office",
@@ -214,6 +215,19 @@ public sealed class RuntimeEndpointTests
             CollectionAssert.Contains(publishedStates, EndpointSessionState.Connecting);
             CollectionAssert.Contains(publishedStates, EndpointSessionState.Connected);
 
+            TaskCompletionSource<AppSnapshot> republished = new(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            runtime.AppSnapshotChanged += (_, snapshot) =>
+            {
+                if (snapshot.ActiveController.Status?.UploadBytes == 21)
+                {
+                    republished.TrySetResult(snapshot);
+                }
+            };
+            connector.SetTraffic(21, 22);
+            AppSnapshot updatedSnapshot = await republished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.AreEqual(21, updatedSnapshot.ActiveController.Status?.UploadBytes);
+
             await runtime.UpdateRemoteEndpointAsync(
                 remote.Id,
                 remote with
@@ -250,6 +264,8 @@ public sealed class RuntimeEndpointTests
 
     private sealed class StaticConnector : IEndpointSessionConnector
     {
+        private SnapshotHandler? _handler;
+
         [System.Diagnostics.CodeAnalysis.SuppressMessage(
             "Reliability",
             "CA2000:Dispose objects before losing scope",
@@ -261,7 +277,9 @@ public sealed class RuntimeEndpointTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            HttpClient client = new(new SnapshotHandler(), disposeHandler: true)
+            SnapshotHandler handler = new();
+            Volatile.Write(ref _handler, handler);
+            HttpClient client = new(handler, disposeHandler: true)
             {
                 BaseAddress = endpoint.BaseUri
             };
@@ -286,18 +304,34 @@ public sealed class RuntimeEndpointTests
                 selectionRevision));
         }
 
+        public void SetTraffic(long uploadBytes, long downloadBytes)
+        {
+            Volatile.Read(ref _handler)?.SetTraffic(uploadBytes, downloadBytes);
+        }
+
         private sealed class SnapshotHandler : HttpMessageHandler
         {
+            private long _uploadBytes = 11;
+            private long _downloadBytes = 12;
+
+            public void SetTraffic(long uploadBytes, long downloadBytes)
+            {
+                Interlocked.Exchange(ref _uploadBytes, uploadBytes);
+                Interlocked.Exchange(ref _downloadBytes, downloadBytes);
+            }
+
             protected override Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request,
                 CancellationToken cancellationToken)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                long uploadBytes = Interlocked.Read(ref _uploadBytes);
+                long downloadBytes = Interlocked.Read(ref _downloadBytes);
                 string body = request.RequestUri?.AbsolutePath switch
                 {
                     "/configs" => """{"mode":"global","tun":{"enable":false}}""",
                     "/proxies" => """{"proxies":{"Auto":{"type":"Selector","now":"node","all":["node"]},"node":{"type":"Direct"}}}""",
-                    "/traffic" => """{"upTotal":11,"downTotal":12,"up":1,"down":2}"""
+                    "/traffic" => $$"""{"upTotal":{{uploadBytes}},"downTotal":{{downloadBytes}},"up":1,"down":2}"""
                         + "\n",
                     "/memory" => """{"inuse":22}"""
                         + "\n",

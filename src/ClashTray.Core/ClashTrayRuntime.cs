@@ -53,12 +53,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private Task? _remoteRefreshTask;
     private RemoteControllerData? _remoteControllerData;
     private RemoteRefreshCompletion? _remoteRefreshCompletion;
+    private readonly Func<TimeSpan, CancellationToken, Task> _remoteRefreshDelayAsync;
     private bool _usingServiceCore;
     private bool _coreHealthConfirmed;
     private readonly object _proxyRecoveryGate = new();
     private Task? _proxyRecoveryTask;
 
     private const int MaxLogMessageBytes = 1024 * 1024;
+    private static readonly TimeSpan RemoteRefreshInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RemoteRefreshRetryDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan RemoteRefreshMaxRetryDelay = TimeSpan.FromSeconds(30);
 
     private sealed record ProxyDataResult(
         bool Succeeded,
@@ -101,7 +105,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         ISystemProxyController? systemProxy = null,
         IConfigurationCandidateValidator? candidateValidator = null,
         INetworkContextSource? networkContextSource = null,
-        IEndpointSessionConnector? endpointSessionConnector = null)
+        IEndpointSessionConnector? endpointSessionConnector = null,
+        Func<TimeSpan, CancellationToken, Task>? remoteRefreshDelayAsync = null)
     {
         bool useDefaultEnvironment = paths is null;
         _paths = paths ?? new AppPaths();
@@ -163,6 +168,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             () => _settings,
             OnScheduledSubscriptionRefreshFailed,
             OnScheduledSubscriptionCycleFailed);
+        _remoteRefreshDelayAsync = remoteRefreshDelayAsync ?? Task.Delay;
         _throttledPublisher = new SnapshotPublishThrottle(Publish, _runtimeCts.Token);
         _processManager.StateChanged += OnProcessStateChanged;
         _processManager.LogLineReceived += OnProcessLogLine;
@@ -2862,34 +2868,82 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationTokenSource refreshCts,
         MihomoControllerSnapshotData? previousData)
     {
+        bool initialRefreshPending = true;
+        TimeSpan retryDelay = RemoteRefreshRetryDelay;
         try
         {
-            MihomoControllerSnapshotData snapshot = await MihomoControllerSnapshotReader.ReadAsync(
-                    session.Api,
-                    session.Handshake.Version,
-                    $"mihomo/{status.Endpoint.DisplayName}",
-                    previousData,
-                    refreshCts.Token)
-                .ConfigureAwait(false);
-
-            if (!IsCurrentRemoteSession(session, status))
+            while (true)
             {
-                return;
-            }
+                refreshCts.Token.ThrowIfCancellationRequested();
+                try
+                {
+                    MihomoControllerSnapshotData snapshot = await MihomoControllerSnapshotReader.ReadAsync(
+                            session.Api,
+                            session.Handshake.Version,
+                            $"mihomo/{status.Endpoint.DisplayName}",
+                            previousData,
+                            refreshCts.Token)
+                        .ConfigureAwait(false);
 
-            lock (_remoteRefreshGate)
-            {
-                _remoteControllerData = new RemoteControllerData(
-                    status.Generation,
-                    status.SelectionRevision,
-                    snapshot);
-                CompleteRemoteRefreshUnsafe(
-                    status.Generation,
-                    status.SelectionRevision,
-                    succeeded: true);
-            }
+                    if (!IsCurrentRemoteSession(session, status))
+                    {
+                        return;
+                    }
 
-            PublishAppSnapshot();
+                    lock (_remoteRefreshGate)
+                    {
+                        _remoteControllerData = new RemoteControllerData(
+                            status.Generation,
+                            status.SelectionRevision,
+                            snapshot);
+                        if (initialRefreshPending)
+                        {
+                            CompleteRemoteRefreshUnsafe(
+                                status.Generation,
+                                status.SelectionRevision,
+                                succeeded: true);
+                            initialRefreshPending = false;
+                        }
+                    }
+
+                    previousData = snapshot;
+                    retryDelay = RemoteRefreshRetryDelay;
+                    PublishAppSnapshot();
+                    await _remoteRefreshDelayAsync(RemoteRefreshInterval, refreshCts.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (refreshCts.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    if (!IsCurrentRemoteSession(session, status))
+                    {
+                        return;
+                    }
+
+                    lock (_remoteRefreshGate)
+                    {
+                        if (initialRefreshPending)
+                        {
+                            CompleteRemoteRefreshUnsafe(
+                                status.Generation,
+                                status.SelectionRevision,
+                                succeeded: false);
+                            initialRefreshPending = false;
+                        }
+                    }
+
+                    LogControllerFailure("远程 Controller 刷新", "/configs 或 /proxies", exception, 0);
+                    PublishAppSnapshot();
+                    await _remoteRefreshDelayAsync(retryDelay, refreshCts.Token)
+                        .ConfigureAwait(false);
+                    retryDelay = TimeSpan.FromTicks(Math.Min(
+                        RemoteRefreshMaxRetryDelay.Ticks,
+                        retryDelay.Ticks * 2));
+                }
+            }
         }
         catch (OperationCanceledException) when (refreshCts.IsCancellationRequested)
         {
