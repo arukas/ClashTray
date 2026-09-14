@@ -90,6 +90,84 @@ public sealed class RuntimeSnapshotAdapterTests
         Assert.AreEqual("core failed", projected.LocalDevice.ErrorMessage);
     }
 
+    [TestMethod]
+    public void ProjectionIncludesOnlyValidatedRemoteEndpointSummaries()
+    {
+        RuntimeSnapshot snapshot = CreateSnapshot(
+            new CoreStatus(
+                CoreState.Stopped,
+                null,
+                null,
+                ProxyMode.Direct,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                null),
+            []);
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("HTTPS://Office.Example.Test:443"));
+
+        AppSnapshot projected = RuntimeSnapshotAdapter.ToAppSnapshot(
+            snapshot,
+            new AppSettings(),
+            endpoints: [
+                remote,
+                new EndpointDescriptor(
+                    EndpointId.Local,
+                    EndpointKind.Local,
+                    "stale local",
+                    new Uri("http://127.0.0.1:1/"),
+                    EndpointTransportSecurity.Loopback)]);
+
+        Assert.AreEqual(2, projected.Endpoints.Count);
+        Assert.AreEqual(EndpointId.Local, projected.Endpoints[0].Id);
+        Assert.AreEqual("http://127.0.0.1:9090/", projected.Endpoints[0].BaseUri.AbsoluteUri);
+        Assert.AreEqual(new EndpointId("office"), projected.Endpoints[1].Id);
+        Assert.AreEqual("https://office.example.test/", projected.Endpoints[1].BaseUri.AbsoluteUri);
+    }
+
+    [TestMethod]
+    public void ProjectionRejectsDuplicateOrNonRemoteEndpointSummaries()
+    {
+        RuntimeSnapshot snapshot = CreateSnapshot(
+            new CoreStatus(
+                CoreState.Stopped,
+                null,
+                null,
+                ProxyMode.Direct,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                null),
+            []);
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("https://office.example.test"));
+
+        Assert.ThrowsExactly<ArgumentException>(() => RuntimeSnapshotAdapter.ToAppSnapshot(
+            snapshot,
+            new AppSettings(),
+            endpoints: [remote, remote]));
+        Assert.ThrowsExactly<ArgumentException>(() => RuntimeSnapshotAdapter.ToAppSnapshot(
+            snapshot,
+            new AppSettings(),
+            endpoints: [new EndpointDescriptor(
+                new EndpointId("invalid"),
+                EndpointKind.Local,
+                "invalid",
+                new Uri("http://127.0.0.1:9090/"),
+                EndpointTransportSecurity.Loopback)]));
+    }
+
     private static RuntimeSnapshot CreateSnapshot(
         CoreStatus core,
         IReadOnlyList<ConfigurationProfile> configurations) =>
