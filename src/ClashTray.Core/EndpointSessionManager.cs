@@ -579,40 +579,10 @@ public sealed class EndpointSessionManager : IAsyncDisposable
     }
 
     private static void ValidateLocalEndpoint(EndpointDescriptor endpoint)
-    {
-        if (endpoint.Kind != EndpointKind.Local
-            || endpoint.Security != EndpointTransportSecurity.Loopback
-            || !endpoint.BaseUri.IsLoopback)
-        {
-            throw new ArgumentException(
-                "The session manager local endpoint must use loopback transport.",
-                nameof(endpoint));
-        }
-    }
+        => EndpointDescriptorValidator.ValidateForActiveSession(endpoint);
 
     private static void ValidateTargetEndpoint(EndpointDescriptor endpoint)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(endpoint.Id.Value);
-        ArgumentException.ThrowIfNullOrWhiteSpace(endpoint.DisplayName);
-        if (!endpoint.IsEnabled)
-        {
-            throw new ArgumentException("Disabled endpoints cannot be selected.", nameof(endpoint));
-        }
-
-        if (endpoint.Kind == EndpointKind.Local)
-        {
-            if (endpoint.Security != EndpointTransportSecurity.Loopback || !endpoint.BaseUri.IsLoopback)
-            {
-                throw new ArgumentException("Local endpoints must use loopback transport.", nameof(endpoint));
-            }
-
-            return;
-        }
-
-        _ = EndpointUriNormalizer.NormalizeBaseUri(
-            endpoint.BaseUri,
-            endpoint.Security == EndpointTransportSecurity.HttpExplicitlyConfirmed);
-    }
+        => EndpointDescriptorValidator.ValidateForActiveSession(endpoint);
 
     private void ThrowIfDisposed()
     {

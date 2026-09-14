@@ -119,6 +119,7 @@ public static class EndpointTransportFactory
             throw new ArgumentException("Endpoint transport factory accepts remote endpoints only.", nameof(endpoint));
         }
 
+        EndpointDescriptorValidator.ValidateForActiveSession(endpoint);
         Uri baseUri = EndpointUriNormalizer.NormalizeBaseUri(
             endpoint.BaseUri,
             endpoint.Security == EndpointTransportSecurity.HttpExplicitlyConfirmed);

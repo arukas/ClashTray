@@ -73,31 +73,7 @@ internal sealed class MihomoControllerSessionRegistry
     }
 
     private static void ValidateEndpoint(EndpointDescriptor endpoint)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(endpoint.Id.Value);
-        ArgumentException.ThrowIfNullOrWhiteSpace(endpoint.DisplayName);
-        if (!endpoint.IsEnabled)
-        {
-            throw new ArgumentException("Disabled endpoints cannot become the active controller session.", nameof(endpoint));
-        }
-
-        ArgumentNullException.ThrowIfNull(endpoint.BaseUri);
-        if (!endpoint.BaseUri.IsAbsoluteUri
-            || endpoint.BaseUri.Scheme is not ("http" or "https")
-            || !string.IsNullOrEmpty(endpoint.BaseUri.UserInfo)
-            || !string.IsNullOrEmpty(endpoint.BaseUri.Query)
-            || !string.IsNullOrEmpty(endpoint.BaseUri.Fragment))
-        {
-            throw new ArgumentException("Controller endpoint must be an absolute HTTP(S) base URI without embedded credentials.", nameof(endpoint));
-        }
-
-        if (endpoint.Kind == EndpointKind.Local
-            && (endpoint.Security != EndpointTransportSecurity.Loopback
-                || !endpoint.BaseUri.IsLoopback))
-        {
-            throw new ArgumentException("Local controller sessions must use a loopback URI and transport security.", nameof(endpoint));
-        }
-    }
+        => EndpointDescriptorValidator.ValidateForActiveSession(endpoint);
 }
 
 internal static class ControllerEndpointFactory
