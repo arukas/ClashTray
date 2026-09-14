@@ -147,7 +147,8 @@ public sealed record RuntimeSnapshot(
     IReadOnlyList<ProviderStatus> Providers,
     IReadOnlyList<ProviderStatus> RuleProviders,
     IReadOnlyList<LogEntry> Logs,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    NetworkSwitchStatus? NetworkSwitch = null);
 
 public sealed record AppSettings(
     string? ActiveConfigurationId = null,

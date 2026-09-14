@@ -16,8 +16,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly SnapshotPublishThrottle _throttledPublisher;
     private readonly AppPaths _paths;
     private readonly ConfigurationStore _configurationStore;
+    private readonly NetworkRuleStore _networkRuleStore;
     private readonly ConfigurationSwitchJournalStore _configurationSwitchJournalStore;
     private readonly ConfigurationSwitchCoordinator _configurationSwitchCoordinator;
+    private readonly NetworkSwitchRuntimeController _networkSwitchRuntimeController;
     private readonly RuntimeConfigurationSwitchOperations _configurationSwitchOperations;
     private readonly MihomoControllerSessionRegistry _controllerSessions = new();
     private readonly ISettingsStore _settingsStore;
@@ -60,13 +62,19 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
     }
 
+    public ClashTrayRuntime(AppPaths? paths, INetworkContextSource? networkContextSource)
+        : this(paths, null, null, null, null, null, networkContextSource)
+    {
+    }
+
     internal ClashTrayRuntime(
         AppPaths? paths,
         IStartupRegistration? startupRegistration,
         IServicePipeClient? servicePipeClient,
         ISettingsStore? settingsStore,
         ISystemProxyController? systemProxy = null,
-        IConfigurationCandidateValidator? candidateValidator = null)
+        IConfigurationCandidateValidator? candidateValidator = null,
+        INetworkContextSource? networkContextSource = null)
     {
         bool useDefaultEnvironment = paths is null;
         _paths = paths ?? new AppPaths();
@@ -78,10 +86,17 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 _paths,
                 () => _settings,
                 () => _coreDiscovery.FindExecutable()));
+        _networkRuleStore = new NetworkRuleStore(_paths);
         _configurationSwitchJournalStore = new ConfigurationSwitchJournalStore(_paths);
         _configurationSwitchCoordinator = new ConfigurationSwitchCoordinator(
             _configurationSwitchJournalStore);
         _configurationSwitchOperations = new RuntimeConfigurationSwitchOperations(this);
+        _networkSwitchRuntimeController = new NetworkSwitchRuntimeController(
+            _networkRuleStore,
+            networkContextSource,
+            CreateNetworkSwitchPolicyInput,
+            (request, cancellation) => ExecuteConfigurationSwitchAsync(request, cancellation));
+        _networkSwitchRuntimeController.StatusChanged += OnNetworkSwitchStatusChanged;
         _settingsStore = settingsStore ?? new SettingsStore(_paths);
         _startupRegistration = startupRegistration
             ?? (useDefaultEnvironment ? new StartupManager() : new StartupManager(new InMemoryStartupRegistry()));
@@ -106,6 +121,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public RuntimeSnapshot Snapshot => _snapshot;
 
     public AppSettings Settings => _settings;
+
+    public NetworkSwitchRuleSet NetworkSwitchRules => _networkSwitchRuntimeController.Rules;
+
+    public NetworkSwitchStatus NetworkSwitchStatus => _networkSwitchRuntimeController.Status;
 
     public bool DashboardAvailable => File.Exists(_paths.ExternalUiEntryPoint);
 
@@ -329,6 +348,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             await StartCoreAsync(cancellationToken);
         }
+
+        await _networkSwitchRuntimeController.InitializeAsync(cancellationToken);
 
         if (settingsLoad.Status is SettingsLoadStatus.Recovered
             or SettingsLoadStatus.ReadFailed
@@ -859,10 +880,29 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public Task SetActiveConfigurationAsync(string id, CancellationToken cancellationToken = default) =>
-        ExecuteConfigurationSwitchAsync(
+    public async Task SetActiveConfigurationAsync(string id, CancellationToken cancellationToken = default)
+    {
+        await ExecuteConfigurationSwitchAsync(
             ConfigurationSwitchRequest.Create(ConfigurationSwitchSource.Manual, id),
             cancellationToken);
+        if (_networkSwitchRuntimeController.IsInitialized)
+        {
+            _networkSwitchRuntimeController.SetManualOverrideForCurrentNetwork(id);
+        }
+    }
+
+    public Task UpdateNetworkSwitchRulesAsync(
+        NetworkSwitchRuleSet rules,
+        CancellationToken cancellationToken = default) =>
+        _networkSwitchRuntimeController.SetRulesAsync(rules, cancellationToken);
+
+    public void ClearNetworkSwitchManualOverride()
+    {
+        if (_networkSwitchRuntimeController.IsInitialized)
+        {
+            _networkSwitchRuntimeController.ClearManualOverride();
+        }
+    }
 
     private async Task<ConfigurationSwitchResult> ExecuteConfigurationSwitchAsync(
         ConfigurationSwitchRequest request,
@@ -1925,6 +1965,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        _networkSwitchRuntimeController.StatusChanged -= OnNetworkSwitchStatusChanged;
+        await _networkSwitchRuntimeController.DisposeAsync();
+
         if (_snapshot.Tun == TunState.On)
         {
             try
@@ -3087,6 +3130,25 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private ConfigurationProfile? GetActiveConfiguration() =>
         _snapshot.Configurations.FirstOrDefault(configuration => configuration.IsActive)
         ?? _snapshot.Configurations.FirstOrDefault(configuration => configuration.Id == _settings.ActiveConfigurationId);
+
+    private NetworkSwitchPolicyInput CreateNetworkSwitchPolicyInput(
+        NetworkContextSnapshot context,
+        NetworkSwitchRuleSet rules) =>
+        new(
+            rules.AutomaticSwitchingEnabled,
+            context,
+            rules.Rules,
+            rules.DefaultConfigurationId,
+            GetActiveConfiguration()?.Id,
+            _snapshot.Configurations
+                .Select(configuration => configuration.Id)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase));
+
+    private void OnNetworkSwitchStatusChanged(object? sender, NetworkSwitchStatus status)
+    {
+        _snapshot = _snapshot with { NetworkSwitch = status };
+        Publish();
+    }
 
     private string? FindCoreVersion()
     {

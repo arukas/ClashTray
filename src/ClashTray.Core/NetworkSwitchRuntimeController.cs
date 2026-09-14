@@ -71,6 +71,17 @@ public sealed class NetworkSwitchRuntimeController : IAsyncDisposable
         }
     }
 
+    public bool IsInitialized
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _initialized && !_disposed;
+            }
+        }
+    }
+
     [SuppressMessage(
         "Design",
         "CA1031:Do not catch general exception types",
