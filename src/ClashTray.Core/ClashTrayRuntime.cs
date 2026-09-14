@@ -508,6 +508,39 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    public async Task<EndpointHandshakeResult> TestRemoteEndpointAsync(
+        EndpointId endpointId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(endpointId.Value);
+        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (endpointId == EndpointId.Local)
+            {
+                throw new InvalidOperationException("只读连接测试仅适用于远程端点。");
+            }
+
+            EndpointDescriptor? endpoint = Endpoints.FirstOrDefault(candidate => candidate.Id == endpointId);
+            if (endpoint is null)
+            {
+                throw new KeyNotFoundException($"未找到端点 {endpointId.Value}。");
+            }
+
+            if (!endpoint.IsEnabled)
+            {
+                throw new InvalidOperationException($"端点 {endpoint.DisplayName} 已被禁用。");
+            }
+
+            return await _endpointSessions.TestAsync(endpoint, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
     public async Task DisconnectEndpointAsync()
     {
         await _operationLock.WaitAsync().ConfigureAwait(false);

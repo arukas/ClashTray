@@ -33,6 +33,36 @@ public sealed class EndpointSessionManagerTests
     }
 
     [TestMethod]
+    public async Task TestPerformsReadOnlyHandshakeWithoutReplacingCurrentSession()
+    {
+        EndpointDescriptor endpoint = CreateEndpoint("office");
+        RecordingConnector connector = new((target, generation, revision, _) =>
+            Task.FromResult(CreateSession(target, generation, revision)));
+        await using EndpointSessionManager manager = CreateManager(connector);
+        List<EndpointSessionState> states = [];
+        manager.StatusChanged += (_, status) => states.Add(status.State);
+
+        EndpointSession? current = await manager.SelectAsync(endpoint);
+        EndpointSessionStatusEventArgs before = manager.Status;
+
+        EndpointHandshakeResult handshake = await manager.TestAsync(endpoint);
+
+        Assert.IsNotNull(current);
+        Assert.AreEqual(EndpointSessionState.Connected, handshake.State);
+        Assert.AreSame(current, manager.Current);
+        Assert.AreEqual(before.Endpoint.Id, manager.Status.Endpoint.Id);
+        Assert.AreEqual(before.Generation, manager.Status.Generation);
+        Assert.AreEqual(before.SelectionRevision, manager.Status.SelectionRevision);
+        Assert.AreEqual(before.State, manager.Status.State);
+        CollectionAssert.AreEqual(
+            new[] { EndpointSessionState.Connecting, EndpointSessionState.Connected },
+            states);
+        Assert.AreEqual(2, connector.CallCount);
+        Assert.AreEqual(1, connector.Calls.First().Generation);
+        Assert.AreEqual(1, connector.Calls.Last().Generation);
+    }
+
+    [TestMethod]
     public async Task TransientFailuresUseBoundedBackoffBeforeConnecting()
     {
         EndpointDescriptor endpoint = CreateEndpoint("office");

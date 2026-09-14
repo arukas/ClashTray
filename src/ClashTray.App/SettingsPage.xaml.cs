@@ -20,6 +20,7 @@ public sealed partial class SettingsPage : UserControl
     private string _endpointSignature = string.Empty;
     private bool _updatingEndpointControls;
     private EndpointId? _editingEndpointId;
+    private EndpointId? _testingEndpointId;
     private readonly List<NetworkRuleEditorRow> _networkRuleRows = [];
 
     public SettingsPage(ClashTrayRuntime runtime)
@@ -209,6 +210,42 @@ public sealed partial class SettingsPage : UserControl
         }
     }
 
+    private async void TestEndpointButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button
+            {
+                Tag: EndpointDescriptor endpoint,
+            }
+            || endpoint.Kind != EndpointKind.Remote
+            || _testingEndpointId is not null)
+        {
+            return;
+        }
+
+        _testingEndpointId = endpoint.Id;
+        UpdateEndpointList(_runtime.Endpoints);
+        StatusText.Text = LocalizationService.Get("EndpointTesting");
+        try
+        {
+            EndpointHandshakeResult handshake = await _runtime.TestRemoteEndpointAsync(endpoint.Id);
+            string version = handshake.Version
+                ?? LocalizationService.Get("EndpointVersionUnknown");
+            StatusText.Text = LocalizationService.Format(
+                "EndpointTestSucceeded",
+                endpoint.DisplayName,
+                version);
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = ErrorSanitizer.Sanitize(exception);
+        }
+        finally
+        {
+            _testingEndpointId = null;
+            UpdateEndpointList(_runtime.Endpoints);
+        }
+    }
+
     private void EndpointTransportBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (EndpointHttpRiskCheckBox is null)
@@ -247,6 +284,8 @@ public sealed partial class SettingsPage : UserControl
         EndpointId activeEndpointId = _runtime.AppSnapshot.ActiveController.Endpoint.Id;
         string signature = activeEndpointId.Value
             + '\u001D'
+            + (_testingEndpointId?.Value ?? string.Empty)
+            + '\u001D'
             + string.Join(
                 '\u001F',
                 endpoints.Select(endpoint => $"{endpoint.Id.Value}\u001E{endpoint.DisplayName}\u001E{endpoint.BaseUri.AbsoluteUri}\u001E{endpoint.Security}\u001E{endpoint.IsEnabled}"));
@@ -281,8 +320,33 @@ public sealed partial class SettingsPage : UserControl
 
                 Grid content = new() { ColumnSpacing = 8 };
                 content.ColumnDefinitions.Add(new ColumnDefinition());
+                if (endpoint.Kind == EndpointKind.Remote)
+                {
+                    content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                }
+
                 content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 content.Children.Add(details);
+
+                int selectColumn = 1;
+                if (endpoint.Kind == EndpointKind.Remote)
+                {
+                    Button test = new()
+                    {
+                        Content = _testingEndpointId == endpoint.Id
+                            ? LocalizationService.Get("EndpointTesting")
+                            : LocalizationService.Get("EndpointTest"),
+                        Tag = endpoint,
+                        IsEnabled = _testingEndpointId is null,
+                        Padding = new Thickness(8, 4, 8, 4),
+                        MinWidth = 0,
+                        Style = (Style)Application.Current.Resources["ClashTrayCompactButtonStyle"]
+                    };
+                    test.Click += TestEndpointButton_Click;
+                    Grid.SetColumn(test, 1);
+                    content.Children.Add(test);
+                    selectColumn = 2;
+                }
 
                 Button select = new()
                 {
@@ -298,7 +362,7 @@ public sealed partial class SettingsPage : UserControl
                     Style = (Style)Application.Current.Resources["ClashTrayCompactButtonStyle"]
                 };
                 select.Click += SelectEndpointButton_Click;
-                Grid.SetColumn(select, 1);
+                Grid.SetColumn(select, selectColumn);
                 content.Children.Add(select);
 
                 EndpointListView.Items.Add(new ListViewItem

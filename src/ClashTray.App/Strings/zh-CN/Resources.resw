@@ -363,6 +363,10 @@
   <data name="EndpointRemoved" xml:space="preserve"><value>端点及不再使用的本地凭据已删除。</value></data>
   <data name="EndpointNotFound" xml:space="preserve"><value>端点已不存在。</value></data>
   <data name="EndpointSelectRemote" xml:space="preserve"><value>请选择一个远程端点。</value></data>
+  <data name="EndpointTest" xml:space="preserve"><value>测试</value></data>
+  <data name="EndpointTesting" xml:space="preserve"><value>测试中…</value></data>
+  <data name="EndpointTestSucceeded" xml:space="preserve"><value>只读握手成功：{0}（Mihomo {1}）。</value></data>
+  <data name="EndpointVersionUnknown" xml:space="preserve"><value>未知版本</value></data>
   <data name="EndpointConnect" xml:space="preserve"><value>连接</value></data>
   <data name="EndpointCurrent" xml:space="preserve"><value>当前</value></data>
   <data name="EndpointReturnLocal" xml:space="preserve"><value>切回本机</value></data>

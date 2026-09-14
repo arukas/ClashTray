@@ -38,6 +38,44 @@ public sealed class RuntimeEndpointTests
     }
 
     [TestMethod]
+    public async Task RuntimeTestsRemoteEndpointWithoutChangingActiveTarget()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        StaticConnector connector = new();
+        await using ClashTrayRuntime runtime = new(
+            paths,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            connector,
+            (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("https://office.example.test"));
+
+        try
+        {
+            await runtime.SaveRemoteEndpointAsync(new EndpointRecord(remote));
+
+            EndpointHandshakeResult result = await runtime.TestRemoteEndpointAsync(remote.Id);
+
+            Assert.AreEqual(EndpointSessionState.Connected, result.State);
+            Assert.AreEqual(EndpointId.Local, runtime.EndpointSessionStatus.Endpoint.Id);
+            Assert.AreEqual(EndpointSessionState.Disconnected, runtime.EndpointSessionStatus.State);
+            Assert.AreEqual(1, connector.CallCount);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
     public async Task RuntimeKeepsLocalEndpointWhenRemoteMetadataIsCorrupt()
     {
         string root = CreateRoot();
@@ -439,9 +477,12 @@ public sealed class RuntimeEndpointTests
     private sealed class StaticConnector : IEndpointSessionConnector
     {
         private SnapshotHandler? _handler;
+        private int _callCount;
 
         public TaskCompletionSource<bool> ConnectEntered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int CallCount => Volatile.Read(ref _callCount);
 
         public int ModePatchCount => Volatile.Read(ref _handler)?.ModePatchCount ?? 0;
 
@@ -481,6 +522,7 @@ public sealed class RuntimeEndpointTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref _callCount);
             ConnectEntered.TrySetResult(true);
             SnapshotHandler handler = new();
             Volatile.Write(ref _handler, handler);

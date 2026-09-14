@@ -363,6 +363,10 @@ Upload {4} B · Download {5} B</value></data>
   <data name="EndpointRemoved" xml:space="preserve"><value>The endpoint and unreferenced local credentials were removed.</value></data>
   <data name="EndpointNotFound" xml:space="preserve"><value>The endpoint no longer exists.</value></data>
   <data name="EndpointSelectRemote" xml:space="preserve"><value>Select a remote endpoint.</value></data>
+  <data name="EndpointTest" xml:space="preserve"><value>Test</value></data>
+  <data name="EndpointTesting" xml:space="preserve"><value>Testing…</value></data>
+  <data name="EndpointTestSucceeded" xml:space="preserve"><value>Read-only handshake succeeded: {0} (Mihomo {1}).</value></data>
+  <data name="EndpointVersionUnknown" xml:space="preserve"><value>Unknown version</value></data>
   <data name="EndpointConnect" xml:space="preserve"><value>Connect</value></data>
   <data name="EndpointCurrent" xml:space="preserve"><value>Current</value></data>
   <data name="EndpointReturnLocal" xml:space="preserve"><value>Use local</value></data>

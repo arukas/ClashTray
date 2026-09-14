@@ -120,6 +120,7 @@ public sealed class EndpointSessionManager : IAsyncDisposable
     private readonly EndpointDescriptor _localEndpoint;
     private EndpointSession? _current;
     private long _generation;
+    private long _probeGeneration;
     private bool _disposed;
     private SelectionOperation? _operation;
     private EndpointSessionStatusEventArgs _status;
@@ -180,6 +181,32 @@ public sealed class EndpointSessionManager : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(endpoint);
         ValidateTargetEndpoint(endpoint);
         return SelectCoreAsync(endpoint, cancellationToken);
+    }
+
+    public async Task<EndpointHandshakeResult> TestAsync(
+        EndpointDescriptor endpoint,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ValidateTargetEndpoint(endpoint);
+
+        long probeGeneration;
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            probeGeneration = Interlocked.Increment(ref _probeGeneration);
+        }
+
+        using CancellationTokenSource probeCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _lifetimeCancellation.Token,
+            cancellationToken);
+        await using EndpointSession session = await _connector.ConnectAsync(
+                endpoint,
+                probeGeneration,
+                selectionRevision: 1,
+                probeCancellation.Token)
+            .ConfigureAwait(false);
+        return session.Handshake;
     }
 
     public async Task DisconnectAsync()
