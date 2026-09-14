@@ -527,6 +527,45 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task ManualRefreshDoesNotRaceControllerMutation()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using RuntimeControllerHandler handler = new RuntimeControllerHandler
+        {
+            HoldFirstVersionRequest = true
+        };
+        using HttpClient httpClient = new HttpClient(handler);
+        MihomoApiClient api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            Task refresh = runtime.RefreshDataAsync();
+            await handler.FirstVersionRequestEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Task modeChange = runtime.SetModeAsync(ProxyMode.Direct);
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+
+            Assert.AreEqual(0, handler.ModePatchCount);
+            handler.ReleaseFirstVersionRequest();
+            await Task.WhenAll(refresh, modeChange);
+
+            Assert.AreEqual(1, handler.ModePatchCount);
+            Assert.AreEqual(ProxyMode.Direct, handler.Mode);
+            Assert.AreEqual(ProxyMode.Direct, runtime.Snapshot.Core.Mode);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public void MihomoDataParserPreservesZeroTrafficTotals()
     {
         using JsonDocument document = JsonDocument.Parse(
@@ -1292,11 +1331,25 @@ public sealed class RuntimeStateTests
 
         public bool FailMetrics { get; set; }
 
+        public bool HoldFirstVersionRequest { get; set; }
+
+        public TaskCompletionSource<bool> FirstVersionRequestEntered { get; } =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private TaskCompletionSource<bool> ReleaseFirstVersionRequestSource { get; } =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public bool AllowLan { get; private set; }
 
         public bool Ipv6 { get; private set; } = true;
 
         public int NetworkPatchCount { get; private set; }
+
+        public int ModePatchCount { get; private set; }
+
+        public ProxyMode Mode { get; private set; } = ProxyMode.Rule;
+
+        public void ReleaseFirstVersionRequest() => ReleaseFirstVersionRequestSource.TrySetResult(true);
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -1304,6 +1357,14 @@ public sealed class RuntimeStateTests
             if (path is not null)
             {
                 RequestedPaths.Enqueue(path);
+            }
+
+            if (HoldFirstVersionRequest
+                && path == "/version"
+                && !FirstVersionRequestEntered.Task.IsCompleted)
+            {
+                FirstVersionRequestEntered.TrySetResult(true);
+                await ReleaseFirstVersionRequestSource.Task.WaitAsync(cancellationToken);
             }
 
             if (FailMetrics && path is "/traffic" or "/memory")
@@ -1327,6 +1388,12 @@ public sealed class RuntimeStateTests
                     Ipv6 = ipv6.GetBoolean();
                 }
 
+                if (payload.RootElement.TryGetProperty("mode", out JsonElement mode))
+                {
+                    Mode = Enum.Parse<ProxyMode>(mode.GetString()!, ignoreCase: true);
+                    ModePatchCount++;
+                }
+
                 NetworkPatchCount++;
                 return new HttpResponseMessage(HttpStatusCode.NoContent)
                 {
@@ -1334,10 +1401,17 @@ public sealed class RuntimeStateTests
                 };
             }
 
+            string modeText = Mode switch
+            {
+                ProxyMode.Rule => "rule",
+                ProxyMode.Global => "global",
+                ProxyMode.Direct => "direct",
+                _ => "rule"
+            };
             string body = path switch
             {
                 "/version" => "{\"version\":\"v1.19.30\"}",
-                "/configs" => $"{{\"mode\":\"rule\",\"allow-lan\":{(AllowLan ? "true" : "false")},\"ipv6\":{(Ipv6 ? "true" : "false")},\"tun\":{{\"enable\":true}}}}",
+                "/configs" => $"{{\"mode\":\"{modeText}\",\"allow-lan\":{(AllowLan ? "true" : "false")},\"ipv6\":{(Ipv6 ? "true" : "false")},\"tun\":{{\"enable\":true}}}}",
                 "/proxies" => "{\"proxies\":{}}",
                 "/traffic" => "{\"upTotal\":11,\"downTotal\":12,\"up\":1,\"down\":2}\n",
                 "/memory" => "{\"inuse\":22}\n",
