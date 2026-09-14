@@ -4242,7 +4242,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _snapshot = _snapshot with
         {
             Core = _snapshot.Core with { ErrorMessage = coreError },
-            ErrorMessage = error
+            ErrorMessage = error,
+            Logs = _logBuffer.Snapshot()
         };
         SnapshotChanged?.Invoke(this, _snapshot);
         PublishAppSnapshot();
@@ -4258,7 +4259,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private void AddMihomoLog(LogEntry entry)
     {
         _logBuffer.Add(entry);
-        _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
         _throttledPublisher.Queue();
     }
 
