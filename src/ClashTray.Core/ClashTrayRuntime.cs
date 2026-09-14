@@ -1407,14 +1407,25 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         Publish();
     }
 
-    public async Task SetModeAsync(ProxyMode mode, CancellationToken cancellationToken = default)
+    public Task SetModeAsync(ProxyMode mode, CancellationToken cancellationToken = default) =>
+        SetModeCoreAsync(mode, routeToRemote: true, cancellationToken);
+
+    public Task SetLocalModeAsync(ProxyMode mode, CancellationToken cancellationToken = default) =>
+        SetModeCoreAsync(mode, routeToRemote: false, cancellationToken);
+
+    private async Task SetModeCoreAsync(
+        ProxyMode mode,
+        bool routeToRemote,
+        CancellationToken cancellationToken)
     {
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            EndpointSession? remoteSession = CaptureActiveRemoteSession(
-                EndpointCommand.SwitchMode,
-                "模式切换期间远程端点会话已切换，请重试。");
+            EndpointSession? remoteSession = routeToRemote
+                ? CaptureActiveRemoteSession(
+                    EndpointCommand.SwitchMode,
+                    "模式切换期间远程端点会话已切换，请重试。")
+                : null;
             if (remoteSession is not null)
             {
                 EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;

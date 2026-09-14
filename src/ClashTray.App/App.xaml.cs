@@ -281,20 +281,32 @@ public partial class App : Application, IAsyncDisposable
                 case 1005:
                     _ = ToggleTunAsync();
                     break;
-                case 1006:
-                    _ = SetModeAsync(ProxyMode.Rule);
+                 case 1006:
+                    _ = SetLocalModeFromTrayAsync(ProxyMode.Rule);
                     break;
-                case 1007:
-                    _ = SetModeAsync(ProxyMode.Global);
+                 case 1007:
+                    _ = SetLocalModeFromTrayAsync(ProxyMode.Global);
                     break;
-                case 1008:
-                    _ = SetModeAsync(ProxyMode.Direct);
+                 case 1008:
+                    _ = SetLocalModeFromTrayAsync(ProxyMode.Direct);
                     break;
                 case 1009:
                     RequestQuit();
                     break;
             }
         });
+    }
+
+    private async Task SetLocalModeFromTrayAsync(ProxyMode mode)
+    {
+        try
+        {
+            await _runtime.SetLocalModeAsync(mode);
+        }
+        catch (Exception exception)
+        {
+            _mainWindow?.ShowError(exception.Message);
+        }
     }
 
     private void OnActivationRequested()

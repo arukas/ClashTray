@@ -242,6 +242,9 @@ public sealed class RuntimeEndpointTests
             AppSnapshot modeSnapshot = await modeChanged.Task.WaitAsync(TimeSpan.FromSeconds(2));
             Assert.AreEqual(ProxyMode.Direct, modeSnapshot.ActiveController.Status?.Mode);
             Assert.AreEqual(1, connector.ModePatchCount);
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => runtime.SetLocalModeAsync(ProxyMode.Rule));
+            Assert.AreEqual(1, connector.ModePatchCount);
 
             TaskCompletionSource<AppSnapshot> proxyChanged = new(
                 TaskCreationOptions.RunContinuationsAsynchronously);
