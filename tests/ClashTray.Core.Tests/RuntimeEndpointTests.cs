@@ -85,6 +85,44 @@ public sealed class RuntimeEndpointTests
         }
     }
 
+    [TestMethod]
+    public async Task RuntimeUpdatesRemoteEndpointWithoutChangingItsIdentity()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        await using ClashTrayRuntime runtime = new(paths);
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("https://office.example.test"));
+
+        try
+        {
+            await runtime.SaveRemoteEndpointAsync(new EndpointRecord(remote));
+
+            EndpointCatalogLoadResult updated = await runtime.UpdateRemoteEndpointAsync(
+                remote.Id,
+                remote with
+                {
+                    DisplayName = "Office renamed",
+                    BaseUri = new Uri("https://new-office.example.test")
+                },
+                secret: null,
+                customCaCertificate: null,
+                insecureHttpAcknowledgedAtUtc: null);
+
+            Assert.AreEqual(EndpointStoreLoadStatus.Loaded, updated.RemoteStoreStatus);
+            Assert.AreEqual(2, runtime.Endpoints.Count);
+            Assert.AreEqual(new EndpointId("office"), runtime.Endpoints[1].Id);
+            Assert.AreEqual("Office renamed", runtime.Endpoints[1].DisplayName);
+            Assert.AreEqual("https://new-office.example.test/", runtime.Endpoints[1].BaseUri.AbsoluteUri);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static string CreateRoot() => Path.Combine(
         Path.GetTempPath(),
         "ClashTrayTests",

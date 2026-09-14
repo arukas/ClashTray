@@ -460,6 +460,34 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    public async Task<EndpointCatalogLoadResult> UpdateRemoteEndpointAsync(
+        EndpointId endpointId,
+        EndpointDescriptor descriptor,
+        string? secret,
+        ReadOnlyMemory<byte>? customCaCertificate,
+        DateTimeOffset? insecureHttpAcknowledgedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _endpointProvisioningCoordinator.UpdateAsync(
+                    endpointId,
+                    descriptor,
+                    secret,
+                    customCaCertificate,
+                    insecureHttpAcknowledgedAtUtc,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
     public async Task<EndpointRemovalResult> RemoveRemoteEndpointAsync(
         EndpointId endpointId,
         CancellationToken cancellationToken = default)
