@@ -24,6 +24,8 @@ public sealed class NetworkRuleStore
     private const int MaxRules = 128;
     private const int MaxSsidCharacters = 256;
     private const int MaxProtectedSsidCharacters = 4096;
+    private const int MaxRuleIdCharacters = 128;
+    private const int MaxConfigurationIdCharacters = 128;
     private readonly AppPaths _paths;
     private readonly JsonSerializerOptions _options = new(JsonSerializerDefaults.Web)
     {
@@ -168,9 +170,10 @@ public sealed class NetworkRuleStore
         }
 
         if (rules.DefaultConfigurationId is not null
-            && string.IsNullOrWhiteSpace(rules.DefaultConfigurationId))
+            && (string.IsNullOrWhiteSpace(rules.DefaultConfigurationId)
+                || rules.DefaultConfigurationId.Length > MaxConfigurationIdCharacters))
         {
-            throw new ArgumentException("默认配置 ID 不能为空白。", nameof(rules));
+            throw new ArgumentException("默认配置 ID 为空白或超过长度限制。", nameof(rules));
         }
 
         HashSet<string> ruleIds = new(StringComparer.OrdinalIgnoreCase);
@@ -181,9 +184,19 @@ public sealed class NetworkRuleStore
             ArgumentException.ThrowIfNullOrWhiteSpace(rule.RuleId);
             ArgumentException.ThrowIfNullOrWhiteSpace(rule.Ssid);
             ArgumentException.ThrowIfNullOrWhiteSpace(rule.ConfigurationId);
+            if (rule.RuleId.Length > MaxRuleIdCharacters)
+            {
+                throw new ArgumentException("规则 ID 超过长度限制。", nameof(rules));
+            }
+
             if (rule.Ssid.Length > MaxSsidCharacters)
             {
                 throw new ArgumentException("SSID 长度超过限制。", nameof(rules));
+            }
+
+            if (rule.ConfigurationId.Length > MaxConfigurationIdCharacters)
+            {
+                throw new ArgumentException("规则目标配置 ID 超过长度限制。", nameof(rules));
             }
 
             if (!ruleIds.Add(rule.RuleId))

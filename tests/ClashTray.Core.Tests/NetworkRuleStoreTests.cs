@@ -126,6 +126,36 @@ public sealed class NetworkRuleStoreTests
         }
     }
 
+    [TestMethod]
+    public async Task OversizedRuleIdentifiersAndTargetsAreRejectedBeforeWriting()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        NetworkRuleStore store = new NetworkRuleStore(paths);
+
+        try
+        {
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => store.SaveAsync(new NetworkSwitchRuleSet(
+                true,
+                new string('d', 129),
+                [new NetworkSwitchRule("rule", "Home", "home")])));
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => store.SaveAsync(new NetworkSwitchRuleSet(
+                true,
+                null,
+                [new NetworkSwitchRule(new string('r', 129), "Home", "home")])));
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => store.SaveAsync(new NetworkSwitchRuleSet(
+                true,
+                null,
+                [new NetworkSwitchRule("rule", "Home", new string('c', 129))])));
+
+            Assert.IsFalse(File.Exists(paths.NetworkRulesFile));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
     private static string CreateRoot() =>
         Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
 
