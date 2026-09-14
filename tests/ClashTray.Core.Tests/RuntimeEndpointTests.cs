@@ -358,6 +358,71 @@ public sealed class RuntimeEndpointTests
         }
     }
 
+    [TestMethod]
+    public async Task EndpointSelectionWaitsForControllerMutationToFinish()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using BlockingMutationHandler handler = new();
+        using HttpClient httpClient = new(handler);
+        MihomoApiClient api = new(
+            httpClient,
+            new Uri("http://127.0.0.1:9090/"),
+            string.Empty);
+        StaticConnector connector = new();
+        await using ClashTrayRuntime runtime = new(
+            paths,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            connector,
+            (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken));
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("https://office.example.test"));
+        Task? modeChange = null;
+        Task<EndpointSession?>? endpointSelection = null;
+
+        try
+        {
+            await runtime.SaveRemoteEndpointAsync(new EndpointRecord(remote));
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+
+            modeChange = runtime.SetModeAsync(ProxyMode.Direct);
+            await handler.MutationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            endpointSelection = runtime.SelectEndpointAsync(remote.Id);
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
+
+            Assert.IsFalse(connector.ConnectEntered.Task.IsCompleted);
+
+            handler.ReleaseMutation();
+            await Task.WhenAll(modeChange, endpointSelection);
+
+            Assert.IsTrue(connector.ConnectEntered.Task.IsCompleted);
+            Assert.AreEqual(remote.Id, runtime.EndpointSessionStatus.Endpoint.Id);
+        }
+        finally
+        {
+            handler.ReleaseMutation();
+            if (modeChange is not null)
+            {
+                await modeChange.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            if (endpointSelection is not null)
+            {
+                await endpointSelection.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+
+            DeleteRoot(root);
+        }
+    }
+
     private static string CreateRoot() => Path.Combine(
         Path.GetTempPath(),
         "ClashTrayTests",
@@ -374,6 +439,9 @@ public sealed class RuntimeEndpointTests
     private sealed class StaticConnector : IEndpointSessionConnector
     {
         private SnapshotHandler? _handler;
+
+        public TaskCompletionSource<bool> ConnectEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int ModePatchCount => Volatile.Read(ref _handler)?.ModePatchCount ?? 0;
 
@@ -413,6 +481,7 @@ public sealed class RuntimeEndpointTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            ConnectEntered.TrySetResult(true);
             SnapshotHandler handler = new();
             Volatile.Write(ref _handler, handler);
             HttpClient client = new(handler, disposeHandler: true)
@@ -610,6 +679,52 @@ public sealed class RuntimeEndpointTests
                     Content = new StringContent(body, Encoding.UTF8, "application/json")
                 };
             }
+        }
+    }
+
+    private sealed class BlockingMutationHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource<bool> _releaseMutation = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<bool> MutationEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void ReleaseMutation() => _releaseMutation.TrySetResult(true);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            string? path = request.RequestUri?.AbsolutePath;
+            if (request.Method == HttpMethod.Patch
+                && path == "/configs"
+                && !MutationEntered.Task.IsCompleted)
+            {
+                MutationEntered.TrySetResult(true);
+                await _releaseMutation.Task.WaitAsync(cancellationToken);
+                return new HttpResponseMessage(HttpStatusCode.NoContent)
+                {
+                    Content = new StringContent(string.Empty)
+                };
+            }
+
+            string body = path switch
+            {
+                "/version" => """{"version":"v1.19.30"}""",
+                "/configs" => """{"mode":"direct","tun":{"enable":false}}""",
+                "/traffic" => """{"upTotal":0,"downTotal":0,"up":0,"down":0}""",
+                "/memory" => """{"inuse":0}""",
+                "/connections" => """{"connections":[]}""",
+                "/rules" => """{"rules":[]}""",
+                "/providers/proxies" => """{"providers":{}}""",
+                "/providers/rules" => """{"providers":{}}""",
+                _ => "{}"
+            };
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body)
+            };
         }
     }
 }

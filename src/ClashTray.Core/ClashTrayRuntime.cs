@@ -473,34 +473,53 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpointId.Value);
-        if (endpointId == EndpointId.Local)
+        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
-            return null;
-        }
+            if (endpointId == EndpointId.Local)
+            {
+                await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
+                return null;
+            }
 
-        EndpointDescriptor? endpoint = Endpoints.FirstOrDefault(candidate => candidate.Id == endpointId);
-        if (endpoint is null)
+            EndpointDescriptor? endpoint = Endpoints.FirstOrDefault(candidate => candidate.Id == endpointId);
+            if (endpoint is null)
+            {
+                throw new KeyNotFoundException($"未找到端点 {endpointId.Value}。");
+            }
+
+            if (!endpoint.IsEnabled)
+            {
+                throw new InvalidOperationException($"端点 {endpoint.DisplayName} 已被禁用。");
+            }
+
+            EndpointSession? session = await _endpointSessions.SelectAsync(endpoint, cancellationToken)
+                .ConfigureAwait(false);
+            if (session is not null)
+            {
+                await WaitForRemoteRefreshAsync(session, cancellationToken).ConfigureAwait(false);
+            }
+
+            return session;
+        }
+        finally
         {
-            throw new KeyNotFoundException($"未找到端点 {endpointId.Value}。");
+            _operationLock.Release();
         }
-
-        if (!endpoint.IsEnabled)
-        {
-            throw new InvalidOperationException($"端点 {endpoint.DisplayName} 已被禁用。");
-        }
-
-        EndpointSession? session = await _endpointSessions.SelectAsync(endpoint, cancellationToken)
-            .ConfigureAwait(false);
-        if (session is not null)
-        {
-            await WaitForRemoteRefreshAsync(session, cancellationToken).ConfigureAwait(false);
-        }
-
-        return session;
     }
 
-    public Task DisconnectEndpointAsync() => _endpointSessions.DisconnectAsync();
+    public async Task DisconnectEndpointAsync()
+    {
+        await _operationLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
 
     public async Task<EndpointCatalogLoadResult> SaveRemoteEndpointAsync(
         EndpointRecord endpoint,
