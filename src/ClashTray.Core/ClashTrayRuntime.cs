@@ -1925,6 +1925,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 "清理 FakeIP 缓存期间核心会话已切换，请重试。");
             await api.ClearFakeIpCacheAsync(cancellationToken);
             EnsureControllerSession(api, generation, "清理 FakeIP 缓存期间核心会话已切换，请重试。");
+            await RefreshFromApiAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "清理 FakeIP 缓存期间核心会话已切换，请重试。");
         }
         finally
         {
@@ -2290,6 +2292,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 EndpointCommand.ClearCache,
                 "清理 DNS 缓存期间核心会话已切换，请重试。");
             await api.ClearDnsCacheAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "清理 DNS 缓存期间核心会话已切换，请重试。");
+            await RefreshFromApiAsync(cancellationToken);
             EnsureControllerSession(api, generation, "清理 DNS 缓存期间核心会话已切换，请重试。");
         }
         finally

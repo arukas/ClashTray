@@ -155,6 +155,48 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task LocalCacheCommandsPublishFreshSnapshotAfterCompletion()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using RuntimeControllerHandler handler = new RuntimeControllerHandler();
+        using HttpClient httpClient = new HttpClient(handler);
+        MihomoApiClient api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            await runtime.RefreshControllerDataForTestingAsync();
+            while (handler.RequestedPaths.TryDequeue(out _))
+            {
+            }
+
+            int published = 0;
+            runtime.SnapshotChanged += (_, _) => published++;
+            int beforeCommands = published;
+
+            await runtime.ClearFakeIpCacheAsync();
+            int afterFakeIp = published;
+            await runtime.ClearDnsCacheAsync();
+            int afterDns = published;
+
+            Assert.IsGreaterThan(beforeCommands, afterFakeIp);
+            Assert.IsGreaterThan(afterFakeIp, afterDns);
+            Assert.IsTrue(handler.RequestedPaths.Any(path => path == "/version"));
+            Assert.IsTrue(handler.RequestedPaths.Any(path => path == "/configs"));
+            Assert.IsTrue(handler.RequestedPaths.Any(path => path == "/traffic"));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task UnchangedControllerDataReusesListSnapshots()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
