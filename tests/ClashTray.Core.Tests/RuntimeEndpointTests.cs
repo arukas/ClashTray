@@ -292,6 +292,9 @@ public sealed class RuntimeEndpointTests
             await runtime.ClearDnsCacheAsync();
             Assert.AreEqual(1, connector.DnsCacheClearCount);
 
+            await runtime.UpdateGeoAsync();
+            Assert.AreEqual(1, connector.GeoUpdateCount);
+
             await runtime.UpdateRemoteEndpointAsync(
                 remote.Id,
                 remote with
@@ -354,6 +357,9 @@ public sealed class RuntimeEndpointTests
         public int DnsCacheClearCount =>
             Volatile.Read(ref _handler)?.DnsCacheClearCount ?? 0;
 
+        public int GeoUpdateCount =>
+            Volatile.Read(ref _handler)?.GeoUpdateCount ?? 0;
+
         [System.Diagnostics.CodeAnalysis.SuppressMessage(
             "Reliability",
             "CA2000:Dispose objects before losing scope",
@@ -413,6 +419,7 @@ public sealed class RuntimeEndpointTests
             private int _ruleProviderRefreshCount;
             private int _fakeIpCacheClearCount;
             private int _dnsCacheClearCount;
+            private int _geoUpdateCount;
 
             public int ModePatchCount => Volatile.Read(ref _modePatchCount);
 
@@ -437,6 +444,9 @@ public sealed class RuntimeEndpointTests
 
             public int DnsCacheClearCount =>
                 Volatile.Read(ref _dnsCacheClearCount);
+
+            public int GeoUpdateCount =>
+                Volatile.Read(ref _geoUpdateCount);
 
             public void SetTraffic(long uploadBytes, long downloadBytes)
             {
@@ -522,6 +532,11 @@ public sealed class RuntimeEndpointTests
                     && request.RequestUri?.AbsolutePath == "/cache/dns/flush")
                 {
                     Interlocked.Increment(ref _dnsCacheClearCount);
+                }
+                else if (request.Method == HttpMethod.Post
+                    && request.RequestUri?.AbsolutePath == "/configs/geo")
+                {
+                    Interlocked.Increment(ref _geoUpdateCount);
                 }
 
                 int remainingConnections = Volatile.Read(ref _remainingConnections);
