@@ -1,12 +1,14 @@
 # ClashTray 0.3.0 技术设计
 
-> 状态：实施中；发布门禁尚未通过
+> 状态：0.3.0 Beta 收口；SSID/Wi-Fi 设计顺延
 > 设计版本：1.0
 > 对应需求：[0.3.0 产品需求](product-requirements.md)
 
+> **Beta 范围声明：** 本设计中的 SSID/网络上下文章节是后续版本参考设计。0.3.0 Beta 不实例化 `WindowsNetworkContextSource`，不读取或保存 SSID，不监听网络变化，不提供网络规则或位置权限流程。
+
 ## 1. 设计目标
 
-本设计在不改变 ClashTray 既有三方信任边界的前提下，为 SSID 自动切换和远程 Mihomo 控制器建立可测试的内部边界。
+本设计在不改变 ClashTray 既有三方信任边界的前提下，为远程 Mihomo 控制器建立可测试的内部边界，并保留未来 SSID 自动切换的隔离设计。SSID 能力不属于 0.3.0 Beta 的实现范围。
 
 设计必须同时满足：
 
@@ -50,8 +52,6 @@ flowchart LR
     APP[AppSnapshot Composer]
     LOCAL[LocalDeviceCoordinator]
     SWITCH[ConfigurationSwitchCoordinator]
-    NET[NetworkContextMonitor]
-    POLICY[NetworkSwitchPolicyEngine]
     ESM[EndpointSessionManager]
     SESSION[EndpointSession]
     CAP[EndpointCommandPolicy]
@@ -64,8 +64,6 @@ flowchart LR
     UI --> APP
     APP --> LOCAL
     APP --> ESM
-    NET --> POLICY
-    POLICY --> SWITCH
     UI --> SWITCH
     SWITCH --> LOCAL
     LOCAL --> SERVICE
@@ -75,10 +73,11 @@ flowchart LR
     CAP --> API
     API --> CORE
     API --> REMOTE
-    NET --> STORE
     ESM --> STORE
     SWITCH --> STORE
 ~~~
+
+`NetworkContextMonitor`、`NetworkSwitchPolicyEngine` 及其存储边界属于后续版本预留组件，未接入 0.3.0 Beta 的生产对象图。Beta 的配置切换入口只覆盖手动选择、订阅重新应用和恢复路径。
 
 ### 3.1 分层规则
 
@@ -175,14 +174,14 @@ Remote 的后六个本机能力固定为 false。拒绝发生在任何 HTTP、We
 | EndpointSession | Core | 管理单一目标的握手、快照、实时流、取消和代际 |
 | EndpointSessionManager | Core | 选择活动目标、创建/释放会话、管理退避 |
 | EndpointCommandPolicy | Core | 在命令执行前强制能力 allow-list |
-| NetworkRuleStore | Core | 原子保存规则元数据和受保护 SSID |
-| NetworkSwitchPolicyEngine | Core | 无副作用地把稳定网络上下文计算为切换决定 |
-| INetworkContextSource | Core 契约 | 提供当前网络状态和变化事件，便于单元测试 |
-| WindowsNetworkContextSource | App 基础设施 | 调用 Windows API，处理位置权限、多适配器和恢复事件 |
+| NetworkRuleStore | Core（后续版本） | 原子保存规则元数据和受保护 SSID；0.3.0 Beta 不创建或更新 |
+| NetworkSwitchPolicyEngine | Core（后续版本） | 无副作用地把稳定网络上下文计算为切换决定；不属于 Beta 运行路径 |
+| INetworkContextSource | Core 契约（后续版本） | 提供当前网络状态和变化事件，便于未来策略测试 |
+| WindowsNetworkContextSource | App 基础设施（后续版本） | 调用 Windows API，处理位置权限、多适配器和恢复事件；0.3.0 Beta 不实例化 |
 | AppSnapshotComposer | App | 聚合本机与活动会话快照，供 UI 绑定 |
 | LocalizationService | App | 解析语言设置和非 XAML 资源，禁止翻译用户数据 |
 
-WindowsNetworkContextSource 放在 App 侧，使 Core 的策略测试不依赖真实 Wi-Fi、位置权限或 UI 框架。若现有依赖更适合放入 Core 的 Windows 专用基础设施目录，也必须保留 INetworkContextSource 测试缝，并且不能让策略依赖 WinUI。
+未来版本的 WindowsNetworkContextSource 放在 App 侧，使 Core 的策略测试不依赖真实 Wi-Fi、位置权限或 UI 框架。0.3.0 Beta 不创建它；若后续重新纳入，仍必须保留 INetworkContextSource 测试缝，并且不能让策略依赖 WinUI。
 
 ## 6. 配置切换事务
 
@@ -191,7 +190,7 @@ WindowsNetworkContextSource 放在 App 侧，使 Core 的策略测试不依赖�
 ConfigurationSwitchRequest 至少包含：
 
 - OperationId
-- Source：Manual、SubscriptionRefresh、NetworkRule、NetworkDefault 或 Recovery
+- Source：Manual、SubscriptionRefresh 或 Recovery；NetworkRule/NetworkDefault 留待后续版本
 - TargetConfigurationId
 - ExpectedNetworkRevision，可选
 - CancellationToken
@@ -280,11 +279,13 @@ App 启动发现未完成 journal 时：
 2. 查询 Service、进程和 controller 实际状态。
 3. 根据 journal Stage 和 runtime 文件标记决定完成提交或回滚。
 4. 无法证明候选已健康时优先回滚。
-5. 恢复结束后才启动订阅计划、SSID 监听和远程实时流。
+5. 恢复结束后才启动订阅计划和远程实时流；SSID 监听不在 0.3.0 Beta 中启动。
 
 恢复过程必须幂等；App 连续崩溃或重启不能重复交换文件。
 
-## 7. SSID 自动切换设计
+## 7. SSID 自动切换设计（后续版本，不属于 0.3.0 Beta）
+
+本节只保留未来版本的隔离、隐私和回滚设计。0.3.0 Beta 不执行本节的网络 API、权限、规则存储、事件管线或自动配置切换；不要用本节的单元测试或合成上下文把 SSID 功能标记为 Beta 已交付。
 
 ### 7.1 网络上下文
 
@@ -574,7 +575,7 @@ Core 记录 ErrorCode、OperationId、EndpointId 或 RuleId、阶段、耗时和
 4. 引入 ConfigurationSwitchCoordinator，让现有手动切换先走新事务。
 5. 提取 EndpointTransportFactory 与本机 EndpointSession，仍只连接 loopback。
 6. 用 EndpointCommandPolicy 包住现有 controller 写操作。
-7. 在本机路径稳定后接入 SSID。
+7. SSID 自动切换顺延；后续版本重新立项后再接入网络上下文。
 8. 最后允许创建 Remote EndpointSession。
 9. 迁移 UI 到 AppSnapshot 后删除兼容适配器和不可达旧路径。
 

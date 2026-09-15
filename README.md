@@ -23,6 +23,8 @@ ClashTray 是使用 C#、.NET 10 和 WinUI 3 独立实现的 Windows Mihomo 客�
 - 安全更新：核心来源固定为官方 MetaCubeX/Mihomo 发布，下载后校验 SHA-256，再以原子方式替换并支持回滚。
 - 语言与显示：简体中文 / English，系统、浅色、深色、高对比度和常见 DPI 缩放。
 
+> **0.3.0 Beta 范围：** 本版本明确不包含 Wi-Fi/SSID 自动切换、SSID 读取、网络变化监听、网络规则编辑或位置权限处理；相关能力顺延到后续版本。
+
 ## 体积与发布版本
 
 GitHub Actions 会在 Windows runner 上构建并发布三种 Windows x64 产物：Full、NoCET 和 Mini。Full、NoCET 使用 Inno Setup 7 的 LZMA2 solid 压缩安装器；App、Service 和 Setup 都是 x64，App 与 Service 合并到同一个自包含发布目录，共用一套 .NET runtime。Mini 使用 framework-dependent 发布，不内置 Mihomo；安装时会检查 .NET 10 Desktop Runtime 和 Windows App Runtime 2.4+。
@@ -57,7 +59,7 @@ Full 和 NoCET 使用 `packaging/mihomo-release.json` 中固定的官方版本�
 | Rules | 规则统计、搜索、过滤和 Provider 更新 |
 | Connections | 当前连接、排序、详情、关闭单条和全部关闭 |
 | Logs | App / Mihomo 日志、来源和级别过滤、搜索、复制、清除 |
-| Settings | 语言、主题、端口、网络选项、启动、订阅、核心维护 |
+| Settings | 语言、主题、端口、运行/代理选项、启动、订阅、核心维护 |
 
 ## 本地构建
 
@@ -92,7 +94,7 @@ dotnet test ClashTray.sln --configuration Debug --property:Platform=x64 --no-bui
 
 ## 规划
 
-当前重点是稳定完成日常使用路径：核心启动与恢复、System Proxy 所有权、TUN 回滚、订阅与 Provider 刷新、连接和日志排障、压缩发布与升级卸载。Wi-Fi/SSID 自动切换、远程 Mihomo 的真实会话/连接测试、ARM64、历史流量分析和更多语言仍未作为完整功能交付。
+当前重点是稳定完成日常使用路径：核心启动与恢复、System Proxy 所有权、TUN 回滚、订阅与 Provider 刷新、连接和日志排障、压缩发布与升级卸载。0.3.0 Beta 明确不包含 Wi-Fi/SSID 自动切换及相关网络监听；该能力顺延到后续版本。远程 Mihomo 的公网/局域网真实会话、ARM64、历史流量分析和更多语言也不作为本 Beta 的完整功能交付。
 
 ## 致谢与许可
 
