@@ -16,7 +16,8 @@ public sealed class EndpointSessionStatusEventArgs : EventArgs
         DateTimeOffset? lastConfirmedAt,
         int attempt,
         TimeSpan? nextRetryDelay,
-        string? errorMessage)
+        string? errorMessage,
+        ErrorCode errorCode = ErrorCode.None)
     {
         Endpoint = endpoint ?? throw new ArgumentNullException(nameof(endpoint));
         State = state;
@@ -26,6 +27,7 @@ public sealed class EndpointSessionStatusEventArgs : EventArgs
         Attempt = attempt;
         NextRetryDelay = nextRetryDelay;
         ErrorMessage = ErrorSanitizer.SanitizeNullable(errorMessage);
+        ErrorCode = errorCode;
     }
 
     public EndpointDescriptor Endpoint { get; }
@@ -43,6 +45,8 @@ public sealed class EndpointSessionStatusEventArgs : EventArgs
     public TimeSpan? NextRetryDelay { get; }
 
     public string? ErrorMessage { get; }
+
+    public ErrorCode ErrorCode { get; }
 }
 
 [System.Diagnostics.CodeAnalysis.SuppressMessage(
@@ -391,14 +395,16 @@ public sealed class EndpointSessionManager : IAsyncDisposable
                 }
                 catch (Exception exception) when (IsExpectedConnectionFailure(exception))
                 {
-                    (EndpointSessionState failureState, bool isTransient) = ClassifyFailure(exception);
+                    (EndpointSessionState failureState, bool isTransient, ErrorCode errorCode) =
+                        ClassifyFailure(exception);
                     if (!isTransient)
                     {
                         EndpointSessionStatusEventArgs? failureStatus = TrySetFailure(
                             operation,
                             failureState,
                             attempt,
-                            ErrorSanitizer.Sanitize(exception));
+                            ErrorSanitizer.Sanitize(exception),
+                            errorCode);
                         if (failureStatus is not null)
                         {
                             RaiseStatusChanged(failureStatus);
@@ -412,7 +418,8 @@ public sealed class EndpointSessionManager : IAsyncDisposable
                         operation,
                         attempt,
                         delay,
-                        ErrorSanitizer.Sanitize(exception));
+                        ErrorSanitizer.Sanitize(exception),
+                        errorCode);
                     if (retryStatus is null)
                     {
                         return null;
@@ -469,7 +476,8 @@ public sealed class EndpointSessionManager : IAsyncDisposable
         SelectionOperation operation,
         int attempt,
         TimeSpan delay,
-        string errorMessage)
+        string errorMessage,
+        ErrorCode errorCode)
     {
         lock (_gate)
         {
@@ -486,7 +494,8 @@ public sealed class EndpointSessionManager : IAsyncDisposable
                 lastConfirmedAt: null,
                 attempt,
                 delay,
-                errorMessage);
+                errorMessage,
+                errorCode);
             _status = status;
             return status;
         }
@@ -496,7 +505,8 @@ public sealed class EndpointSessionManager : IAsyncDisposable
         SelectionOperation operation,
         EndpointSessionState state,
         int attempt,
-        string errorMessage)
+        string errorMessage,
+        ErrorCode errorCode)
     {
         lock (_gate)
         {
@@ -513,7 +523,8 @@ public sealed class EndpointSessionManager : IAsyncDisposable
                 lastConfirmedAt: null,
                 attempt,
                 nextRetryDelay: null,
-                errorMessage);
+                errorMessage,
+                errorCode);
             _status = status;
             return status;
         }
@@ -572,37 +583,53 @@ public sealed class EndpointSessionManager : IAsyncDisposable
             or CryptographicException
             or IOException;
 
-    private static (EndpointSessionState State, bool IsTransient) ClassifyFailure(Exception exception)
+    private static (EndpointSessionState State, bool IsTransient, ErrorCode ErrorCode) ClassifyFailure(
+        Exception exception)
     {
         if (exception is EndpointSessionConnectException endpointException)
         {
-            return (endpointException.FailureState, endpointException.IsTransient);
+            return (
+                endpointException.FailureState,
+                endpointException.IsTransient,
+                endpointException.ErrorCode);
         }
 
         if (exception is HttpRequestException httpException)
         {
             if (httpException.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             {
-                return (EndpointSessionState.AuthenticationFailed, false);
+                return (
+                    EndpointSessionState.AuthenticationFailed,
+                    false,
+                    ErrorCode.EndpointAuthenticationFailed);
             }
 
             if (httpException.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
             {
-                return (EndpointSessionState.Incompatible, false);
+                return (
+                    EndpointSessionState.Incompatible,
+                    false,
+                    ErrorCode.EndpointIncompatible);
             }
 
             if (httpException.InnerException is AuthenticationException)
             {
-                return (EndpointSessionState.CertificateFailed, false);
+                return (
+                    EndpointSessionState.CertificateFailed,
+                    false,
+                    ErrorCode.EndpointCertificateFailed);
             }
         }
 
         if (exception is AuthenticationException or CryptographicException)
         {
-            return (EndpointSessionState.CertificateFailed, false);
+            return (
+                EndpointSessionState.CertificateFailed,
+                false,
+                ErrorCode.EndpointCertificateFailed);
         }
 
-        return (EndpointSessionState.Failed, true);
+        return (EndpointSessionState.Failed, true, ErrorCode.EndpointTransportFailed);
     }
 
     private static void ValidateLocalEndpoint(EndpointDescriptor endpoint)

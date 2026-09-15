@@ -133,6 +133,7 @@ public sealed class EndpointSessionManagerTests
         Assert.AreEqual(1, connector.CallCount);
         Assert.AreEqual(0, delayCount);
         Assert.AreEqual(EndpointSessionState.AuthenticationFailed, manager.Status.State);
+        Assert.AreEqual(ErrorCode.EndpointAuthenticationFailed, manager.Status.ErrorCode);
         Assert.IsNotNull(manager.Status.ErrorMessage);
         Assert.IsFalse(manager.Status.ErrorMessage!.Contains("secret", StringComparison.OrdinalIgnoreCase));
     }

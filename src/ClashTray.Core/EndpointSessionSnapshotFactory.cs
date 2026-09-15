@@ -52,6 +52,18 @@ public static class EndpointSessionSnapshotFactory
         }
 
         string? error = sessionStatus.ErrorMessage ?? handshake?.ErrorMessage;
+        ErrorCode errorCode = sessionStatus.ErrorCode;
+        if (errorCode == ErrorCode.None && handshake is { IsCompatible: false })
+        {
+            errorCode = handshake.State switch
+            {
+                EndpointSessionState.AuthenticationFailed => ErrorCode.EndpointAuthenticationFailed,
+                EndpointSessionState.CertificateFailed => ErrorCode.EndpointCertificateFailed,
+                EndpointSessionState.Incompatible => ErrorCode.EndpointIncompatible,
+                _ => ErrorCode.EndpointTransportFailed
+            };
+        }
+
         return new ControllerSessionSnapshot(
             endpoint,
             state,
@@ -66,6 +78,7 @@ public static class EndpointSessionSnapshotFactory
             ruleProviders ?? [],
             logs ?? [],
             capabilities,
-            error);
+            error,
+            errorCode);
     }
 }

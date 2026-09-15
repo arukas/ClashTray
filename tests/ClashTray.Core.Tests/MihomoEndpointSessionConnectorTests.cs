@@ -73,6 +73,41 @@ public sealed class MihomoEndpointSessionConnectorTests
 
             Assert.AreEqual(EndpointSessionState.Incompatible, exception.FailureState);
             Assert.IsFalse(exception.IsTransient);
+            Assert.AreEqual(ErrorCode.EndpointIncompatible, exception.ErrorCode);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task HttpAuthenticationFailureIsStableAndDoesNotRetry()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        EndpointSecretStore secretStore = new(paths);
+        EndpointCertificateStore certificateStore = new(paths);
+        EndpointDescriptor endpoint = CreateEndpoint("office");
+        EndpointRecord record = new(endpoint);
+        using VersionHandler handler = new("{\"error\":\"unauthorized\"}", HttpStatusCode.Unauthorized);
+        EndpointTransportOptionsResolver optionsResolver = new(secretStore, certificateStore);
+        MihomoEndpointSessionConnector connector = CreateConnector(
+            record,
+            optionsResolver,
+            handler);
+
+        try
+        {
+            EndpointSessionConnectException exception = await Assert.ThrowsExactlyAsync<EndpointSessionConnectException>(
+                () => connector.ConnectAsync(endpoint, 1, 1, CancellationToken.None));
+
+            Assert.AreEqual(EndpointSessionState.AuthenticationFailed, exception.FailureState);
+            Assert.AreEqual(ErrorCode.EndpointAuthenticationFailed, exception.ErrorCode);
+            Assert.IsFalse(exception.IsTransient);
+            StringAssert.Contains(exception.Message, "认证失败", StringComparison.Ordinal);
+            Assert.IsFalse(exception.Message.Contains("unauthorized", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -243,8 +278,13 @@ public sealed class MihomoEndpointSessionConnectorTests
     private sealed class VersionHandler : HttpMessageHandler
     {
         private readonly string _body;
+        private readonly HttpStatusCode _statusCode;
 
-        public VersionHandler(string body) => _body = body;
+        public VersionHandler(string body, HttpStatusCode statusCode = HttpStatusCode.OK)
+        {
+            _body = body;
+            _statusCode = statusCode;
+        }
 
         public string? Authorization { get; private set; }
 
@@ -257,7 +297,7 @@ public sealed class MihomoEndpointSessionConnectorTests
             cancellationToken.ThrowIfCancellationRequested();
             Authorization = request.Headers.Authorization?.ToString();
             Path = request.RequestUri?.AbsolutePath;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return Task.FromResult(new HttpResponseMessage(_statusCode)
             {
                 Content = new StringContent(_body, Encoding.UTF8, "application/json")
             });

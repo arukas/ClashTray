@@ -47,6 +47,7 @@ public sealed class EndpointSessionSnapshotFactoryTests
         Assert.AreEqual(EndpointCapabilityDefaults.Remote, snapshot.Capabilities);
         Assert.IsFalse(snapshot.Capabilities.HasFlag(EndpointCapability.ControlTun));
         Assert.AreEqual(4, snapshot.Generation);
+        Assert.AreEqual(ErrorCode.None, snapshot.ErrorCode);
     }
 
     [TestMethod]
@@ -76,6 +77,7 @@ public sealed class EndpointSessionSnapshotFactoryTests
         Assert.AreEqual(EndpointSessionState.Incompatible, snapshot.State);
         Assert.AreEqual(EndpointCapability.None, snapshot.Capabilities);
         Assert.AreEqual("version missing", snapshot.ErrorMessage);
+        Assert.AreEqual(ErrorCode.EndpointIncompatible, snapshot.ErrorCode);
     }
 
     [TestMethod]

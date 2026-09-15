@@ -121,7 +121,8 @@ public sealed class EndpointSessionConnectException : IOException
         EndpointSessionState failureState,
         bool isTransient,
         string message,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        ErrorCode? errorCode = null)
         : base(ErrorSanitizer.Sanitize(message), innerException)
     {
         if (failureState is not (
@@ -135,9 +136,18 @@ public sealed class EndpointSessionConnectException : IOException
 
         FailureState = failureState;
         IsTransient = isTransient;
+        ErrorCode = errorCode ?? failureState switch
+        {
+            EndpointSessionState.AuthenticationFailed => ErrorCode.EndpointAuthenticationFailed,
+            EndpointSessionState.CertificateFailed => ErrorCode.EndpointCertificateFailed,
+            EndpointSessionState.Incompatible => ErrorCode.EndpointIncompatible,
+            _ => ErrorCode.EndpointTransportFailed
+        };
     }
 
     public EndpointSessionState FailureState { get; }
 
     public bool IsTransient { get; }
+
+    public ErrorCode ErrorCode { get; }
 }

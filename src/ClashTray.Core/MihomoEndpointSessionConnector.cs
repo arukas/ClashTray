@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -139,6 +140,24 @@ public sealed class MihomoEndpointSessionConnector : IEndpointSessionConnector
                     EndpointSessionState.Incompatible,
                     isTransient: false,
                     "远程 Controller 的 /version 响应不是有效 JSON。",
+                    exception);
+            }
+            catch (HttpRequestException exception) when (
+                exception.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                throw new EndpointSessionConnectException(
+                    EndpointSessionState.AuthenticationFailed,
+                    isTransient: false,
+                    "远程 Controller 认证失败，请检查 secret。",
+                    exception);
+            }
+            catch (HttpRequestException exception) when (
+                exception.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
+            {
+                throw new EndpointSessionConnectException(
+                    EndpointSessionState.Incompatible,
+                    isTransient: false,
+                    "远程 Controller 不支持所需的 /version 接口。",
                     exception);
             }
             catch (Exception exception) when (exception is AuthenticationException or CryptographicException)

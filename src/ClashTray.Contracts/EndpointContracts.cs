@@ -32,11 +32,24 @@ public enum ErrorCode
     EndpointCommandDenied = 1000,
     EndpointCapabilityUnavailable = 1001,
     UnsupportedEndpointCommand = 1002,
+    EndpointUriInvalid = 1003,
+    EndpointAuthenticationFailed = 1004,
+    EndpointCertificateFailed = 1005,
+    EndpointIncompatible = 1006,
+    EndpointCapabilityDenied = 1007,
+    EndpointStaleResult = 1008,
+    EndpointTransportFailed = 1009,
     ConfigurationSwitchJournalCorrupt = 1100,
     ConfigurationSwitchTargetNotFound = 1101,
     ConfigurationSwitchFailed = 1102,
     ConfigurationSwitchRollbackFailed = 1103,
-    ConfigurationSwitchRecoveryRequired = 1104
+    ConfigurationSwitchRecoveryRequired = 1104,
+    ConfigurationValidationFailed = 1105,
+    ConfigurationSwitchFailedRolledBack = 1106,
+    NetworkPermissionRequired = 1200,
+    NetworkAmbiguous = 1201,
+    NetworkRuleTargetMissing = 1202,
+    StoreMigrationFailed = 1300
 }
 
 [Flags]
@@ -141,7 +154,8 @@ public sealed record ControllerSessionSnapshot(
     IReadOnlyList<ProviderStatus> RuleProviders,
     IReadOnlyList<LogEntry> Logs,
     EndpointCapability Capabilities,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    ErrorCode ErrorCode = ErrorCode.None);
 
 public sealed record AppSnapshot(
     LocalDeviceSnapshot LocalDevice,
