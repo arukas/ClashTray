@@ -229,6 +229,13 @@
   <data name="SwitchStateOff" xml:space="preserve"><value>已关闭</value></data>
   <data name="TunStateUnavailable" xml:space="preserve"><value>服务未安装</value></data>
   <data name="TunStateUnknown" xml:space="preserve"><value>无法确认</value></data>
+  <data name="TunStateRecovering" xml:space="preserve"><value>正在恢复</value></data>
+  <data name="TunRecoveryMissingAddress" xml:space="preserve"><value>TUN 启动失败，Mihomo 已自动恢复，当前 TUN 已关闭。
+原因：缺少可用的接口地址。</value></data>
+  <data name="TunConfigurationMissingAddress" xml:space="preserve"><value>TUN 无法开启，当前 TUN 保持关闭。
+原因：配置没有可用的接口地址。</value></data>
+  <data name="TunRecoveryUnknown" xml:space="preserve"><value>TUN 状态无法确认。为避免影响网络，未继续重试；请检查服务和诊断日志。</value></data>
+  <data name="OperationBusy" xml:space="preserve"><value>操作正在进行，请稍后重试。</value></data>
   <data name="ConfigImportPrompt" xml:space="preserve"><value>导入配置</value></data>
   <data name="ToolTipPinWindow" xml:space="preserve"><value>固定窗口</value></data>
   <data name="ToolTipUnpinWindow" xml:space="preserve"><value>取消固定</value></data>

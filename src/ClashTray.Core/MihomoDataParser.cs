@@ -183,6 +183,12 @@ public static class MihomoDataParser
         return enable.ValueKind is JsonValueKind.True or JsonValueKind.False ? enable.GetBoolean() : null;
     }
 
+    public static MihomoTunConfiguration ParseTunConfiguration(JsonDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return MihomoTunConfigurationParser.Parse(document.RootElement, ParseTunEnabled(document));
+    }
+
     public static bool? ParseAllowLan(JsonDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);

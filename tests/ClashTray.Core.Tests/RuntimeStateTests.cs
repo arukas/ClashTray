@@ -1103,6 +1103,34 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task RuntimeConfigBuilderAddsNestedSafeTunOverrideWhenEnableIsMissing()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        string source = Path.Combine(root, "source.yaml");
+        string destination = Path.Combine(root, "runtime.yaml");
+        await File.WriteAllTextAsync(source, "tun:\n  stack: system\nproxies: []\n");
+
+        try
+        {
+            await RuntimeConfigBuilder.BuildForCoreStartAsync(
+                source,
+                destination,
+                new AppSettings(ControllerPort: 9191, TunEnabled: true),
+                externalUiPath: null);
+            string generated = (await File.ReadAllTextAsync(destination)).Replace("\r\n", "\n", StringComparison.Ordinal);
+
+            StringAssert.Contains(generated, "tun:\n  stack: system\n  enable: false\nproxies: []", StringComparison.Ordinal);
+            Assert.IsFalse(generated.Contains("\nenable: false\n", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task RuntimeConfigBuilderProgramTunSettingOverridesInlineProfile()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));

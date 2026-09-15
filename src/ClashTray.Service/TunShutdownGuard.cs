@@ -16,19 +16,32 @@ internal readonly record struct TunShutdownResult(
 /// </summary>
 internal static class TunShutdownGuard
 {
-    private static readonly TimeSpan TransitionTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan TransitionTimeout = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(350);
+    private const int StableSamples = 2;
 
     public static async Task<TunShutdownResult> EnsureDisabledAsync(
         MihomoApiClient api,
         CancellationToken cancellationToken)
+        => await EnsureDisabledAsync(
+            api,
+            new WindowsTunNetworkHealthProbe(),
+            cancellationToken).ConfigureAwait(false);
+
+    public static async Task<TunShutdownResult> EnsureDisabledAsync(
+        MihomoApiClient api,
+        ITunNetworkHealthProbe healthProbe,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(api);
+        ArgumentNullException.ThrowIfNull(healthProbe);
         using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TransitionTimeout);
 
         try
         {
-            bool? current = await ReadTunStateAsync(api, timeout.Token);
+            using JsonDocument initialConfiguration = await api.GetConfigurationAsync(force: false, timeout.Token);
+            bool? current = MihomoDataParser.ParseTunEnabled(initialConfiguration);
             if (current is not bool currentValue)
             {
                 return Failed("停止核心前无法确认 TUN 状态，核心保持运行。");
@@ -37,13 +50,11 @@ internal static class TunShutdownGuard
             if (currentValue)
             {
                 await api.SetTunAsync(false, timeout.Token);
-                if (!await ConfirmTunStateAsync(api, expected: false, timeout.Token))
-                {
-                    return Failed("停止核心前无法确认 TUN 已关闭，核心保持运行。");
-                }
             }
 
-            return new TunShutdownResult(true, TunState.Off, null);
+            return await ConfirmDisabledAsync(api, healthProbe, timeout.Token).ConfigureAwait(false)
+                ? new TunShutdownResult(true, TunState.Off, null)
+                : Failed("停止核心前无法确认 TUN 已关闭，核心保持运行。");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -78,31 +89,35 @@ internal static class TunShutdownGuard
     private static TunShutdownResult Failed(string error) =>
         new TunShutdownResult(false, TunState.Unknown, error);
 
-    private static async Task<bool?> ReadTunStateAsync(
+    private static async Task<bool> ConfirmDisabledAsync(
         MihomoApiClient api,
+        ITunNetworkHealthProbe healthProbe,
         CancellationToken cancellationToken)
     {
-        using JsonDocument document = await api.GetConfigurationAsync(force: false, cancellationToken);
-        return MihomoDataParser.ParseTunEnabled(document);
-    }
-
-    private static async Task<bool> ConfirmTunStateAsync(
-        MihomoApiClient api,
-        bool expected,
-        CancellationToken cancellationToken)
-    {
-        for (int attempt = 0; attempt < 5; attempt++)
+        int stableSamples = 0;
+        while (true)
         {
             using JsonDocument document = await api.GetConfigurationAsync(force: false, cancellationToken);
             bool? value = MihomoDataParser.ParseTunEnabled(document);
-            if (value == expected)
+            MihomoTunConfiguration configuration = MihomoDataParser.ParseTunConfiguration(document);
+            TunNetworkHealth health = await healthProbe.ProbeAsync(
+                configuration,
+                TunNetworkExpectation.Disabled,
+                cancellationToken).ConfigureAwait(false);
+            if (value is false && health.MeetsDisabled)
             {
-                return true;
+                stableSamples++;
+                if (stableSamples >= StableSamples)
+                {
+                    return true;
+                }
+            }
+            else
+            {
+                stableSamples = 0;
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
+            await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
         }
-
-        return false;
     }
 }

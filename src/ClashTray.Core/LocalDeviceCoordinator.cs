@@ -72,6 +72,13 @@ internal sealed class LocalDeviceCoordinator
         CancellationToken cancellationToken = default) =>
         SendAsync(ServiceCommand.DisableTun, Serialize(payload), cancellationToken);
 
+    public Task<ServiceResponse> SetTunAsync(
+        ServiceTunPayload payload,
+        CancellationToken cancellationToken = default) =>
+        payload.Enabled
+            ? EnableTunAsync(payload, cancellationToken)
+            : DisableTunAsync(payload, cancellationToken);
+
     private Task<ServiceResponse> SendAsync(
         ServiceCommand command,
         string? payload,

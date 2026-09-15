@@ -229,6 +229,13 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="SwitchStateOff" xml:space="preserve"><value>Off</value></data>
   <data name="TunStateUnavailable" xml:space="preserve"><value>Service not installed</value></data>
   <data name="TunStateUnknown" xml:space="preserve"><value>Cannot confirm</value></data>
+  <data name="TunStateRecovering" xml:space="preserve"><value>Recovering</value></data>
+  <data name="TunRecoveryMissingAddress" xml:space="preserve"><value>TUN startup failed. Mihomo recovered automatically and TUN is now off.
+Reason: no usable interface address was found.</value></data>
+  <data name="TunConfigurationMissingAddress" xml:space="preserve"><value>TUN cannot be turned on and remains off.
+Reason: the configuration does not contain a usable interface address.</value></data>
+  <data name="TunRecoveryUnknown" xml:space="preserve"><value>TUN state cannot be confirmed. To avoid affecting your network, no further retry was attempted; check the service and diagnostic logs.</value></data>
+  <data name="OperationBusy" xml:space="preserve"><value>An operation is already in progress. Try again later.</value></data>
   <data name="ConfigImportPrompt" xml:space="preserve"><value>Import a configuration</value></data>
   <data name="ToolTipPinWindow" xml:space="preserve"><value>Pin window</value></data>
   <data name="ToolTipUnpinWindow" xml:space="preserve"><value>Unpin</value></data>

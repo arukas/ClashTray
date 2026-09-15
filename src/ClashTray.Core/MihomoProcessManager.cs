@@ -15,8 +15,16 @@ public sealed class MihomoProcessManager : IAsyncDisposable
     private readonly TimeSpan _stopTimeout;
     private Process? _process;
     private CancellationTokenSource? _lifetimeCts;
+    private long _generation;
 
     public CoreState State { get; private set; } = CoreState.Stopped;
+
+    /// <summary>
+    /// Monotonically increasing process generation. Controller and TUN
+    /// transactions capture this value so a late response from an older
+    /// Mihomo process cannot commit state for a newer process.
+    /// </summary>
+    public long Generation => Interlocked.Read(ref _generation);
 
     public event EventHandler<CoreState>? StateChanged;
 
@@ -324,6 +332,8 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             {
                 throw new InvalidOperationException("Unable to start Mihomo.");
             }
+
+            Interlocked.Increment(ref _generation);
 
             _ = DrainAsync(process.StandardOutput, isError: false, lifetime.Token);
             _ = DrainAsync(process.StandardError, isError: true, lifetime.Token);

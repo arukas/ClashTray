@@ -9,7 +9,17 @@ namespace ClashTray.Core;
 
 public sealed class ClashTrayRuntime : IAsyncDisposable
 {
-    private readonly SemaphoreSlim _operationLock = new(1, 1);
+    private readonly OperationGate _operationLock = new();
+    private readonly BooleanSingleFlight<TunState> _tunOperation = new("TUN");
+    private readonly LatestWinsOperation<ModeIntent> _modeOperation = new("模式");
+    private readonly object _proxyOperationGate = new();
+    private readonly Dictionary<string, LatestWinsOperation<ProxySelectionIntent>> _proxyOperations =
+        new(StringComparer.Ordinal);
+    private readonly object _delayOperationGate = new();
+    private readonly Dictionary<string, SingleFlightOperation<int?>> _proxyDelayOperations =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SingleFlightOperation<IReadOnlyDictionary<string, int?>>> _proxyGroupDelayOperations =
+        new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _subscriptionOperationLock = new(1, 1);
     private readonly SemaphoreSlim _dataRefreshLock = new(1, 1);
     private readonly CancellationTokenSource _runtimeCts = new();
@@ -61,6 +71,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly Func<EndpointSession, EndpointSessionStatusEventArgs, CancellationToken, Task> _remoteLogStreamRunner;
     private bool _usingServiceCore;
     private bool _coreHealthConfirmed;
+    private TunState _confirmedTunState = TunState.Unavailable;
     private readonly object _proxyRecoveryGate = new();
     private Task? _proxyRecoveryTask;
 
@@ -73,6 +84,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         bool Succeeded,
         IReadOnlyList<ProxyGroup> Groups,
         IReadOnlyList<ProxyNode> Nodes);
+
+    private enum MutationRefreshScope
+    {
+        Full,
+        Mode,
+        ProxySelection
+    }
 
     private sealed record RemoteControllerData(
         long Generation,
@@ -87,6 +105,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly record struct TrafficDataResult(bool Succeeded, TrafficSnapshot? Value);
 
     private readonly record struct MemoryDataResult(bool Succeeded, long Value);
+
+    private sealed record ProxySelectionIntent(string Group, string Proxy);
+
+    private sealed record ModeIntent(ProxyMode Mode, bool RouteToRemote);
 
     private readonly record struct ConnectionDataResult(
         bool Succeeded,
@@ -313,7 +335,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             ServiceResponse serviceStatus = await _localDevice.GetStatusAsync(cancellationToken);
             _snapshot = _snapshot with
             {
-                Tun = serviceStatus.Tun,
+                Tun = AdoptServiceTunState(serviceStatus.Tun),
                 Core = _snapshot.Core with
                 {
                     State = serviceStatus.Core == CoreState.Stopped && _snapshot.Core.State == CoreState.Missing
@@ -652,7 +674,32 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     }
 
     public Task StartCoreAsync(CancellationToken cancellationToken = default) =>
-        StartCoreCoreAsync(operationLockHeld: false, cancellationToken);
+        AdmitCoreLifecycleAsync(
+            "核心",
+            token => StartCoreCoreAsync(operationLockHeld: true, token),
+            cancellationToken);
+
+    private async Task AdmitCoreLifecycleAsync(
+        string operationName,
+        Func<CancellationToken, Task> operation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_operationLock.TryEnter())
+        {
+            throw new OperationBusyException(operationName);
+        }
+
+        try
+        {
+            await operation(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _operationLock.Exit();
+        }
+    }
 
     private async Task StartCoreCoreAsync(
         bool operationLockHeld,
@@ -688,7 +735,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             UpdateCoreState(CoreState.Validating, null);
             string runtimeConfigPath = Path.Combine(_paths.RuntimeRoot, "mihomo", "active-config.yaml");
-            await RuntimeConfigBuilder.BuildAsync(
+            await RuntimeConfigBuilder.BuildForCoreStartAsync(
                 profile.Path,
                 runtimeConfigPath,
                 _settings,
@@ -738,6 +785,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
             else
             {
+                _usingServiceCore = false;
                 if (!await _processManager.ValidateAsync(
                     executable,
                     runtimeConfigPath,
@@ -759,7 +807,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             bool coreStarted = true;
             SetController(CreateApiClient());
-            SetCoreRunningPendingHealth(serviceResponse?.Tun ?? TunState.Unknown);
+            SetCoreRunningPendingHealth(serviceResponse?.Tun ?? TunState.Unavailable);
             try
             {
                 await RefreshCoreHealthWithRetryAsync(cancellationToken);
@@ -806,7 +854,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     }
 
     public Task StopCoreAsync(CancellationToken cancellationToken = default) =>
-        StopCoreCoreAsync(operationLockHeld: false, cancellationToken);
+        AdmitCoreLifecycleAsync(
+            "核心",
+            token => StopCoreCoreAsync(operationLockHeld: true, token),
+            cancellationToken);
 
     private async Task StopCoreCoreAsync(
         bool operationLockHeld,
@@ -830,7 +881,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     ServiceResponse response = await _localDevice.StopCoreAsync(cancellationToken);
                     if (!response.Succeeded)
                     {
-                        _snapshot = _snapshot with { Tun = response.Tun };
+                        _snapshot = _snapshot with { Tun = AdoptServiceTunState(response.Tun) };
                         if (response.Core == CoreState.Stopped)
                         {
                             _usingServiceCore = false;
@@ -845,6 +896,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                         throw new InvalidOperationException(
                             response.Error ?? "ClashTray 服务无法停止 Mihomo。");
                     }
+
+                    _snapshot = _snapshot with { Tun = AdoptServiceTunState(response.Tun) };
                 }
                 catch (TimeoutException exception)
                 {
@@ -892,6 +945,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             else
             {
                 await _processManager.StopAsync(cancellationToken);
+                _confirmedTunState = TunState.Off;
+                _snapshot = _snapshot with { Tun = TunState.Off };
             }
 
             UpdateCoreState(CoreState.Stopped, null);
@@ -906,18 +961,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public async Task RestartCoreAsync(CancellationToken cancellationToken = default)
-    {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
-        {
-            await RestartCoreCoreAsync(cancellationToken);
-        }
-        finally
-        {
-            _operationLock.Release();
-        }
-    }
+    public Task RestartCoreAsync(CancellationToken cancellationToken = default) =>
+        AdmitCoreLifecycleAsync(
+            "核心",
+            RestartCoreCoreAsync,
+            cancellationToken);
 
     private async Task RestartCoreCoreAsync(CancellationToken cancellationToken)
     {
@@ -1520,15 +1568,51 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public Task SetModeAsync(ProxyMode mode, CancellationToken cancellationToken = default) =>
-        SetModeCoreAsync(mode, routeToRemote: true, cancellationToken);
+    private LatestWinsOperation<ProxySelectionIntent> GetProxySelectionOperation(string group)
+    {
+        lock (_proxyOperationGate)
+        {
+            if (!_proxyOperations.TryGetValue(group, out LatestWinsOperation<ProxySelectionIntent>? operation))
+            {
+                // Keep the intent table bounded even if a remote endpoint
+                // returns attacker-controlled group names over time.
+                if (!TrimIdleLatestOperations(_proxyOperations))
+                {
+                    throw new OperationBusyException("节点");
+                }
 
-    public Task SetLocalModeAsync(ProxyMode mode, CancellationToken cancellationToken = default) =>
-        SetModeCoreAsync(mode, routeToRemote: false, cancellationToken);
+                operation = new LatestWinsOperation<ProxySelectionIntent>("节点");
+                _proxyOperations[group] = operation;
+            }
 
-    private async Task SetModeCoreAsync(
-        ProxyMode mode,
-        bool routeToRemote,
+            return operation;
+        }
+    }
+
+    public async Task SetModeAsync(ProxyMode mode, CancellationToken cancellationToken = default)
+    {
+        await _modeOperation.RequestAsync(
+                new ModeIntent(mode, RouteToRemote: true),
+                (intent, token) => SetModeIntentCoreAsync(
+                    intent,
+                    token),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task SetLocalModeAsync(ProxyMode mode, CancellationToken cancellationToken = default)
+    {
+        await _modeOperation.RequestAsync(
+                new ModeIntent(mode, RouteToRemote: false),
+                (intent, token) => SetModeIntentCoreAsync(
+                    intent,
+                    token),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<ModeIntent> SetModeIntentCoreAsync(
+        ModeIntent intent,
         CancellationToken cancellationToken)
     {
         await _operationLock.WaitAsync(cancellationToken);
@@ -1538,28 +1622,54 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 EndpointCommand.SwitchMode,
                 "模式切换期间核心会话已切换，请重试。",
                 "远程端点模式切换结果无法确认，请重试。",
-                (api, _, token) => api.SetModeAsync(mode, token),
-                (session, token) => session.Api.SetModeAsync(mode, token),
+                (api, _, token) => api.SetModeAsync(intent.Mode, token),
+                (session, token) => session.Api.SetModeAsync(intent.Mode, token),
                 cancellationToken,
-                routeToRemote);
+                intent.RouteToRemote,
+                refreshScope: MutationRefreshScope.Mode);
         }
         finally
         {
             _operationLock.Release();
         }
+
+        return intent;
     }
 
-    public async Task SelectProxyAsync(string group, string proxy, CancellationToken cancellationToken = default)
+    public Task SelectProxyAsync(string group, string proxy, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(group);
+        ArgumentException.ThrowIfNullOrWhiteSpace(proxy);
+        LatestWinsOperation<ProxySelectionIntent> operation = GetProxySelectionOperation(group);
+        ProxySelectionIntent intent = new(group, proxy);
+        return SelectProxyLatestAsync(operation, intent, cancellationToken);
+    }
+
+    private async Task SelectProxyLatestAsync(
+        LatestWinsOperation<ProxySelectionIntent> operation,
+        ProxySelectionIntent intent,
+        CancellationToken cancellationToken)
+    {
+        await operation.RequestAsync(
+                intent,
+                (requested, token) => SelectProxyIntentCoreAsync(requested, token),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<ProxySelectionIntent> SelectProxyIntentCoreAsync(
+        ProxySelectionIntent intent,
+        CancellationToken cancellationToken)
     {
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
             string? previousProxy = _snapshot.ProxyGroups
-                .FirstOrDefault(item => string.Equals(item.Name, group, StringComparison.Ordinal))
+                .FirstOrDefault(item => string.Equals(item.Name, intent.Group, StringComparison.Ordinal))
                 ?.Current;
             Exception? disconnectException = null;
             bool selectionChanged = previousProxy is not null
-                && !string.Equals(previousProxy, proxy, StringComparison.Ordinal);
+                && !string.Equals(previousProxy, intent.Proxy, StringComparison.Ordinal);
 
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.SwitchProxy,
@@ -1567,7 +1677,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 "远程端点节点切换结果无法确认，请重试。",
                 async (api, generation, token) =>
                 {
-                    await api.SelectProxyAsync(group, proxy, token);
+                    await api.SelectProxyAsync(intent.Group, intent.Proxy, token);
                     EnsureControllerSession(
                         api,
                         generation,
@@ -1602,8 +1712,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                         }
                     }
                 },
-                (session, token) => session.Api.SelectProxyAsync(group, proxy, token),
-                cancellationToken);
+                (session, token) => session.Api.SelectProxyAsync(intent.Group, intent.Proxy, token),
+                cancellationToken,
+                refreshScope: MutationRefreshScope.ProxySelection);
 
             if (disconnectException is not null)
             {
@@ -1621,10 +1732,106 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             _operationLock.Release();
         }
+
+        return intent;
     }
 
-    public async Task<int?> TestProxyDelayAsync(string proxy, CancellationToken cancellationToken = default)
+    private SingleFlightOperation<int?> GetProxyDelayOperation(string proxy)
     {
+        lock (_delayOperationGate)
+        {
+            if (!_proxyDelayOperations.TryGetValue(proxy, out SingleFlightOperation<int?>? operation))
+            {
+                if (!TrimIdleOperations(_proxyDelayOperations))
+                {
+                    throw new OperationBusyException("节点测速");
+                }
+
+                operation = new SingleFlightOperation<int?>("节点测速");
+                _proxyDelayOperations[proxy] = operation;
+            }
+
+            return operation;
+        }
+    }
+
+    private SingleFlightOperation<IReadOnlyDictionary<string, int?>> GetProxyGroupDelayOperation(string group)
+    {
+        lock (_delayOperationGate)
+        {
+            if (!_proxyGroupDelayOperations.TryGetValue(group, out SingleFlightOperation<IReadOnlyDictionary<string, int?>>? operation))
+            {
+                if (!TrimIdleOperations(_proxyGroupDelayOperations))
+                {
+                    throw new OperationBusyException("代理组测速");
+                }
+
+                operation = new SingleFlightOperation<IReadOnlyDictionary<string, int?>>("代理组测速");
+                _proxyGroupDelayOperations[group] = operation;
+            }
+
+            return operation;
+        }
+    }
+
+    private static bool TrimIdleOperations<T>(Dictionary<string, SingleFlightOperation<T>> operations)
+    {
+        const int MaxRetainedOperations = 256;
+        if (operations.Count < MaxRetainedOperations)
+        {
+            return true;
+        }
+
+        string? idleKey = operations
+            .FirstOrDefault(entry => !entry.Value.IsBusy)
+            .Key;
+        if (idleKey is not null)
+        {
+            operations.Remove(idleKey);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TrimIdleLatestOperations(
+        Dictionary<string, LatestWinsOperation<ProxySelectionIntent>> operations)
+    {
+        const int MaxRetainedOperations = 256;
+        if (operations.Count < MaxRetainedOperations)
+        {
+            return true;
+        }
+
+        string? idleKey = operations
+            .FirstOrDefault(entry => !entry.Value.IsBusy)
+            .Key;
+        if (idleKey is not null)
+        {
+            operations.Remove(idleKey);
+            return true;
+        }
+
+        return false;
+    }
+
+    public Task<int?> TestProxyDelayAsync(string proxy, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(proxy);
+        SingleFlightOperation<int?> operation = GetProxyDelayOperation(proxy);
+        return operation.RequestAsync(
+            token => TestProxyDelayCoreAsync(proxy, token),
+            cancellationToken);
+    }
+
+    private async Task<int?> TestProxyDelayCoreAsync(
+        string proxy,
+        CancellationToken operationCancellationToken)
+    {
+        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
+            operationCancellationToken,
+            _runtimeCts.Token);
+        CancellationToken cancellationToken = linked.Token;
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
@@ -1691,11 +1898,23 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public async Task<IReadOnlyDictionary<string, int?>> TestProxyGroupDelayAsync(
+    public Task<IReadOnlyDictionary<string, int?>> TestProxyGroupDelayAsync(
         string group, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(group);
-        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _runtimeCts.Token);
+        SingleFlightOperation<IReadOnlyDictionary<string, int?>> operation = GetProxyGroupDelayOperation(group);
+        return operation.RequestAsync(
+            token => TestProxyGroupDelayCoreAsync(group, token),
+            cancellationToken);
+    }
+
+    private async Task<IReadOnlyDictionary<string, int?>> TestProxyGroupDelayCoreAsync(
+        string group,
+        CancellationToken operationCancellationToken)
+    {
+        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
+            operationCancellationToken,
+            _runtimeCts.Token);
         CancellationToken token = linked.Token;
         await _operationLock.WaitAsync(token);
         try
@@ -2066,42 +2285,120 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public Task SetTunAsync(bool enabled, CancellationToken cancellationToken = default) =>
-        SetTunCoreAsync(enabled, persistPreference: true, cancellationToken: cancellationToken);
+    public async Task SetTunAsync(bool enabled, CancellationToken cancellationToken = default)
+    {
+        await RequestTunOperationAsync(
+                enabled,
+                persistPreference: true,
+                operationLockHeld: false,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+    }
 
-    private async Task SetTunCoreAsync(
+    private Task<TunState> RequestTunOperationAsync(
         bool enabled,
         bool persistPreference,
+        bool operationLockHeld,
+        CancellationToken cancellationToken) =>
+        _tunOperation.RequestAsync(
+            enabled,
+            (target, token) => SetTunCoreAsync(
+                target,
+                persistPreference,
+                operationLockHeld,
+                token),
+            cancellationToken);
+
+    private async Task<TunState> SetTunCoreAsync(
+        bool enabled,
+        bool persistPreference,
+        bool operationLockHeld,
         CancellationToken cancellationToken)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        AppSettings previousSettings = _settings;
-        bool preferenceChanged = persistPreference && previousSettings.TunEnabled != enabled;
-        try
+        bool operationLockAcquired = false;
+        if (!operationLockHeld)
         {
-            if (preferenceChanged)
+            if (!_operationLock.TryEnter())
             {
-                await SaveSettingsForOperationAsync(
-                    previousSettings with { TunEnabled = enabled },
-                    cancellationToken);
+                throw new OperationBusyException("TUN");
             }
 
+            operationLockAcquired = true;
+        }
+
+        AppSettings previousSettings = _settings;
+        bool preferenceChanged = persistPreference && previousSettings.TunEnabled != enabled;
+        TunState? serviceResponseState = null;
+        try
+        {
             _snapshot = _snapshot with { Tun = enabled ? TunState.Enabling : TunState.Disabling };
             Publish();
             ServiceTunPayload payload = new(
                 _settings.ControllerPort,
                 string.Empty,
                 enabled);
-            ServiceResponse response = enabled
-                ? await _localDevice.EnableTunAsync(payload, cancellationToken)
-                : await _localDevice.DisableTunAsync(payload, cancellationToken);
+            ServiceResponse response = await _localDevice.SetTunAsync(payload, cancellationToken)
+                .ConfigureAwait(false);
+            serviceResponseState = response.Tun;
             if (!response.Succeeded)
             {
-                throw new InvalidOperationException(response.Error ?? "TUN 操作失败。");
+                _confirmedTunState = response.Tun;
+                _snapshot = _snapshot with
+                {
+                    Tun = response.Tun,
+                    ErrorMessage = response.Error ?? "TUN 操作失败。"
+                };
+                Publish();
+                throw new ServiceCommandException(
+                    response.ErrorCode,
+                    response.Error ?? "TUN 操作失败。");
             }
 
+            if (response.Tun != (enabled ? TunState.On : TunState.Off))
+            {
+                _confirmedTunState = response.Tun;
+                _snapshot = _snapshot with { Tun = response.Tun, ErrorMessage = response.Error };
+                Publish();
+                throw new ServiceCommandException(
+                    response.ErrorCode == ServiceErrorCode.None
+                        ? ServiceErrorCode.TunStateUnknown
+                        : response.ErrorCode,
+                    response.Error ?? "TUN 状态无法确认。");
+            }
+
+            if (preferenceChanged)
+            {
+                await SaveSettingsForOperationAsync(
+                    previousSettings with { TunEnabled = enabled },
+                    cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            _confirmedTunState = response.Tun;
             _snapshot = _snapshot with { Tun = response.Tun, ErrorMessage = null };
             Publish();
+            return response.Tun;
+        }
+        catch (OperationCanceledException)
+        {
+            if (preferenceChanged)
+            {
+                await RestoreSettingsAfterOperationFailureAsync(previousSettings);
+            }
+
+            TunState state = serviceResponseState is TunState confirmedState
+                ? confirmedState
+                : TunState.Unknown;
+            _confirmedTunState = state;
+            _snapshot = _snapshot with
+            {
+                Tun = state,
+                ErrorMessage = serviceResponseState is TunState
+                    ? null
+                    : "TUN 操作已取消，状态无法确认。"
+            };
+            Publish();
+            throw;
         }
         catch (TimeoutException exception)
         {
@@ -2110,6 +2407,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
+            _confirmedTunState = TunState.Unavailable;
             _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
@@ -2121,6 +2419,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
+            _confirmedTunState = TunState.Failed;
             _snapshot = _snapshot with { Tun = TunState.Failed, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
             Publish();
             throw new InvalidOperationException("TUN 操作结果无法确认，请检查服务状态后重试。", exception);
@@ -2132,6 +2431,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
+            _confirmedTunState = TunState.Unavailable;
             _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
@@ -2143,6 +2443,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
+            _confirmedTunState = TunState.Unavailable;
             _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
@@ -2154,13 +2455,29 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
-            _snapshot = _snapshot with { Tun = TunState.Failed };
+            if (serviceResponseState is TunState responseState)
+            {
+                _confirmedTunState = responseState;
+                _snapshot = _snapshot with
+                {
+                    Tun = responseState,
+                    ErrorMessage = _snapshot.ErrorMessage ?? "TUN 操作结果无法确认。"
+                };
+            }
+            else
+            {
+                _confirmedTunState = TunState.Failed;
+                _snapshot = _snapshot with { Tun = TunState.Failed };
+            }
             Publish();
             throw;
         }
         finally
         {
-            _operationLock.Release();
+            if (operationLockAcquired)
+            {
+                _operationLock.Release();
+            }
         }
     }
 
@@ -2377,11 +2694,17 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _networkSwitchRuntimeController.StatusChanged -= OnNetworkSwitchStatusChanged;
         await _networkSwitchRuntimeController.DisposeAsync();
 
-        if (_snapshot.Tun == TunState.On)
+        if (_usingServiceCore
+            && _snapshot.Tun is not (TunState.Off or TunState.Unavailable))
         {
             try
             {
-                await SetTunCoreAsync(false, persistPreference: false, cancellationToken: CancellationToken.None);
+                await RequestTunOperationAsync(
+                        enabled: false,
+                        persistPreference: false,
+                        operationLockHeld: false,
+                        cancellationToken: CancellationToken.None)
+                    .ConfigureAwait(false);
             }
             catch
             {
@@ -2482,6 +2805,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             return;
         }
 
+        TunState observedTun = ResolveConfirmedTunState(tunEnabled);
         _coreHealthConfirmed = true;
         _snapshot = _snapshot with
         {
@@ -2493,13 +2817,44 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 ErrorMessage = null
             },
             Logs = _logBuffer.Snapshot(),
-            Tun = tunEnabled is null
-                ? _snapshot.Tun
-                : tunEnabled.Value ? TunState.On : TunState.Off,
+            Tun = observedTun,
             ErrorMessage = null
         };
         Publish();
         EnsureLogStreamStarted();
+    }
+
+    private TunState ResolveConfirmedTunState(bool? controllerEnabled)
+    {
+        if (controllerEnabled is false)
+        {
+            return _confirmedTunState is TunState.Off or TunState.Unavailable
+                ? _confirmedTunState
+                : TunState.Unknown;
+        }
+
+        // The service is the only writer. A controller boolean by itself is
+        // deliberately represented as Unknown until the service has also
+        // confirmed the Windows network probe for the same process.
+        if (controllerEnabled is true && _confirmedTunState == TunState.On)
+        {
+            return TunState.On;
+        }
+
+        return _confirmedTunState == TunState.Unavailable
+            ? TunState.Unavailable
+            : TunState.Unknown;
+    }
+
+    private TunState AdoptServiceTunState(TunState state)
+    {
+        _confirmedTunState = state switch
+        {
+            TunState.On => TunState.On,
+            TunState.Off => TunState.Off,
+            _ => state
+        };
+        return state;
     }
 
     private async Task RefreshOptionalDataAsync(
@@ -2644,6 +2999,59 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         && left.IsCurrent == right.IsCurrent
         && left.Providers.SequenceEqual(right.Providers, StringComparer.Ordinal);
 
+    private async Task RefreshModeSnapshotAsync(
+        MihomoApiClient api,
+        long generation,
+        CancellationToken cancellationToken)
+    {
+        await _dataRefreshLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureControllerSession(api, generation, "模式刷新期间核心会话已切换，请重试。");
+            using JsonDocument configuration = await api.GetConfigurationAsync(
+                force: false,
+                cancellationToken);
+            EnsureControllerSession(api, generation, "模式刷新期间核心会话已切换，请重试。");
+            ProxyMode? mode = MihomoDataParser.ParseMode(configuration);
+            if (mode is not ProxyMode confirmedMode)
+            {
+                throw new InvalidOperationException("Mihomo 未返回可识别的代理模式。");
+            }
+
+            _snapshot = _snapshot with { Core = _snapshot.Core with { Mode = confirmedMode } };
+            Publish();
+        }
+        finally
+        {
+            _dataRefreshLock.Release();
+        }
+    }
+
+    private async Task RefreshProxySelectionSnapshotAsync(
+        MihomoApiClient api,
+        long generation,
+        CancellationToken cancellationToken)
+    {
+        await _dataRefreshLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureControllerSession(api, generation, "节点刷新期间核心会话已切换，请重试。");
+            using JsonDocument proxies = await api.GetProxiesAsync(cancellationToken);
+            EnsureControllerSession(api, generation, "节点刷新期间核心会话已切换，请重试。");
+            (IReadOnlyList<ProxyGroup> groups, IReadOnlyList<ProxyNode> nodes) = MihomoDataParser.ParseProxies(proxies);
+            _snapshot = _snapshot with
+            {
+                ProxyGroups = ReuseIfEqual(_snapshot.ProxyGroups, groups, ProxyGroupsEqual),
+                ProxyNodes = ReuseIfEqual(_snapshot.ProxyNodes, nodes, ProxyNodesEqual)
+            };
+            Publish();
+        }
+        finally
+        {
+            _dataRefreshLock.Release();
+        }
+    }
+
     private async Task RefreshCoreHealthWithRetryAsync(CancellationToken cancellationToken)
     {
         MihomoApiClient? api = _api;
@@ -2764,6 +3172,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     SetController(null);
                     await StopLogStreamAsync();
                     await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
+                    _confirmedTunState = TunState.Unavailable;
                     _snapshot = _snapshot with { Tun = TunState.Unavailable };
                     MarkCoreHealthUnconfirmed("服务重连", serviceException ?? exception, retryCount);
                     retryDelay = IncreaseRetryDelay(retryDelay);
@@ -2774,7 +3183,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 {
                     SetController(CreateApiClient());
                     await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
-                    _snapshot = _snapshot with { Tun = serviceStatus.Tun };
+                    _snapshot = _snapshot with { Tun = AdoptServiceTunState(serviceStatus.Tun) };
                     MarkCoreHealthUnconfirmed("控制器重连", exception, retryCount);
                     retryDelay = IncreaseRetryDelay(retryDelay);
                     continue;
@@ -2783,7 +3192,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 SetController(null);
                 await StopLogStreamAsync();
                 await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
-                _snapshot = _snapshot with { Tun = serviceStatus.Tun };
+                _snapshot = _snapshot with { Tun = AdoptServiceTunState(serviceStatus.Tun) };
                 if (serviceStatus.Core is CoreState.Stopped or CoreState.Failed)
                 {
                     UpdateCoreState(
@@ -3292,7 +3701,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         Func<EndpointSession, CancellationToken, Task> remoteOperation,
         CancellationToken cancellationToken,
         bool routeToRemote = true,
-        bool includeRulesAndProviders = true)
+        bool includeRulesAndProviders = true,
+        MutationRefreshScope refreshScope = MutationRefreshScope.Full)
     {
         ArgumentNullException.ThrowIfNull(localOperation);
         ArgumentNullException.ThrowIfNull(remoteOperation);
@@ -3309,9 +3719,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 throw new InvalidOperationException(staleSessionMessage);
             }
 
-            if (!await RefreshRemoteControllerSnapshotAsync(
+            if (!await RefreshRemoteMutationSnapshotAsync(
                     remoteSession,
                     remoteStatus,
+                    refreshScope,
                     cancellationToken)
                 .ConfigureAwait(false))
             {
@@ -3335,10 +3746,21 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         EnsureControllerCommand(api, generation, command, staleSessionMessage);
         await localOperation(api, generation, cancellationToken).ConfigureAwait(false);
         EnsureControllerSession(api, generation, staleSessionMessage);
-        await RefreshFromApiAsync(
-                cancellationToken,
-                includeRulesAndProviders)
-            .ConfigureAwait(false);
+        if (refreshScope == MutationRefreshScope.Mode)
+        {
+            await RefreshModeSnapshotAsync(api, generation, cancellationToken).ConfigureAwait(false);
+        }
+        else if (refreshScope == MutationRefreshScope.ProxySelection)
+        {
+            await RefreshProxySelectionSnapshotAsync(api, generation, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await RefreshFromApiAsync(
+                    cancellationToken,
+                    includeRulesAndProviders)
+                .ConfigureAwait(false);
+        }
         EnsureControllerSession(api, generation, staleSessionMessage);
     }
 
@@ -3592,6 +4014,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task ApplyProgramTunPreferenceAsync(CancellationToken cancellationToken)
     {
+        if (!_usingServiceCore)
+        {
+            _confirmedTunState = TunState.Unavailable;
+            if (_snapshot.Tun != TunState.Unavailable)
+            {
+                _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                Publish();
+            }
+
+            return;
+        }
+
         MihomoControllerSession? session = _controllerSessions.Current;
         if (session is null)
         {
@@ -3606,35 +4040,33 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             "程序 TUN 设置期间核心会话已切换，请重试。");
         using JsonDocument configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
         bool? current = MihomoDataParser.ParseTunEnabled(configuration);
-        if (current is not bool currentValue || currentValue == _settings.TunEnabled)
+        if (current is not bool currentValue)
         {
             return;
         }
 
-        try
+        TunState expectedConfirmedState = currentValue ? TunState.On : TunState.Off;
+        if (currentValue == _settings.TunEnabled
+            && _confirmedTunState == expectedConfirmedState)
         {
-            await api.SetTunAsync(_settings.TunEnabled, cancellationToken);
-            if (!await ConfirmTunStateAsync(api, _settings.TunEnabled, cancellationToken))
+            _confirmedTunState = currentValue ? TunState.On : TunState.Off;
+            if (!currentValue && ReferenceEquals(_api, api) && _snapshot.Tun is not (TunState.Enabling or TunState.Disabling))
             {
-                throw new InvalidOperationException("Mihomo 未确认程序 TUN 设置。");
-            }
-        }
-        catch
-        {
-            if (!await TryRestoreTunStateAsync(api, currentValue))
-            {
-                _snapshot = _snapshot with { Tun = TunState.Unknown };
+                _snapshot = _snapshot with { Tun = TunState.Off };
                 Publish();
             }
 
-            throw;
+            return;
         }
 
-        if (ReferenceEquals(_api, api))
-        {
-            _snapshot = _snapshot with { Tun = _settings.TunEnabled ? TunState.On : TunState.Off, ErrorMessage = null };
-            Publish();
-        }
+        // TUN writes belong exclusively to the service. The desktop process
+        // may observe /configs here, but it never PATCHes the controller.
+        await RequestTunOperationAsync(
+                _settings.TunEnabled,
+                persistPreference: false,
+                operationLockHeld: true,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task ReconcileSystemProxyAsync(bool coreRunning, CancellationToken cancellationToken)
@@ -3712,39 +4144,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch
         {
-        }
-    }
-
-    private static async Task<bool> ConfirmTunStateAsync(
-        MihomoApiClient api,
-        bool expected,
-        CancellationToken cancellationToken)
-    {
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            using JsonDocument configuration = await api.GetConfigurationAsync(force: false, cancellationToken);
-            if (MihomoDataParser.ParseTunEnabled(configuration) == expected)
-            {
-                return true;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
-        }
-
-        return false;
-    }
-
-    private static async Task<bool> TryRestoreTunStateAsync(MihomoApiClient api, bool expected)
-    {
-        using CancellationTokenSource timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-        try
-        {
-            await api.SetTunAsync(expected, timeout.Token);
-            return await ConfirmTunStateAsync(api, expected, timeout.Token);
-        }
-        catch
-        {
-            return false;
         }
     }
 
@@ -3910,6 +4309,91 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             retryDelay = TimeSpan.FromSeconds(Math.Min(30, retryDelay.TotalSeconds * 2));
         }
+    }
+
+    private async Task<bool> RefreshRemoteMutationSnapshotAsync(
+        EndpointSession session,
+        EndpointSessionStatusEventArgs status,
+        MutationRefreshScope refreshScope,
+        CancellationToken cancellationToken)
+    {
+        if (refreshScope == MutationRefreshScope.Full)
+        {
+            return await RefreshRemoteControllerSnapshotAsync(session, status, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        await _remoteRefreshReadLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            MihomoControllerSnapshotData snapshot;
+            lock (_remoteRefreshGate)
+            {
+                snapshot = _remoteControllerData is { } current
+                    && current.Generation == status.Generation
+                    && current.SelectionRevision == status.SelectionRevision
+                    ? current.Snapshot
+                    : CreateRemoteSnapshotBaseline(session);
+            }
+
+            if (refreshScope == MutationRefreshScope.Mode)
+            {
+                using JsonDocument configuration = await session.Api.GetConfigurationAsync(
+                    force: false,
+                    cancellationToken);
+                ProxyMode mode = MihomoDataParser.ParseMode(configuration) ?? snapshot.Status.Mode;
+                snapshot = snapshot with { Status = snapshot.Status with { Mode = mode, ErrorMessage = null }, ErrorMessage = null };
+            }
+            else
+            {
+                using JsonDocument proxies = await session.Api.GetProxiesAsync(cancellationToken);
+                (IReadOnlyList<ProxyGroup> groups, IReadOnlyList<ProxyNode> nodes) = MihomoDataParser.ParseProxies(proxies);
+                snapshot = snapshot with
+                {
+                    ProxyGroups = ReuseIfEqual(snapshot.ProxyGroups, groups, ProxyGroupsEqual),
+                    ProxyNodes = ReuseIfEqual(snapshot.ProxyNodes, nodes, ProxyNodesEqual),
+                    ErrorMessage = null
+                };
+            }
+
+            if (!IsCurrentRemoteSession(session, status))
+            {
+                return false;
+            }
+
+            lock (_remoteRefreshGate)
+            {
+                snapshot = snapshot with { Logs = _remoteLogBuffer.Snapshot() };
+                _remoteControllerData = new RemoteControllerData(
+                    status.Generation,
+                    status.SelectionRevision,
+                    snapshot);
+            }
+
+            PublishAppSnapshot();
+            return true;
+        }
+        finally
+        {
+            _remoteRefreshReadLock.Release();
+        }
+    }
+
+    private static MihomoControllerSnapshotData CreateRemoteSnapshotBaseline(EndpointSession session)
+    {
+        CoreStatus status = new(
+            CoreState.Running,
+            session.Handshake.Version,
+            ConfigurationName: null,
+            ProxyMode.Rule,
+            UploadBytesPerSecond: 0,
+            DownloadBytesPerSecond: 0,
+            UploadBytes: 0,
+            DownloadBytes: 0,
+            ConnectionCount: 0,
+            MemoryBytes: 0,
+            ErrorMessage: null);
+        return new MihomoControllerSnapshotData(status, [], [], [], [], [], [], [], null);
     }
 
     private async Task RunRemoteLogStreamAsync(
@@ -4245,6 +4729,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private void SetCoreRunningPendingHealth(TunState tunState)
     {
         _coreHealthConfirmed = false;
+        TunState observedTun = AdoptServiceTunState(tunState);
         _snapshot = _snapshot with
         {
             Core = _snapshot.Core with
@@ -4254,7 +4739,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 TrafficAvailable = false,
                 MemoryAvailable = false
             },
-            Tun = tunState,
+            Tun = observedTun,
             ErrorMessage = null
         };
         Publish();

@@ -14,6 +14,9 @@ public partial class App : Application, IAsyncDisposable
     private TrayIconService? _trayIcon;
     private readonly ClashTrayRuntime _runtime;
     private readonly string? _smokeDirectory;
+    private readonly object _snapshotDispatchGate = new();
+    private AppSnapshot? _pendingAppSnapshot;
+    private bool _snapshotDispatchScheduled;
     private bool _disposed;
 
     [SuppressMessage(
@@ -110,6 +113,11 @@ public partial class App : Application, IAsyncDisposable
         }
 
         _disposed = true;
+        lock (_snapshotDispatchGate)
+        {
+            _pendingAppSnapshot = null;
+            _snapshotDispatchScheduled = false;
+        }
         _trayIcon?.Dispose();
         await _runtime.DisposeAsync();
         _instanceCoordinator.Dispose();
@@ -139,7 +147,7 @@ public partial class App : Application, IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _mainWindow?.ShowError(exception.Message);
+            ShowCommandError(exception);
         }
     }
 
@@ -151,7 +159,7 @@ public partial class App : Application, IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _mainWindow?.ShowError(exception.Message);
+            ShowCommandError(exception);
         }
     }
 
@@ -170,7 +178,7 @@ public partial class App : Application, IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _mainWindow?.ShowError(exception.Message);
+            ShowCommandError(exception);
         }
     }
 
@@ -181,13 +189,19 @@ public partial class App : Application, IAsyncDisposable
             return;
         }
 
+        if (_runtime.Snapshot.Tun is TunState.Unknown or TunState.Failed or TunState.Unavailable)
+        {
+            _mainWindow?.ShowError(LocalizationService.Get("TunStateUnknown"));
+            return;
+        }
+
         try
         {
             await _runtime.SetTunAsync(_runtime.Snapshot.Tun is not TunState.On);
         }
         catch (Exception exception)
         {
-            _mainWindow?.ShowError(exception.Message);
+            ShowCommandError(exception);
         }
     }
 
@@ -199,7 +213,7 @@ public partial class App : Application, IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _mainWindow?.ShowError(exception.Message);
+            ShowCommandError(exception);
         }
     }
 
@@ -229,7 +243,7 @@ public partial class App : Application, IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _mainWindow?.ShowError(exception.Message);
+            ShowCommandError(exception);
         }
     }
 
@@ -304,7 +318,7 @@ public partial class App : Application, IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _mainWindow?.ShowError(exception.Message);
+            ShowCommandError(exception);
         }
     }
 
@@ -315,12 +329,76 @@ public partial class App : Application, IAsyncDisposable
 
     private void OnAppSnapshotChanged(object? sender, AppSnapshot snapshot)
     {
-        _dispatcherQueue?.TryEnqueue(() =>
+        DispatcherQueue? dispatcher = _dispatcherQueue;
+        if (dispatcher is null)
         {
-            RuntimeSnapshot runtimeSnapshot = RuntimeSnapshotAdapter.ToRuntimeSnapshot(snapshot);
-            UpdateTrayState(runtimeSnapshot);
-            _mainWindow?.UpdateAppSnapshot(snapshot);
-        });
+            return;
+        }
+
+        bool schedule;
+        lock (_snapshotDispatchGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _pendingAppSnapshot = snapshot;
+            schedule = !_snapshotDispatchScheduled;
+            if (schedule)
+            {
+                _snapshotDispatchScheduled = true;
+            }
+        }
+
+        if (schedule && !dispatcher.TryEnqueue(DrainLatestAppSnapshot))
+        {
+            lock (_snapshotDispatchGate)
+            {
+                _snapshotDispatchScheduled = false;
+            }
+        }
+    }
+
+    private void DrainLatestAppSnapshot()
+    {
+        AppSnapshot? snapshot;
+        lock (_snapshotDispatchGate)
+        {
+            snapshot = _pendingAppSnapshot;
+            _pendingAppSnapshot = null;
+        }
+
+        try
+        {
+            if (snapshot is not null && !_disposed)
+            {
+                RuntimeSnapshot runtimeSnapshot = RuntimeSnapshotAdapter.ToRuntimeSnapshot(snapshot);
+                UpdateTrayState(runtimeSnapshot);
+                _mainWindow?.UpdateAppSnapshot(snapshot);
+            }
+        }
+        finally
+        {
+            DispatcherQueue? dispatcher = _dispatcherQueue;
+            bool schedule;
+            lock (_snapshotDispatchGate)
+            {
+                schedule = !_disposed && _pendingAppSnapshot is not null;
+                if (!schedule)
+                {
+                    _snapshotDispatchScheduled = false;
+                }
+            }
+
+            if (schedule && (dispatcher is null || !dispatcher.TryEnqueue(DrainLatestAppSnapshot)))
+            {
+                lock (_snapshotDispatchGate)
+                {
+                    _snapshotDispatchScheduled = false;
+                }
+            }
+        }
     }
 
     private void UpdateTrayState(RuntimeSnapshot snapshot)
@@ -342,5 +420,24 @@ public partial class App : Application, IAsyncDisposable
                                 ? TrayState.Paused
                                 : TrayState.Stopped;
         _trayIcon?.SetState(state);
+    }
+
+    private void ShowCommandError(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        string message = exception switch
+        {
+            OperationBusyException => LocalizationService.Get("OperationBusy"),
+            ServiceCommandException { ErrorCode: ServiceErrorCode.OperationBusy }
+                => LocalizationService.Get("OperationBusy"),
+            ServiceCommandException { ErrorCode: ServiceErrorCode.TunConfigurationMissingAddress }
+                => LocalizationService.Get("TunConfigurationMissingAddress"),
+            ServiceCommandException { ErrorCode: ServiceErrorCode.TunMissingInterfaceAddress }
+                => LocalizationService.Get("TunRecoveryMissingAddress"),
+            ServiceCommandException { ErrorCode: ServiceErrorCode.TunStateUnknown }
+                => LocalizationService.Get("TunRecoveryUnknown"),
+            _ => exception.Message
+        };
+        _mainWindow?.ShowError(message);
     }
 }

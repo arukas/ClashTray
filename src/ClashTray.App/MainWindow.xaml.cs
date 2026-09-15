@@ -43,6 +43,9 @@ public sealed partial class MainWindow : Window
     private bool _updatingSnapshot;
     private bool _updatingThemeControls;
     private bool _pageRefreshInProgress;
+    private bool _configurationSelectionInProgress;
+    private PanelPage _activePage = PanelPage.Proxy;
+    private RuntimeSnapshot? _latestDisplayedSnapshot;
     private EndpointKind _activeEndpointKind = EndpointKind.Local;
     private readonly Queue<(double Up, double Down)> _trafficHistory = new();
     private DateTime _lastTrafficSample;
@@ -155,6 +158,7 @@ public sealed partial class MainWindow : Window
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        _latestDisplayedSnapshot = snapshot;
         ApplyTheme(_runtime?.Settings.Theme ?? "system");
         CoreStatus core = snapshot.Core;
         _updatingSnapshot = true;
@@ -167,7 +171,8 @@ public sealed partial class MainWindow : Window
         SystemProxySwitch.IsEnabled = localController
             && snapshot.SystemProxy is not (SystemProxyState.Enabling or SystemProxyState.Disabling);
         TunSwitch.IsEnabled = localController
-            && snapshot.Tun is not (TunState.Enabling or TunState.Disabling);
+            && core.State == CoreState.Running
+            && (snapshot.Tun is TunState.Off or TunState.On);
         ToolTipService.SetToolTip(
             SystemProxySwitch,
             localController
@@ -304,27 +309,80 @@ public sealed partial class MainWindow : Window
             MixedEndpointButton.Tag = $"127.0.0.1:{settings.MixedPort}";
         }
 
-        ConfigurationsComboBox.SelectionChanged -= ConfigurationsComboBox_SelectionChanged;
-        ConfigurationsComboBox.Items.Clear();
-        foreach (ConfigurationProfile configuration in snapshot.Configurations)
+        string? activeConfigurationId = snapshot.Configurations
+            .FirstOrDefault(configuration => configuration.IsActive)
+            ?.Id;
+        bool configurationItemsChanged = ConfigurationsComboBox.Items.Count != snapshot.Configurations.Count;
+        if (!configurationItemsChanged)
         {
-            ConfigurationsComboBox.Items.Add(new ComboBoxItem { Content = configuration.Name, Tag = configuration.Id });
-            if (configuration.IsActive || configuration.Id == _selectedConfigurationId)
+            for (int index = 0; index < snapshot.Configurations.Count; index++)
             {
-                _selectedConfigurationId = configuration.Id;
+                ConfigurationProfile configuration = snapshot.Configurations[index];
+                if (ConfigurationsComboBox.Items[index] is not ComboBoxItem item
+                    || !string.Equals(item.Tag as string, configuration.Id, StringComparison.Ordinal)
+                    || !string.Equals(item.Content as string, configuration.Name, StringComparison.Ordinal))
+                {
+                    configurationItemsChanged = true;
+                    break;
+                }
             }
         }
 
-        ComboBoxItem? selectedItem = ConfigurationsComboBox.Items
-            .OfType<ComboBoxItem>()
-            .FirstOrDefault(item => string.Equals(item.Tag as string, _selectedConfigurationId, StringComparison.OrdinalIgnoreCase));
-        ConfigurationsComboBox.SelectedItem = selectedItem;
-        ConfigurationsComboBox.SelectionChanged += ConfigurationsComboBox_SelectionChanged;
-        _proxyPage?.UpdateSnapshot(snapshot);
-        _rulesPage?.UpdateSnapshot(snapshot);
-        _connectionsPage?.UpdateSnapshot(snapshot);
-        _logsPage?.UpdateSnapshot(snapshot);
-        _settingsPage?.UpdateSnapshot(snapshot);
+        if (configurationItemsChanged)
+        {
+            ConfigurationsComboBox.SelectionChanged -= ConfigurationsComboBox_SelectionChanged;
+            ConfigurationsComboBox.Items.Clear();
+            foreach (ConfigurationProfile configuration in snapshot.Configurations)
+            {
+                ConfigurationsComboBox.Items.Add(new ComboBoxItem
+                {
+                    Content = configuration.Name,
+                    Tag = configuration.Id
+                });
+            }
+
+            ConfigurationsComboBox.SelectionChanged += ConfigurationsComboBox_SelectionChanged;
+        }
+
+        if (!_configurationSelectionInProgress)
+        {
+            _selectedConfigurationId = activeConfigurationId
+                ?? snapshot.Configurations.FirstOrDefault(configuration =>
+                    string.Equals(configuration.Id, _selectedConfigurationId, StringComparison.OrdinalIgnoreCase))?.Id;
+            ComboBoxItem? selectedItem = ConfigurationsComboBox.Items
+                .OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag as string, _selectedConfigurationId, StringComparison.OrdinalIgnoreCase));
+            if (!ReferenceEquals(ConfigurationsComboBox.SelectedItem, selectedItem))
+            {
+                ConfigurationsComboBox.SelectionChanged -= ConfigurationsComboBox_SelectionChanged;
+                ConfigurationsComboBox.SelectedItem = selectedItem;
+                ConfigurationsComboBox.SelectionChanged += ConfigurationsComboBox_SelectionChanged;
+            }
+        }
+
+        UpdateActivePage(snapshot);
+    }
+
+    private void UpdateActivePage(RuntimeSnapshot snapshot)
+    {
+        switch (_activePage)
+        {
+            case PanelPage.Proxy:
+                _proxyPage?.UpdateSnapshot(snapshot);
+                break;
+            case PanelPage.Rules:
+                _rulesPage?.UpdateSnapshot(snapshot);
+                break;
+            case PanelPage.Connections:
+                _connectionsPage?.UpdateSnapshot(snapshot);
+                break;
+            case PanelPage.Logs:
+                _logsPage?.UpdateSnapshot(snapshot);
+                break;
+            case PanelPage.Settings:
+                _settingsPage?.UpdateSnapshot(snapshot);
+                break;
+        }
     }
 
     public void ShowError(string message)
@@ -604,6 +662,7 @@ public sealed partial class MainWindow : Window
         if (ConfigurationsComboBox.SelectedItem is ComboBoxItem { Tag: string id } && _runtime is not null)
         {
             _selectedConfigurationId = id;
+            _configurationSelectionInProgress = true;
             try
             {
                 await _runtime.SetActiveConfigurationAsync(id);
@@ -611,6 +670,10 @@ public sealed partial class MainWindow : Window
             catch (Exception exception)
             {
                 ShowError(exception.Message);
+            }
+            finally
+            {
+                _configurationSelectionInProgress = false;
             }
         }
     }
@@ -688,6 +751,7 @@ public sealed partial class MainWindow : Window
 
     private void NavigateTo(UIElement? page, PanelPage target)
     {
+        _activePage = target;
         bool isDashboard = page == _proxyPage;
         DashboardScrollViewer.Visibility = isDashboard ? Visibility.Visible : Visibility.Collapsed;
         OtherPageScrollViewer.Visibility = isDashboard ? Visibility.Collapsed : Visibility.Visible;
@@ -704,6 +768,14 @@ public sealed partial class MainWindow : Window
         if (target is PanelPage.Rules or PanelPage.Settings)
         {
             _ = RefreshPageDataAsync();
+        }
+
+        if (_latestDisplayedSnapshot is not null)
+        {
+            // Keep the currently projected endpoint when navigating. Using
+            // _runtime.Snapshot here would replace a remote projection with
+            // the local device snapshot until the next remote refresh.
+            UpdateActivePage(_latestDisplayedSnapshot);
         }
     }
 

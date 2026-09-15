@@ -180,6 +180,23 @@ public sealed class MihomoApiCompatibilityTests
     }
 
     [TestMethod]
+    public async Task TunPatchAcceptsNoContentResponse()
+    {
+        using RecordingHandler handler = new RecordingHandler();
+        using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
+        MihomoApiClient api = new MihomoApiClient(
+            httpClient,
+            new Uri("http://127.0.0.1:9090/"),
+            string.Empty);
+
+        using JsonDocument response = await api.SetTunAsync(true);
+
+        Assert.AreEqual(HttpMethod.Patch, handler.Method);
+        Assert.AreEqual("/configs", handler.PathAndQuery);
+        Assert.AreEqual(JsonValueKind.Object, response.RootElement.ValueKind);
+    }
+
+    [TestMethod]
     public void RulesParserReadsOfficialObjectShape()
     {
         using JsonDocument document = JsonDocument.Parse("{\"rules\":[{\"type\":\"DOMAIN\",\"payload\":\"example.com\",\"proxy\":\"Proxy\",\"size\":-1}]} ");

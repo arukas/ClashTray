@@ -185,13 +185,23 @@ public enum ServiceCommand
 
 public sealed record ServiceRequest(Guid RequestId, ServiceCommand Command, string? Payload = null);
 
+public enum ServiceErrorCode
+{
+    None,
+    OperationBusy,
+    TunConfigurationMissingAddress,
+    TunMissingInterfaceAddress,
+    TunStateUnknown
+}
+
 public sealed record ServiceResponse(
     Guid RequestId,
     bool Succeeded,
     TunState Tun,
     string? Payload = null,
     string? Error = null,
-    CoreState Core = CoreState.Stopped);
+    CoreState Core = CoreState.Stopped,
+    ServiceErrorCode ErrorCode = ServiceErrorCode.None);
 
 public sealed record ServiceCorePayload(
     string ConfigurationPath,

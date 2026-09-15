@@ -174,7 +174,6 @@ public sealed partial class ProxyPage : UserControl
             });
             body.Children.Add(list);
             bool populated = false;
-            bool selectionPending = false;
             void Populate()
             {
                 if (populated)
@@ -251,18 +250,25 @@ public sealed partial class ProxyPage : UserControl
             }
             list.SelectionChanged += async (_, _) =>
             {
-                if (selectionPending || list.SelectedItem is not ListViewItem { Tag: string name } || name == group.Current)
+                if (list.SelectedItem is not ListViewItem { Tag: string name } || name == group.Current)
                 {
                     return;
                 }
 
-                selectionPending = true;
-                // Keep the confirmed selection visible while the core applies the request.
-                list.SelectedItem = list.Items.OfType<ListViewItem>().FirstOrDefault(item => (string?)item.Tag == group.Current);
-                list.IsEnabled = false;
-                try { await _runtime.SelectProxyAsync(group.Name, name); }
-                catch (Exception exception) { DelayText.Text = ErrorSanitizer.Sanitize(exception); }
-                finally { selectionPending = false; list.IsEnabled = true; }
+                // Keep the list interactive. The Core per-group latest-wins
+                // admission coalesces rapid clicks while snapshots continue
+                // to render only confirmed selections.
+                try
+                {
+                    await _runtime.SelectProxyAsync(group.Name, name);
+                }
+                catch (Exception exception)
+                {
+                    DelayText.Text = ErrorSanitizer.Sanitize(exception);
+                    list.SelectedItem = list.Items
+                        .OfType<ListViewItem>()
+                        .FirstOrDefault(item => (string?)item.Tag == group.Current);
+                }
             };
 
             StackPanel container = new StackPanel();

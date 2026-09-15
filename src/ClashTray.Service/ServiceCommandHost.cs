@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -11,13 +13,17 @@ namespace ClashTray.Service;
 internal sealed class ServiceCommandHost : IAsyncDisposable
 {
     private const int MaxRequestCharacters = 64 * 1024;
+    private const int MaxServerInstances = 32;
     private static readonly TimeSpan RequestIdleTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(5);
     private readonly string _userSid;
     private readonly CancellationTokenSource _cts = new();
     private readonly ServiceRuntimeController _controller;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly ConcurrentDictionary<int, Task> _clientTasks = new();
+    private readonly SemaphoreSlim _clientSlots = new(MaxServerInstances, MaxServerInstances);
     private Task? _serverTask;
+    private int _nextClientId;
 
     public ServiceCommandHost(string userSid)
     {
@@ -42,17 +48,99 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
         }
 
         await _controller.DisposeAsync();
+        _clientSlots.Dispose();
         _cts.Dispose();
     }
 
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification = "Connected pipes transfer ownership to a tracked client task; every untransferred pipe is disposed in finally.")]
     private async Task RunAsync()
     {
         while (!_cts.IsCancellationRequested)
         {
-            await using NamedPipeServerStream pipe = CreatePipe();
             try
             {
+                await _clientSlots.WaitAsync(_cts.Token);
+            }
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+            {
+                break;
+            }
+
+            NamedPipeServerStream? pipe = null;
+            bool slotTransferred = false;
+            try
+            {
+                pipe = CreatePipe();
                 await pipe.WaitForConnectionAsync(_cts.Token);
+                TrackClient(pipe);
+                pipe = null;
+                slotTransferred = true;
+            }
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (TimeoutException) when (!_cts.IsCancellationRequested)
+            {
+            }
+            catch (IOException) when (!_cts.IsCancellationRequested)
+            {
+            }
+            finally
+            {
+                if (pipe is not null)
+                {
+                    await pipe.DisposeAsync();
+                }
+
+                if (!slotTransferred)
+                {
+                    _clientSlots.Release();
+                }
+            }
+        }
+
+        while (!_clientTasks.IsEmpty)
+        {
+            Task[] clients = _clientTasks.Values.ToArray();
+            try
+            {
+                await Task.WhenAll(clients);
+            }
+            catch (Exception) when (_cts.IsCancellationRequested)
+            {
+                // Client shutdown is driven by the host cancellation token.
+                // Individual pipe failures are handled by HandleClientAsync.
+            }
+        }
+    }
+
+    private void TrackClient(NamedPipeServerStream pipe)
+    {
+        int clientId = Interlocked.Increment(ref _nextClientId);
+        Task clientTask = HandleClientAsync(pipe);
+        _clientTasks[clientId] = clientTask;
+        _ = clientTask.ContinueWith(
+            completedTask =>
+            {
+                _ = completedTask.Exception;
+                _clientTasks.TryRemove(clientId, out _);
+                _clientSlots.Release();
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private async Task HandleClientAsync(NamedPipeServerStream pipe)
+    {
+        await using (pipe.ConfigureAwait(false))
+        {
+            try
+            {
                 using StreamReader reader = new StreamReader(pipe, leaveOpen: true);
                 await using StreamWriter writer = new StreamWriter(pipe, leaveOpen: true) { AutoFlush = true };
                 string? line;
@@ -64,7 +152,7 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                 }
                 catch (OperationCanceledException) when (!_cts.IsCancellationRequested)
                 {
-                    continue;
+                    return;
                 }
                 catch (InvalidDataException)
                 {
@@ -72,12 +160,12 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                         writer,
                         new ServiceResponse(Guid.Empty, false, TunState.Failed, Error: "服务请求超过大小限制。", Core: _controller.CoreState),
                         _cts.Token);
-                    continue;
+                    return;
                 }
 
                 if (string.IsNullOrWhiteSpace(line))
                 {
-                    continue;
+                    return;
                 }
 
                 ServiceResponse response;
@@ -94,14 +182,16 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                         false,
                         TunState.Failed,
                         Error: ErrorSanitizer.Sanitize(exception),
-                        Core: _controller.CoreState);
+                        Core: _controller.CoreState,
+                        ErrorCode: exception is OperationBusyException
+                            ? ServiceErrorCode.OperationBusy
+                            : ServiceErrorCode.None);
                 }
 
                 await WriteResponseAsync(writer, response, _cts.Token);
             }
             catch (OperationCanceledException) when (_cts.IsCancellationRequested)
             {
-                break;
             }
             catch (TimeoutException) when (!_cts.IsCancellationRequested)
             {
@@ -167,7 +257,7 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
         return NamedPipeServerStreamAcl.Create(
             ServicePipeClient.PipeName,
             PipeDirection.InOut,
-            1,
+            MaxServerInstances,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous,
             0,

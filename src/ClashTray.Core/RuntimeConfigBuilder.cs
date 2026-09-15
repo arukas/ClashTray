@@ -17,19 +17,56 @@ public static class RuntimeConfigBuilder
             externalUiPath: null,
             cancellationToken: cancellationToken);
 
-    public static async Task<string> BuildAsync(
+    /// <summary>
+    /// Builds the effective process configuration with TUN explicitly off.
+    /// The user's source configuration is never changed; TUN is enabled later
+    /// only through the service transaction after the core is healthy.
+    /// </summary>
+    public static Task<string> BuildForCoreStartAsync(
+        string sourcePath,
+        string destinationPath,
+        AppSettings settings,
+        string? externalUiPath,
+        CancellationToken cancellationToken = default) =>
+        BuildAsyncCore(
+            sourcePath,
+            destinationPath,
+            settings,
+            externalUiPath,
+            tunEnabled: false,
+            cancellationToken: cancellationToken);
+
+    public static Task<string> BuildAsync(
         string sourcePath,
         string destinationPath,
         AppSettings settings,
         string? externalUiPath,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(settings);
+        return BuildAsyncCore(
+            sourcePath,
+            destinationPath,
+            settings,
+            externalUiPath,
+            settings.TunEnabled,
+            cancellationToken);
+    }
+
+    private static async Task<string> BuildAsyncCore(
+        string sourcePath,
+        string destinationPath,
+        AppSettings settings,
+        string? externalUiPath,
+        bool tunEnabled,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(sourcePath);
         ArgumentNullException.ThrowIfNull(destinationPath);
         ArgumentNullException.ThrowIfNull(settings);
         SettingsValidator.Validate(settings);
         string[] source = await File.ReadAllLinesAsync(sourcePath, cancellationToken);
-        List<string> withTunOverride = ApplyTunOverride(source, settings.TunEnabled);
+        List<string> withTunOverride = ApplyTunOverride(source, tunEnabled);
         List<string> filtered = withTunOverride.Where(line => !IsManagedLine(line)).ToList();
         filtered.Add(string.Empty);
         filtered.Add($"external-controller: 127.0.0.1:{settings.ControllerPort}");
@@ -80,7 +117,7 @@ public static class RuntimeConfigBuilder
             {
                 if (inTunBlock && !tunHasEnable)
                 {
-                    result.Add(CreateTunEnableLine(tunIndent, enabled));
+                    result.Add(CreateTunEnableLine(tunIndent + 2, enabled));
                 }
 
                 foundTunBlock = true;
@@ -95,7 +132,7 @@ public static class RuntimeConfigBuilder
             {
                 if (!tunHasEnable)
                 {
-                    result.Add(CreateTunEnableLine(tunIndent, enabled));
+                    result.Add(CreateTunEnableLine(tunIndent + 2, enabled));
                 }
 
                 inTunBlock = false;
@@ -113,7 +150,7 @@ public static class RuntimeConfigBuilder
 
         if (inTunBlock && !tunHasEnable)
         {
-            result.Add(CreateTunEnableLine(tunIndent, enabled));
+            result.Add(CreateTunEnableLine(tunIndent + 2, enabled));
         }
 
         if (!foundTunBlock)
