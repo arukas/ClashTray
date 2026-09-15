@@ -10,6 +10,7 @@ public sealed partial class RulesPage : UserControl
     private readonly ClashTrayRuntime _runtime;
     private IReadOnlyList<RuleInfo> _rules = [];
     private bool _refreshing;
+    private bool _controllerWritable = true;
 
     public RulesPage(ClashTrayRuntime runtime)
     {
@@ -20,8 +21,21 @@ public sealed partial class RulesPage : UserControl
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
+        UpdateSnapshot(snapshot, controllerWritable: true);
+    }
+
+    public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
-        if (ReferenceEquals(_rules, snapshot.Rules))
+        bool interactivityChanged = _controllerWritable != controllerWritable;
+        _controllerWritable = controllerWritable;
+        RefreshRulesButton.IsEnabled = _controllerWritable && !_refreshing;
+        ToolTipService.SetToolTip(
+            RefreshRulesButton,
+            _controllerWritable
+                ? null
+                : LocalizationService.Get("RemoteControllerReadOnly"));
+        if (ReferenceEquals(_rules, snapshot.Rules) && !interactivityChanged)
         {
             return;
         }
@@ -36,7 +50,7 @@ public sealed partial class RulesPage : UserControl
 
     private async void RefreshRulesButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_refreshing)
+        if (_refreshing || !_controllerWritable)
         {
             return;
         }
@@ -58,7 +72,7 @@ public sealed partial class RulesPage : UserControl
         finally
         {
             _refreshing = false;
-            RefreshRulesButton.IsEnabled = true;
+            RefreshRulesButton.IsEnabled = _controllerWritable;
         }
     }
 

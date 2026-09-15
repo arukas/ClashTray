@@ -13,6 +13,7 @@ public sealed partial class ProxyPage : UserControl
     private readonly DispatcherTimer _searchTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private RuntimeSnapshot? _snapshot;
     private string? _signature;
+    private bool _controllerWritable = true;
 
     public ProxyPage(ClashTrayRuntime runtime)
     {
@@ -32,7 +33,14 @@ public sealed partial class ProxyPage : UserControl
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
+        UpdateSnapshot(snapshot, controllerWritable: true);
+    }
+
+    public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
+        bool interactivityChanged = _controllerWritable != controllerWritable;
+        _controllerWritable = controllerWritable;
         bool proxyDataUnchanged = _snapshot is not null
             && ReferenceEquals(_snapshot.ProxyGroups, snapshot.ProxyGroups)
             && ReferenceEquals(_snapshot.ProxyNodes, snapshot.ProxyNodes)
@@ -42,13 +50,13 @@ public sealed partial class ProxyPage : UserControl
         EmptyTitle.Text = snapshot.Core.State == CoreState.Running
             ? LocalizationService.Get("ProxyEmptyTitleRunning")
             : LocalizationService.Get("ProxyEmptyTitleStopped");
-        if (proxyDataUnchanged)
+        if (proxyDataUnchanged && !interactivityChanged)
         {
             return;
         }
 
         string signature = System.Text.Json.JsonSerializer.Serialize(new { snapshot.ProxyGroups, snapshot.ProxyNodes, snapshot.Providers });
-        if (_signature == signature)
+        if (_signature == signature && !interactivityChanged)
         {
             return;
         }
@@ -119,12 +127,22 @@ public sealed partial class ProxyPage : UserControl
             {
                 Content = new FontIcon { Glyph = "\uE9D9", FontSize = 14 },
                 Style = (Style)Application.Current.Resources["ClashTrayIconButtonStyle"],
-                IsEnabled = snapshot.Core.State == CoreState.Running && group.Members.Count > 0 && !_testingGroups.Contains(group.Name)
+                IsEnabled = _controllerWritable
+                    && snapshot.Core.State == CoreState.Running
+                    && group.Members.Count > 0
+                    && !_testingGroups.Contains(group.Name)
             };
-            ToolTipService.SetToolTip(test, LocalizationService.Get("ToolTipTestGroup"));
+            ToolTipService.SetToolTip(test, _controllerWritable
+                ? LocalizationService.Get("ToolTipTestGroup")
+                : LocalizationService.Get("RemoteControllerReadOnly"));
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(test, LocalizationService.Format("AutomationTestGroupFormat", group.Name));
             test.Click += async (_, _) =>
             {
+                if (!_controllerWritable)
+                {
+                    return;
+                }
+
                 if (!_testingGroups.Add(group.Name))
                 {
                     return;
@@ -154,7 +172,8 @@ public sealed partial class ProxyPage : UserControl
             {
                 SelectionMode = ListViewSelectionMode.Single,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                IsTabStop = false
+                IsTabStop = false,
+                IsEnabled = _controllerWritable
             };
             // The dashboard owns scrolling. Disabling (not hiding) the inner
             // viewport lets wheel/touch/keyboard navigation use that one scroll host.
@@ -252,6 +271,14 @@ public sealed partial class ProxyPage : UserControl
             {
                 if (list.SelectedItem is not ListViewItem { Tag: string name } || name == group.Current)
                 {
+                    return;
+                }
+
+                if (!_controllerWritable)
+                {
+                    list.SelectedItem = list.Items
+                        .OfType<ListViewItem>()
+                        .FirstOrDefault(item => (string?)item.Tag == group.Current);
                     return;
                 }
 
@@ -356,15 +383,27 @@ public sealed partial class ProxyPage : UserControl
                 TextWrapping = TextWrapping.Wrap
             });
             row.Children.Add(labels);
-            Button refresh = new Button { Content = new FontIcon { Glyph = "\uE72C", FontSize = 15 }, Style = (Style)Application.Current.Resources["ClashTrayIconButtonStyle"] };
-            ToolTipService.SetToolTip(refresh, LocalizationService.Format("ToolTipRefreshProviderFormat", provider.Name));
+            Button refresh = new Button
+            {
+                Content = new FontIcon { Glyph = "\uE72C", FontSize = 15 },
+                Style = (Style)Application.Current.Resources["ClashTrayIconButtonStyle"],
+                IsEnabled = _controllerWritable
+            };
+            ToolTipService.SetToolTip(refresh, _controllerWritable
+                ? LocalizationService.Format("ToolTipRefreshProviderFormat", provider.Name)
+                : LocalizationService.Get("RemoteControllerReadOnly"));
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(refresh, LocalizationService.Format("AutomationRefreshProviderFormat", provider.Name));
             refresh.Click += async (_, _) =>
             {
+                if (!_controllerWritable)
+                {
+                    return;
+                }
+
                 refresh.IsEnabled = false;
                 try { await _runtime.RefreshProviderAsync(provider.Name, false); }
                 catch (Exception exception) { DelayText.Text = ErrorSanitizer.Sanitize(exception); }
-                finally { refresh.IsEnabled = true; }
+                finally { refresh.IsEnabled = _controllerWritable; }
             };
             Grid.SetColumn(refresh, 1);
             row.Children.Add(refresh);

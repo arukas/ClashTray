@@ -225,6 +225,7 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="ControllerRemoteFormat" xml:space="preserve"><value>Remote · {0}</value></data>
   <data name="RemoteCoreActionUnavailable" xml:space="preserve"><value>Remote endpoints cannot control the local core</value></data>
   <data name="RemoteLocalNetworkActionUnavailable" xml:space="preserve"><value>Remote endpoints cannot control local network state</value></data>
+  <data name="RemoteControllerReadOnly" xml:space="preserve"><value>Remote controller data is stale; reconnect before changing it</value></data>
   <data name="ToolTipControllerNeedsCore" xml:space="preserve"><value>Open the local controller once the core is running</value></data>
   <data name="ToolTipControllerOpenDashboard" xml:space="preserve"><value>Open MetaCubeXD in the default browser</value></data>
   <data name="ToolTipControllerMissingDashboard" xml:space="preserve"><value>MetaCubeXD assets are missing; select to copy the local controller address</value></data>

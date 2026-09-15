@@ -21,7 +21,7 @@
                 <TextBlock x:Uid="ConnectionsTitle" FontSize="20" FontWeight="SemiBold" />
                 <TextBlock x:Uid="ConnectionsSubtitle" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
             </StackPanel>
-            <Button Grid.Column="2" x:Uid="CloseAllButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="CloseAllButton_Click" />
+            <Button Grid.Column="2" x:Name="CloseAllButton" x:Uid="CloseAllButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="CloseAllButton_Click" />
         </Grid>
 
         <Border Style="{StaticResource ClashTrayCardStyle}">
@@ -51,7 +51,7 @@
                     </Grid.ColumnDefinitions>
                     <FontIcon Glyph="&#xE946;" FontSize="17" Foreground="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
                     <TextBlock Grid.Column="1" x:Uid="ConnectionDetailsTitle" Margin="9,0,0,0" FontWeight="SemiBold" VerticalAlignment="Center" />
-                    <Button Grid.Column="2" x:Uid="CloseSelectedButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="CloseSelectedButton_Click" />
+                    <Button Grid.Column="2" x:Name="CloseSelectedButton" x:Uid="CloseSelectedButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="CloseSelectedButton_Click" />
                 </Grid>
                 <TextBlock x:Name="DetailsText" x:Uid="ConnectionDetailsText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
             </StackPanel>

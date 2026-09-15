@@ -23,7 +23,7 @@
                 <TextBlock x:Uid="LogsSubtitle" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
             </StackPanel>
             <Button Grid.Column="2" x:Uid="CopyLogsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="CopyButton_Click" Margin="4,0,0,0" />
-            <Button Grid.Column="3" x:Uid="ClearLogsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearButton_Click" Margin="4,0,0,0" />
+            <Button Grid.Column="3" x:Name="ClearLogsButton" x:Uid="ClearLogsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearButton_Click" Margin="4,0,0,0" />
         </Grid>
 
         <Border Style="{StaticResource ClashTrayCardStyle}">

@@ -225,6 +225,7 @@
   <data name="ControllerRemoteFormat" xml:space="preserve"><value>远程 · {0}</value></data>
   <data name="RemoteCoreActionUnavailable" xml:space="preserve"><value>远程端点不能控制本机核心</value></data>
   <data name="RemoteLocalNetworkActionUnavailable" xml:space="preserve"><value>远程端点不能控制本机网络状态</value></data>
+  <data name="RemoteControllerReadOnly" xml:space="preserve"><value>远程控制器数据已过期，重新连接后才能修改</value></data>
   <data name="ToolTipControllerNeedsCore" xml:space="preserve"><value>核心运行后可打开本机控制器</value></data>
   <data name="ToolTipControllerOpenDashboard" xml:space="preserve"><value>在默认浏览器打开 MetaCubeXD</value></data>
   <data name="ToolTipControllerMissingDashboard" xml:space="preserve"><value>MetaCubeXD 资源缺失；点击复制本机控制器地址</value></data>

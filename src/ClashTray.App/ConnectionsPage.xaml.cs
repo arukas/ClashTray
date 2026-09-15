@@ -9,6 +9,7 @@ public sealed partial class ConnectionsPage : UserControl
 {
     private readonly ClashTrayRuntime _runtime;
     private IReadOnlyList<ConnectionInfo> _connections = [];
+    private bool _controllerWritable = true;
 
     public ConnectionsPage(ClashTrayRuntime runtime)
     {
@@ -19,8 +20,16 @@ public sealed partial class ConnectionsPage : UserControl
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
+        UpdateSnapshot(snapshot, controllerWritable: true);
+    }
+
+    public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
-        if (ReferenceEquals(_connections, snapshot.Connections))
+        bool interactivityChanged = _controllerWritable != controllerWritable;
+        _controllerWritable = controllerWritable;
+        UpdateActionButtons();
+        if (ReferenceEquals(_connections, snapshot.Connections) && !interactivityChanged)
         {
             return;
         }
@@ -60,6 +69,7 @@ public sealed partial class ConnectionsPage : UserControl
             });
         }
         EmptyListText.Visibility = ConnectionsListView.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateActionButtons();
     }
 
     private void ConnectionsListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -67,15 +77,22 @@ public sealed partial class ConnectionsPage : UserControl
         if (ConnectionsListView.SelectedItem is not ListViewItem { Tag: ConnectionInfo connection })
         {
             DetailsText.Text = LocalizationService.Get("SelectConnectionHint");
+            UpdateActionButtons();
             return;
         }
 
         DetailsText.Text = LocalizationService.Format("ConnectionDetailsFormat",
             connection.Network, connection.Chain, connection.Rule, connection.RulePayload, connection.UploadBytes, connection.DownloadBytes);
+        UpdateActionButtons();
     }
 
     private async void CloseSelectedButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!_controllerWritable)
+        {
+            return;
+        }
+
         if (ConnectionsListView.SelectedItem is ListViewItem { Tag: ConnectionInfo connection })
         {
             try
@@ -91,6 +108,11 @@ public sealed partial class ConnectionsPage : UserControl
 
     private async void CloseAllButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!_controllerWritable)
+        {
+            return;
+        }
+
         try
         {
             await _runtime.CloseAllConnectionsAsync();
@@ -99,5 +121,22 @@ public sealed partial class ConnectionsPage : UserControl
         {
             DetailsText.Text = LocalizationService.Format("CloseConnectionFailedFormat", ErrorSanitizer.Sanitize(exception));
         }
+    }
+
+    private void UpdateActionButtons()
+    {
+        if (ConnectionsListView is null)
+        {
+            return;
+        }
+
+        bool hasSelection = ConnectionsListView.SelectedItem is ListViewItem { Tag: ConnectionInfo };
+        CloseSelectedButton.IsEnabled = _controllerWritable && hasSelection;
+        CloseAllButton.IsEnabled = _controllerWritable && ConnectionsListView.Items.Count > 0;
+        string? tooltip = _controllerWritable
+            ? null
+            : LocalizationService.Get("RemoteControllerReadOnly");
+        ToolTipService.SetToolTip(CloseSelectedButton, tooltip);
+        ToolTipService.SetToolTip(CloseAllButton, tooltip);
     }
 }

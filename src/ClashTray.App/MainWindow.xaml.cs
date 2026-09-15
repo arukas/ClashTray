@@ -53,6 +53,10 @@ public sealed partial class MainWindow : Window
     private DateTimeOffset? _activeControllerLastConfirmedAt;
     private string _activeEndpointDisplayName = EndpointId.Local.Value;
 
+    private bool ActiveControllerWritable =>
+        _activeEndpointKind == EndpointKind.Local
+        || _activeEndpointState == EndpointSessionState.Connected;
+
     public MainWindow(App app)
     {
         _app = app;
@@ -169,6 +173,8 @@ public sealed partial class MainWindow : Window
         CoreStatus core = snapshot.Core;
         _updatingSnapshot = true;
         bool localController = _activeEndpointKind == EndpointKind.Local;
+        bool controllerWritable = localController
+            || _activeEndpointState == EndpointSessionState.Connected;
         bool coreBusy = core.State is CoreState.Validating
             or CoreState.Starting
             or CoreState.Stopping
@@ -190,9 +196,15 @@ public sealed partial class MainWindow : Window
                 ? null
                 : LocalizationService.Get("RemoteLocalNetworkActionUnavailable"));
         bool coreRunning = core.State == CoreState.Running;
-        RuleModeButton.IsEnabled = coreRunning;
-        GlobalModeButton.IsEnabled = coreRunning;
-        DirectModeButton.IsEnabled = coreRunning;
+        RuleModeButton.IsEnabled = coreRunning && controllerWritable;
+        GlobalModeButton.IsEnabled = coreRunning && controllerWritable;
+        DirectModeButton.IsEnabled = coreRunning && controllerWritable;
+        string? modeTooltip = controllerWritable
+            ? null
+            : LocalizationService.Get("RemoteControllerReadOnly");
+        ToolTipService.SetToolTip(RuleModeButton, modeTooltip);
+        ToolTipService.SetToolTip(GlobalModeButton, modeTooltip);
+        ToolTipService.SetToolTip(DirectModeButton, modeTooltip);
         RuleModeButton.IsChecked = coreRunning && core.Mode == ProxyMode.Rule;
         GlobalModeButton.IsChecked = coreRunning && core.Mode == ProxyMode.Global;
         DirectModeButton.IsChecked = coreRunning && core.Mode == ProxyMode.Direct;
@@ -383,24 +395,25 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        UpdateActivePage(snapshot);
+        UpdateActivePage(snapshot, controllerWritable);
     }
 
-    private void UpdateActivePage(RuntimeSnapshot snapshot)
+    private void UpdateActivePage(RuntimeSnapshot snapshot, bool? controllerWritable = null)
     {
+        bool writable = controllerWritable ?? ActiveControllerWritable;
         switch (_activePage)
         {
             case PanelPage.Proxy:
-                _proxyPage?.UpdateSnapshot(snapshot);
+                _proxyPage?.UpdateSnapshot(snapshot, writable);
                 break;
             case PanelPage.Rules:
-                _rulesPage?.UpdateSnapshot(snapshot);
+                _rulesPage?.UpdateSnapshot(snapshot, writable);
                 break;
             case PanelPage.Connections:
-                _connectionsPage?.UpdateSnapshot(snapshot);
+                _connectionsPage?.UpdateSnapshot(snapshot, writable);
                 break;
             case PanelPage.Logs:
-                _logsPage?.UpdateSnapshot(snapshot);
+                _logsPage?.UpdateSnapshot(snapshot, writable);
                 break;
             case PanelPage.Settings:
                 _settingsPage?.UpdateSnapshot(snapshot);
@@ -622,11 +635,35 @@ public sealed partial class MainWindow : Window
         await _app.ToggleTunAsync();
     }
 
-    private async void RuleModeButton_Click(object sender, RoutedEventArgs e) => await _app.SetModeAsync(ProxyMode.Rule);
+    private async void RuleModeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ActiveControllerWritable)
+        {
+            return;
+        }
 
-    private async void GlobalModeButton_Click(object sender, RoutedEventArgs e) => await _app.SetModeAsync(ProxyMode.Global);
+        await _app.SetModeAsync(ProxyMode.Rule);
+    }
 
-    private async void DirectModeButton_Click(object sender, RoutedEventArgs e) => await _app.SetModeAsync(ProxyMode.Direct);
+    private async void GlobalModeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ActiveControllerWritable)
+        {
+            return;
+        }
+
+        await _app.SetModeAsync(ProxyMode.Global);
+    }
+
+    private async void DirectModeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ActiveControllerWritable)
+        {
+            return;
+        }
+
+        await _app.SetModeAsync(ProxyMode.Direct);
+    }
 
     private async void ImportLocalButton_Click(object sender, RoutedEventArgs e) => await ImportLocalConfigurationAsync();
 
@@ -798,7 +835,7 @@ public sealed partial class MainWindow : Window
             // Keep the currently projected endpoint when navigating. Using
             // _runtime.Snapshot here would replace a remote projection with
             // the local device snapshot until the next remote refresh.
-            UpdateActivePage(_latestDisplayedSnapshot);
+            UpdateActivePage(_latestDisplayedSnapshot, ActiveControllerWritable);
         }
     }
 

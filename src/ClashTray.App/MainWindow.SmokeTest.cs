@@ -289,19 +289,34 @@ public sealed partial class MainWindow
             "示例远程端点",
             new Uri("https://remote.example.test"));
         DateTimeOffset lastConfirmedAt = DateTimeOffset.UtcNow.AddMinutes(-3);
+        RuntimeSnapshot remoteData = sample with
+        {
+            Connections = [new ConnectionInfo(
+                "smoke-connection",
+                "tcp",
+                "127.0.0.1:1234",
+                "example.test:443",
+                "MATCH",
+                "代理",
+                128,
+                256,
+                DateTimeOffset.UtcNow.AddMinutes(-1))],
+            Rules = [new RuleInfo("MATCH", "example.test", "代理", 1)],
+            Logs = [new LogEntry(DateTimeOffset.UtcNow.AddMinutes(-1), "mihomo", "info", "remote data")]
+        };
         ControllerSessionSnapshot remoteController = new(
             remote,
             EndpointSessionState.Reconnecting,
             1,
             lastConfirmedAt,
-            sample.Core,
-            sample.ProxyGroups,
-            sample.ProxyNodes,
-            sample.Connections,
-            sample.Rules,
-            sample.Providers,
-            sample.RuleProviders,
-            sample.Logs,
+            remoteData.Core,
+            remoteData.ProxyGroups,
+            remoteData.ProxyNodes,
+            remoteData.Connections,
+            remoteData.Rules,
+            remoteData.Providers,
+            remoteData.RuleProviders,
+            remoteData.Logs,
             EndpointCapabilityDefaults.Remote,
             "smoke stale controller");
         AppSnapshot remoteSnapshot = local with
@@ -324,12 +339,50 @@ public sealed partial class MainWindow
                 StringComparison.Ordinal)
             || CoreActionButton.IsEnabled
             || SystemProxySwitch.IsEnabled
-            || TunSwitch.IsEnabled)
+            || TunSwitch.IsEnabled
+            || RuleModeButton.IsEnabled
+            || GlobalModeButton.IsEnabled
+            || DirectModeButton.IsEnabled)
         {
             throw new InvalidOperationException("Remote stale state was not visible or local controls were enabled.");
         }
 
+        StackPanel remoteGroups = (StackPanel)_proxyPage!.FindName("GroupsPanel");
+        if (remoteGroups.Children.Count == 0
+            || ((Grid)((StackPanel)((Border)remoteGroups.Children[0]).Child).Children[0]).Children[2] is not Button remoteTestButton
+            || remoteTestButton.IsEnabled)
+        {
+            throw new InvalidOperationException("Remote stale proxy actions were not disabled.");
+        }
+
         await SaveDiagnosticFrameAsync(directory, "remote-stale-controller");
+
+        NavigateTo(_rulesPage, PanelPage.Rules);
+        await Task.Delay(50);
+        if (((Button)_rulesPage!.FindName("RefreshRulesButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote stale rule refresh was not disabled.");
+        }
+
+        NavigateTo(_connectionsPage, PanelPage.Connections);
+        await Task.Delay(50);
+        ListView remoteConnections = (ListView)_connectionsPage!.FindName("ConnectionsListView");
+        remoteConnections.SelectedIndex = 0;
+        await Task.Delay(20);
+        if (((Button)_connectionsPage!.FindName("CloseAllButton")).IsEnabled
+            || ((Button)_connectionsPage.FindName("CloseSelectedButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote stale connection actions were not disabled.");
+        }
+
+        NavigateTo(_logsPage, PanelPage.Logs);
+        await Task.Delay(50);
+        if (((Button)_logsPage!.FindName("ClearLogsButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote stale log clearing was not disabled.");
+        }
+
+        NavigateTo(_proxyPage, PanelPage.Proxy);
         await File.WriteAllTextAsync(
             Path.Combine(directory, "remote-freshness-checks.json"),
             JsonSerializer.Serialize(new
@@ -339,6 +392,11 @@ public sealed partial class MainWindow
                 LocalCoreActionDisabled = true,
                 LocalSystemProxyActionDisabled = true,
                 LocalTunActionDisabled = true,
+                RemoteModeActionsDisabled = true,
+                RemoteProxyActionsDisabled = true,
+                RemoteRulesRefreshDisabled = true,
+                RemoteConnectionCloseDisabled = true,
+                RemoteLogClearDisabled = true,
                 NetworkStateChanged = false,
                 TunTouched = false
             }, DiagnosticJsonOptions));
