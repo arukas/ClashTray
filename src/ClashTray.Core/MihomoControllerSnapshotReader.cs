@@ -13,7 +13,8 @@ public sealed record MihomoControllerSnapshotData(
     IReadOnlyList<ProviderStatus> Providers,
     IReadOnlyList<ProviderStatus> RuleProviders,
     IReadOnlyList<LogEntry> Logs,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    DateTimeOffset? LastConfirmedAt = null);
 
 /// <summary>
 /// Reads the bounded, read-only Controller data used by an active endpoint snapshot.
@@ -100,9 +101,8 @@ public sealed class MihomoControllerSnapshotReader
                 {
                     using JsonDocument proxyProviders = await api.GetProvidersAsync(cancellationToken);
                     using JsonDocument ruleProviders = await api.GetRuleProvidersAsync(cancellationToken);
-                    using JsonDocument combined = JsonDocument.Parse(
+                    return JsonDocument.Parse(
                         $$"""{"proxyProviders":{{proxyProviders.RootElement.GetRawText()}},"ruleProviders":{{ruleProviders.RootElement.GetRawText()}}}""");
-                    return combined;
                 },
                 document =>
                 {
@@ -160,6 +160,9 @@ public sealed class MihomoControllerSnapshotReader
         string? errorMessage = errors.Count == 0
             ? null
             : $"远程 Controller 部分数据刷新失败：{string.Join("；", errors)}";
+        DateTimeOffset? lastConfirmedAt = errorMessage is null
+            ? DateTimeOffset.UtcNow
+            : previous?.LastConfirmedAt;
 
         TrafficSnapshot trafficValue = traffic.Value;
         CoreStatus status = new(
@@ -186,7 +189,8 @@ public sealed class MihomoControllerSnapshotReader
             providers.Succeeded ? providers.Value.Providers : previousProviders,
             providers.Succeeded ? providers.Value.RuleProviders : previousRuleProviders,
             logs.Succeeded ? logs.Value : previousLogs,
-            errorMessage);
+            errorMessage,
+            lastConfirmedAt);
     }
 
     [SuppressMessage(

@@ -399,6 +399,59 @@ public sealed class RuntimeEndpointTests
     }
 
     [TestMethod]
+    public async Task RemoteSnapshotMarksPartialRefreshAsReconnectingAndRecovers()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        StaticConnector connector = new();
+        await using ClashTrayRuntime runtime = new(
+            paths,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            connector,
+            (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken),
+            remoteLogStreamRunner: (_, _, _) => Task.CompletedTask);
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("https://office.example.test"));
+
+        try
+        {
+            await runtime.SaveRemoteEndpointAsync(new EndpointRecord(remote));
+            await runtime.SelectEndpointAsync(remote.Id);
+
+            AppSnapshot confirmed = runtime.AppSnapshot;
+            Assert.AreEqual(EndpointSessionState.Connected, confirmed.ActiveController.State);
+            DateTimeOffset confirmedAt = confirmed.ActiveController.LastConfirmedAt!.Value;
+
+            connector.FailTraffic = true;
+            await runtime.RefreshDataAsync();
+
+            AppSnapshot stale = runtime.AppSnapshot;
+            Assert.AreEqual(EndpointSessionState.Reconnecting, stale.ActiveController.State);
+            Assert.AreEqual(confirmedAt, stale.ActiveController.LastConfirmedAt);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(stale.ActiveController.ErrorMessage));
+
+            connector.FailTraffic = false;
+            await runtime.RefreshDataAsync();
+
+            AppSnapshot recovered = runtime.AppSnapshot;
+            Assert.AreEqual(EndpointSessionState.Connected, recovered.ActiveController.State);
+            Assert.IsNull(recovered.ActiveController.ErrorMessage);
+            Assert.IsNotNull(recovered.ActiveController.LastConfirmedAt);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
     public async Task ActiveRemoteLogStreamIsCancelledWhenEndpointChanges()
     {
         string root = CreateRoot();
@@ -544,11 +597,22 @@ public sealed class RuntimeEndpointTests
     {
         private SnapshotHandler? _handler;
         private int _callCount;
+        private int _failTraffic;
 
         public TaskCompletionSource<bool> ConnectEntered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int CallCount => Volatile.Read(ref _callCount);
+
+        public bool FailTraffic
+        {
+            get => Volatile.Read(ref _failTraffic) == 1;
+            set
+            {
+                Volatile.Write(ref _failTraffic, value ? 1 : 0);
+                Volatile.Read(ref _handler)?.SetFailTraffic(value);
+            }
+        }
 
         public int ModePatchCount => Volatile.Read(ref _handler)?.ModePatchCount ?? 0;
 
@@ -591,6 +655,7 @@ public sealed class RuntimeEndpointTests
             Interlocked.Increment(ref _callCount);
             ConnectEntered.TrySetResult(true);
             SnapshotHandler handler = new();
+            handler.SetFailTraffic(Volatile.Read(ref _failTraffic) == 1);
             Volatile.Write(ref _handler, handler);
             HttpClient client = new(handler, disposeHandler: true)
             {
@@ -639,6 +704,9 @@ public sealed class RuntimeEndpointTests
             private int _fakeIpCacheClearCount;
             private int _dnsCacheClearCount;
             private int _geoUpdateCount;
+            private int _failTraffic;
+
+            public bool FailTraffic => Volatile.Read(ref _failTraffic) == 1;
 
             public int ModePatchCount => Volatile.Read(ref _modePatchCount);
 
@@ -673,6 +741,8 @@ public sealed class RuntimeEndpointTests
                 Interlocked.Exchange(ref _downloadBytes, downloadBytes);
             }
 
+            public void SetFailTraffic(bool fail) => Volatile.Write(ref _failTraffic, fail ? 1 : 0);
+
             protected override async Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request,
                 CancellationToken cancellationToken)
@@ -680,6 +750,10 @@ public sealed class RuntimeEndpointTests
                 cancellationToken.ThrowIfCancellationRequested();
                 long uploadBytes = Interlocked.Read(ref _uploadBytes);
                 long downloadBytes = Interlocked.Read(ref _downloadBytes);
+                if (request.RequestUri?.AbsolutePath == "/traffic" && FailTraffic)
+                {
+                    throw new HttpRequestException("simulated traffic refresh failure");
+                }
                 if (request.Method == HttpMethod.Patch
                     && request.RequestUri?.AbsolutePath == "/configs")
                 {

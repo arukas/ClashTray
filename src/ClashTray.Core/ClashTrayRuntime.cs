@@ -3308,6 +3308,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             ? snapshot
             : snapshot with
             {
+                State = remoteData.ErrorMessage is null
+                    ? snapshot.State
+                    : snapshot.State == EndpointSessionState.Connected
+                        ? EndpointSessionState.Reconnecting
+                        : snapshot.State,
+                LastConfirmedAt = remoteData.LastConfirmedAt ?? snapshot.LastConfirmedAt,
                 Status = remoteData.Status,
                 ProxyGroups = remoteData.ProxyGroups,
                 ProxyNodes = remoteData.ProxyNodes,
@@ -3498,6 +3504,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                         return;
                     }
 
+                    MarkRemoteControllerFailure(session, status, exception);
+
                     lock (_remoteRefreshGate)
                     {
                         if (initialRefreshPending)
@@ -3527,6 +3535,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             if (IsCurrentRemoteSession(session, status))
             {
+                MarkRemoteControllerFailure(session, status, exception);
                 lock (_remoteRefreshGate)
                 {
                     CompleteRemoteRefreshUnsafe(
@@ -3618,6 +3627,35 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         finally
         {
             _remoteRefreshReadLock.Release();
+        }
+    }
+
+    private void MarkRemoteControllerFailure(
+        EndpointSession session,
+        EndpointSessionStatusEventArgs status,
+        Exception exception)
+    {
+        if (!IsCurrentRemoteSession(session, status))
+        {
+            return;
+        }
+
+        string errorMessage = $"远程 Controller 部分数据刷新失败：{ErrorSanitizer.Sanitize(exception)}";
+        lock (_remoteRefreshGate)
+        {
+            MihomoControllerSnapshotData snapshot = _remoteControllerData is { } currentData
+                && currentData.Generation == status.Generation
+                && currentData.SelectionRevision == status.SelectionRevision
+                ? currentData.Snapshot
+                : CreateRemoteSnapshotBaseline(session);
+            _remoteControllerData = new RemoteControllerData(
+                status.Generation,
+                status.SelectionRevision,
+                snapshot with
+                {
+                    Status = snapshot.Status with { ErrorMessage = errorMessage },
+                    ErrorMessage = errorMessage
+                });
         }
     }
 
@@ -4363,7 +4401,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             lock (_remoteRefreshGate)
             {
-                snapshot = snapshot with { Logs = _remoteLogBuffer.Snapshot() };
+                snapshot = snapshot with
+                {
+                    Status = snapshot.Status with { ErrorMessage = null },
+                    Logs = _remoteLogBuffer.Snapshot(),
+                    ErrorMessage = null,
+                    LastConfirmedAt = DateTimeOffset.UtcNow
+                };
                 _remoteControllerData = new RemoteControllerData(
                     status.Generation,
                     status.SelectionRevision,
@@ -4393,7 +4437,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             ConnectionCount: 0,
             MemoryBytes: 0,
             ErrorMessage: null);
-        return new MihomoControllerSnapshotData(status, [], [], [], [], [], [], [], null);
+        return new MihomoControllerSnapshotData(status, [], [], [], [], [], [], [], null, null);
     }
 
     private async Task RunRemoteLogStreamAsync(
