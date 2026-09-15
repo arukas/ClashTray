@@ -115,6 +115,7 @@ public sealed partial class MainWindow
         await VerifyNodeScrollingAsync(directory, sample);
         await VerifyProxyDelayDisplayAsync(directory, sample);
         await VerifyRemoteFreshnessPresentationAsync(directory, sample);
+        await VerifyNetworkSwitchErrorPresentationAsync(directory);
         await VerifySettingsDraftAsync(directory);
         NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect actual);
         NativeMethods.Rect anchor = GetTrayRect();
@@ -586,6 +587,77 @@ public sealed partial class MainWindow
         }, DiagnosticJsonOptions));
         NavigateTo(_proxyPage, PanelPage.Proxy);
     }
+
+    private async Task VerifyNetworkSwitchErrorPresentationAsync(string directory)
+    {
+        RuntimeSnapshot local = _runtime!.Snapshot;
+        NetworkContextSnapshot context = new(
+            7,
+            DateTimeOffset.UtcNow,
+            NetworkConnectivityKind.WiFi,
+            "Office Wi-Fi",
+            "wifi-1",
+            NetworkPermissionState.Allowed,
+            false,
+            true);
+        NetworkSwitchStatus status = new(
+            true,
+            NetworkSwitchState.Failed,
+            NetworkPermissionState.Allowed,
+            context,
+            new NetworkSwitchDecision(
+                NetworkSwitchDecisionKind.KeepCurrentWithWarning,
+                NetworkSwitchState.Failed,
+                NetworkSwitchReason.MissingTarget,
+                context.Revision,
+                "missing-profile",
+                Message: "Mapped configuration is unavailable."),
+            "Mapped configuration is unavailable.",
+            ErrorCode.NetworkRuleTargetMissing);
+
+        NavigateTo(_settingsPage!, PanelPage.Settings);
+        UpdateSnapshot(local with { NetworkSwitch = status });
+        RootGrid.UpdateLayout();
+        string expectedMissingTarget = LocalizationService.Format(
+            "NetworkSwitchStatusErrorFormat",
+            LocalizationService.Format("NetworkSwitchStatusFormat", LocalizationService.Get("NetworkSwitchStateFailed"), "Office Wi-Fi"),
+            LocalizationService.Get("NetworkSwitchErrorTargetMissing"));
+        if (((TextBlock)_settingsPage!.FindName("NetworkSwitchStateText")).Text != expectedMissingTarget)
+        {
+            throw new InvalidOperationException("Missing network-switch target error was not localized in the settings page.");
+        }
+
+        status = status with
+        {
+            LastDecision = status.LastDecision! with { Reason = NetworkSwitchReason.ExecutionFailed },
+            ErrorMessage = "Automatic switch failed.",
+            ErrorCode = ErrorCode.ConfigurationSwitchFailed
+        };
+        UpdateSnapshot(local with { NetworkSwitch = status });
+        RootGrid.UpdateLayout();
+        string expectedExecutionFailure = LocalizationService.Format(
+            "NetworkSwitchStatusErrorFormat",
+            LocalizationService.Format("NetworkSwitchStatusFormat", LocalizationService.Get("NetworkSwitchStateFailed"), "Office Wi-Fi"),
+            LocalizationService.Get("NetworkSwitchErrorExecution"));
+        if (((TextBlock)_settingsPage.FindName("NetworkSwitchStateText")).Text != expectedExecutionFailure)
+        {
+            throw new InvalidOperationException("Network-switch execution error was not localized in the settings page.");
+        }
+
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "network-switch-error-checks.json"),
+            JsonSerializer.Serialize(new
+            {
+                MissingTargetErrorCode = ErrorCode.NetworkRuleTargetMissing.ToString(),
+                ExecutionFailureErrorCode = ErrorCode.ConfigurationSwitchFailed.ToString(),
+                ErrorDetailsVisible = true,
+                CurrentConfigurationPreserved = true,
+                NetworkStateChanged = false,
+                TunTouched = false
+            }, DiagnosticJsonOptions));
+        UpdateSnapshot(local);
+    }
+
     private async Task VerifyProxyDelayDisplayAsync(string directory, RuntimeSnapshot sample)
     {
         ProxyPage proxyPage = _proxyPage!;

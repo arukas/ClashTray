@@ -1130,12 +1130,28 @@ public sealed partial class SettingsPage : UserControl
         };
         if (!status.Available)
         {
-            return state;
+            return AppendNetworkSwitchErrorDetail(state, status.ErrorCode);
         }
 
         string network = status.Context?.CurrentSsid
             ?? LocalizationService.Get("NetworkSwitchNoNetwork");
-        return LocalizationService.Format("NetworkSwitchStatusFormat", state, network);
+        return AppendNetworkSwitchErrorDetail(
+            LocalizationService.Format("NetworkSwitchStatusFormat", state, network),
+            status.ErrorCode);
+    }
+
+    private static string AppendNetworkSwitchErrorDetail(string status, ErrorCode errorCode)
+    {
+        string? detail = errorCode switch
+        {
+            ErrorCode.NetworkRuleTargetMissing => LocalizationService.Get("NetworkSwitchErrorTargetMissing"),
+            ErrorCode.ConfigurationSwitchFailed => LocalizationService.Get("NetworkSwitchErrorExecution"),
+            _ => null
+        };
+
+        return detail is null
+            ? status
+            : LocalizationService.Format("NetworkSwitchStatusErrorFormat", status, detail);
     }
 
     private sealed class NetworkRuleEditorRow(

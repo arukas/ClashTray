@@ -202,6 +202,9 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="NetworkSwitchStateFailed" xml:space="preserve"><value>Automatic switching failed</value></data>
   <data name="NetworkSwitchNoNetwork" xml:space="preserve"><value>No SSID identified</value></data>
   <data name="NetworkSwitchStatusFormat" xml:space="preserve"><value>{0} · Network: {1}</value></data>
+  <data name="NetworkSwitchStatusErrorFormat" xml:space="preserve"><value>{0} · {1}</value></data>
+  <data name="NetworkSwitchErrorTargetMissing" xml:space="preserve"><value>The mapped configuration is unavailable; the current configuration was kept</value></data>
+  <data name="NetworkSwitchErrorExecution" xml:space="preserve"><value>Automatic switching failed; the current configuration was kept</value></data>
   <data name="NetworkSwitchEnableConfirmTitle" xml:space="preserve"><value>Enable automatic network switching?</value></data>
   <data name="NetworkSwitchEnableConfirmContent" xml:space="preserve"><value>ClashTray may change the active Mihomo configuration after the network becomes stable. System proxy and TUN settings are not changed by this option.</value></data>
   <data name="NetworkSwitchEnableConfirmPrimary" xml:space="preserve"><value>Enable</value></data>

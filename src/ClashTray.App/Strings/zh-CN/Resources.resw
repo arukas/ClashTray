@@ -202,6 +202,9 @@
   <data name="NetworkSwitchStateFailed" xml:space="preserve"><value>自动切换失败</value></data>
   <data name="NetworkSwitchNoNetwork" xml:space="preserve"><value>未识别到 SSID</value></data>
   <data name="NetworkSwitchStatusFormat" xml:space="preserve"><value>{0} · 网络：{1}</value></data>
+  <data name="NetworkSwitchStatusErrorFormat" xml:space="preserve"><value>{0} · {1}</value></data>
+  <data name="NetworkSwitchErrorTargetMissing" xml:space="preserve"><value>匹配规则的目标配置不可用，已保持当前配置</value></data>
+  <data name="NetworkSwitchErrorExecution" xml:space="preserve"><value>自动切换执行失败，已保持当前配置</value></data>
   <data name="NetworkSwitchEnableConfirmTitle" xml:space="preserve"><value>启用按网络自动切换？</value></data>
   <data name="NetworkSwitchEnableConfirmContent" xml:space="preserve"><value>网络稳定后，ClashTray 可能会切换当前 Mihomo 配置。此选项不会修改系统代理或 TUN 设置。</value></data>
   <data name="NetworkSwitchEnableConfirmPrimary" xml:space="preserve"><value>启用</value></data>
