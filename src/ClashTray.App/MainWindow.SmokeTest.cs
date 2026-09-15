@@ -116,6 +116,7 @@ public sealed partial class MainWindow
         await VerifyProxyDelayDisplayAsync(directory, sample);
         await VerifyRemoteFreshnessPresentationAsync(directory, sample);
         await VerifyNetworkSwitchErrorPresentationAsync(directory);
+        await VerifySsidFeatureScopeAsync(directory);
         await VerifySettingsDraftAsync(directory);
         NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect actual);
         NativeMethods.Rect anchor = GetTrayRect();
@@ -662,6 +663,32 @@ public sealed partial class MainWindow
                 TunTouched = false
             }, DiagnosticJsonOptions));
         UpdateSnapshot(local);
+    }
+
+    private async Task VerifySsidFeatureScopeAsync(string directory)
+    {
+        NavigateTo(_settingsPage!, PanelPage.Settings);
+        RootGrid.UpdateLayout();
+
+        if (_settingsPage!.FindName("NetworkSwitchCard") is not Border networkSwitchCard
+            || networkSwitchCard.Visibility != Visibility.Collapsed
+            || _settingsPage.FindName("NetworkSwitchRulesCard") is not Border networkSwitchRulesCard
+            || networkSwitchRulesCard.Visibility != Visibility.Collapsed)
+        {
+            throw new InvalidOperationException("SSID/Wi-Fi switching must remain hidden in the 0.3.0 Beta.");
+        }
+
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "ssid-feature-checks.json"),
+            JsonSerializer.Serialize(new
+            {
+                IncludedInBeta = false,
+                SettingsCardsVisible = false,
+                NetworkContextSourceCreated = false,
+                SsidReadOrMonitored = false,
+                NetworkStateChanged = false,
+                TunTouched = false
+            }, DiagnosticJsonOptions));
     }
 
     private async Task VerifyProxyDelayDisplayAsync(string directory, RuntimeSnapshot sample)

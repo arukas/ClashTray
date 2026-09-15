@@ -32,10 +32,10 @@ public partial class App : Application, IAsyncDisposable
             : new AppPaths(
                 Path.Combine(smokeDirectory, "user"),
                 Path.Combine(smokeDirectory, "service"));
-        INetworkContextSource? networkContextSource = smokeDirectory is null
-            ? new WindowsNetworkContextSource()
-            : null;
-        _runtime = new ClashTrayRuntime(runtimePaths, networkContextSource);
+        // Wi-Fi/SSID switching is intentionally outside the 0.3.0 Beta scope.
+        // Keep the runtime seam available for a later release, but do not create
+        // a production network context source that could read or monitor SSIDs.
+        _runtime = new ClashTrayRuntime(runtimePaths, networkContextSource: null);
         UnhandledException += (_, e) =>
         {
             string directory = _smokeDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClashTray", "logs");

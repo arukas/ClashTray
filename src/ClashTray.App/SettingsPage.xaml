@@ -33,7 +33,10 @@
             </StackPanel>
         </Border>
 
-        <Border Style="{StaticResource ClashTrayCardStyle}">
+        <!-- Wi-Fi/SSID switching is deferred beyond the 0.3.0 Beta. The model
+             and runtime seam remain for a later release, but the Beta does not
+             expose SSID rules or network monitoring in the settings UI. -->
+        <Border x:Name="NetworkSwitchCard" Style="{StaticResource ClashTrayCardStyle}" Visibility="Collapsed">
             <StackPanel Spacing="8">
                 <TextBlock x:Uid="NetworkSwitchHeader" FontWeight="SemiBold" />
                 <ToggleSwitch x:Name="NetworkSwitchEnabledSwitch" x:Uid="NetworkSwitchEnabledSwitch" />
@@ -53,7 +56,7 @@
             </StackPanel>
         </Border>
 
-        <Border Style="{StaticResource ClashTrayCardStyle}">
+        <Border x:Name="NetworkSwitchRulesCard" Style="{StaticResource ClashTrayCardStyle}" Visibility="Collapsed">
             <StackPanel Spacing="8">
                 <TextBlock x:Uid="NetworkSwitchRulesHeader" FontWeight="SemiBold" />
                 <TextBlock x:Uid="NetworkSwitchRulesHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
