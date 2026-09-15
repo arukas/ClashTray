@@ -181,6 +181,9 @@
   <data name="NetworkSwitchStateDisabled" xml:space="preserve"><value>自动切换已暂停</value></data>
   <data name="NetworkSwitchStateWaiting" xml:space="preserve"><value>等待网络稳定</value></data>
   <data name="NetworkSwitchStatePermission" xml:space="preserve"><value>需要 Windows 权限才能读取网络</value></data>
+  <data name="OpenNetworkPermissionButton.Content" xml:space="preserve"><value>打开 Windows 网络权限</value></data>
+  <data name="NetworkPermissionSettingsOpened" xml:space="preserve"><value>已打开 Windows 网络权限设置。请允许位置访问，然后返回 ClashTray。</value></data>
+  <data name="NetworkPermissionSettingsUnavailable" xml:space="preserve"><value>无法打开 Windows 网络权限设置。</value></data>
   <data name="NetworkSwitchStateAmbiguous" xml:space="preserve"><value>有多个活动网络，需要进一步处理</value></data>
   <data name="NetworkSwitchStateEvaluating" xml:space="preserve"><value>正在评估网络规则</value></data>
   <data name="NetworkSwitchStateSwitching" xml:space="preserve"><value>正在切换配置</value></data>

@@ -40,6 +40,12 @@
                 <ComboBox x:Name="NetworkSwitchDefaultConfigurationBox" x:Uid="NetworkSwitchDefaultConfigurationBox" />
                 <TextBlock x:Name="NetworkSwitchStateText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
                 <TextBlock x:Uid="NetworkSwitchHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <Button x:Name="OpenNetworkPermissionButton"
+                        x:Uid="OpenNetworkPermissionButton"
+                        Style="{StaticResource ClashTrayCompactButtonStyle}"
+                        Click="OpenNetworkPermissionButton_Click"
+                        Visibility="Collapsed"
+                        HorizontalAlignment="Left" />
                 <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Left">
                     <Button x:Name="SaveNetworkSwitchButton" x:Uid="SaveNetworkSwitchButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveNetworkSwitchButton_Click" />
                     <Button x:Name="ResumeNetworkSwitchButton" x:Uid="ResumeNetworkSwitchButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ResumeNetworkSwitchButton_Click" />

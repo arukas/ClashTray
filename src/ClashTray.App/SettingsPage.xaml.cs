@@ -3,6 +3,7 @@ using ClashTray.Contracts;
 using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Windows.System;
 
 namespace ClashTray.App;
 
@@ -492,6 +493,22 @@ public sealed partial class SettingsPage : UserControl
         }
     }
 
+    private async void OpenNetworkPermissionButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            bool launched = await Launcher.LaunchUriAsync(new Uri("ms-settings:privacy-location"));
+            NetworkSwitchStateText.Text = LocalizationService.Get(
+                launched
+                    ? "NetworkPermissionSettingsOpened"
+                    : "NetworkPermissionSettingsUnavailable");
+        }
+        catch
+        {
+            NetworkSwitchStateText.Text = LocalizationService.Get("NetworkPermissionSettingsUnavailable");
+        }
+    }
+
     private void AddNetworkRuleButton_Click(object sender, RoutedEventArgs e)
     {
         RuntimeSnapshot snapshot = _lastSnapshot ?? _runtime.Snapshot;
@@ -814,6 +831,9 @@ public sealed partial class SettingsPage : UserControl
         }
 
         NetworkSwitchStateText.Text = FormatNetworkSwitchStatus(snapshot.NetworkSwitch);
+        OpenNetworkPermissionButton.Visibility = snapshot.NetworkSwitch?.State == NetworkSwitchState.PermissionRequired
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         ResumeNetworkSwitchButton.IsEnabled = snapshot.NetworkSwitch?.LastDecision?.State == NetworkSwitchState.ManualOverride;
     }
 

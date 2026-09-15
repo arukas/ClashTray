@@ -181,6 +181,9 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="NetworkSwitchStateDisabled" xml:space="preserve"><value>Automatic switching is paused</value></data>
   <data name="NetworkSwitchStateWaiting" xml:space="preserve"><value>Waiting for a stable network</value></data>
   <data name="NetworkSwitchStatePermission" xml:space="preserve"><value>Windows permission is required to read the network</value></data>
+  <data name="OpenNetworkPermissionButton.Content" xml:space="preserve"><value>Open Windows network permissions</value></data>
+  <data name="NetworkPermissionSettingsOpened" xml:space="preserve"><value>Windows network permissions are open. Enable location access, then return to ClashTray.</value></data>
+  <data name="NetworkPermissionSettingsUnavailable" xml:space="preserve"><value>Windows network permission settings could not be opened.</value></data>
   <data name="NetworkSwitchStateAmbiguous" xml:space="preserve"><value>Multiple active networks need attention</value></data>
   <data name="NetworkSwitchStateEvaluating" xml:space="preserve"><value>Evaluating network rules</value></data>
   <data name="NetworkSwitchStateSwitching" xml:space="preserve"><value>Switching configuration</value></data>
