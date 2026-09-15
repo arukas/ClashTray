@@ -319,7 +319,8 @@ public sealed partial class MainWindow
             remoteData.RuleProviders,
             remoteData.Logs,
             EndpointCapabilityDefaults.Remote,
-            "smoke stale controller");
+            "smoke stale controller",
+            ErrorCode.EndpointStaleResult);
         AppSnapshot remoteSnapshot = local with
         {
             ActiveController = remoteController,
@@ -343,7 +344,11 @@ public sealed partial class MainWindow
             || TunSwitch.IsEnabled
             || RuleModeButton.IsEnabled
             || GlobalModeButton.IsEnabled
-            || DirectModeButton.IsEnabled)
+            || DirectModeButton.IsEnabled
+            || !ErrorBanner.IsOpen
+            || !ErrorBanner.Message.Contains(
+                LocalizationService.Get("ControllerErrorStale"),
+                StringComparison.Ordinal))
         {
             throw new InvalidOperationException("Remote stale state was not visible or local controls were enabled.");
         }
@@ -400,7 +405,8 @@ public sealed partial class MainWindow
         ControllerSessionSnapshot connectedController = remoteController with
         {
             State = EndpointSessionState.Connected,
-            ErrorMessage = null
+            ErrorMessage = null,
+            ErrorCode = ErrorCode.None
         };
         UpdateAppSnapshot(remoteSnapshot with { ActiveController = connectedController });
         RootGrid.UpdateLayout();

@@ -16,6 +16,12 @@
   <data name="ControllerStateIncompatible" xml:space="preserve"><value>Endpoint incompatible</value></data>
   <data name="ControllerStateFailed" xml:space="preserve"><value>Connection failed</value></data>
   <data name="ControllerStateDisconnected" xml:space="preserve"><value>Disconnected</value></data>
+  <data name="ControllerErrorWithDetailFormat" xml:space="preserve"><value>{0}: {1}</value></data>
+  <data name="ControllerErrorAuthentication" xml:space="preserve"><value>Remote controller authentication failed</value></data>
+  <data name="ControllerErrorCertificate" xml:space="preserve"><value>Remote controller certificate validation failed</value></data>
+  <data name="ControllerErrorIncompatible" xml:space="preserve"><value>Remote controller is incompatible</value></data>
+  <data name="ControllerErrorStale" xml:space="preserve"><value>Remote controller data is stale; this view is read-only</value></data>
+  <data name="ControllerErrorTransport" xml:space="preserve"><value>Remote controller connection failed</value></data>
   <data name="ControllerLastConfirmedFormat" xml:space="preserve"><value>Last confirmed: {0}</value></data>
   <data name="ControllerNoConfirmedData" xml:space="preserve"><value>No confirmed data yet</value></data>
   <data name="ControllerEndpointButton.Content" xml:space="preserve"><value>Core not running</value></data>

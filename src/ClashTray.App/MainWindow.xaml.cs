@@ -53,6 +53,7 @@ public sealed partial class MainWindow : Window
     private DateTimeOffset? _activeControllerLastConfirmedAt;
     private string _activeEndpointDisplayName = EndpointId.Local.Value;
     private EndpointCapability _activeEndpointCapabilities = EndpointCapabilityDefaults.Local;
+    private ErrorCode _activeControllerErrorCode = ErrorCode.None;
 
     private bool ActiveControllerWritable =>
         _activeEndpointKind == EndpointKind.Local
@@ -163,6 +164,7 @@ public sealed partial class MainWindow : Window
         _activeControllerLastConfirmedAt = snapshot.ActiveController.LastConfirmedAt;
         _activeEndpointDisplayName = snapshot.ActiveController.Endpoint.DisplayName;
         _activeEndpointCapabilities = snapshot.ActiveController.Capabilities;
+        _activeControllerErrorCode = snapshot.ActiveController.ErrorCode;
         UpdateSnapshot(RuntimeSnapshotAdapter.ToRuntimeSnapshot(
             snapshot));
     }
@@ -322,7 +324,9 @@ public sealed partial class MainWindow : Window
         TunSwitch.IsOn = snapshot.Tun == TunState.On;
         _updatingSnapshot = false;
         ConfigurationText.Text = core.ConfigurationName ?? snapshot.Configurations.FirstOrDefault(c => c.IsActive)?.Name ?? LocalizationService.Get("ConfigImportPrompt");
-        ErrorBanner.Message = snapshot.ErrorMessage ?? core.ErrorMessage ?? string.Empty;
+        ErrorBanner.Message = FormatDisplayedError(
+            localController ? ErrorCode.None : _activeControllerErrorCode,
+            snapshot.ErrorMessage ?? core.ErrorMessage);
         ErrorBanner.IsOpen = !string.IsNullOrEmpty(ErrorBanner.Message);
         DownloadText.Text = FormatRate(core.DownloadBytesPerSecond);
         UploadText.Text = FormatRate(core.UploadBytesPerSecond);
@@ -953,6 +957,28 @@ public sealed partial class MainWindow : Window
         EndpointSessionState.Failed => LocalizationService.Get("ControllerStateFailed"),
         _ => LocalizationService.Get("ControllerStateDisconnected")
     };
+
+    private static string FormatDisplayedError(ErrorCode errorCode, string? detail)
+    {
+        string? localized = errorCode switch
+        {
+            ErrorCode.EndpointAuthenticationFailed => LocalizationService.Get("ControllerErrorAuthentication"),
+            ErrorCode.EndpointCertificateFailed => LocalizationService.Get("ControllerErrorCertificate"),
+            ErrorCode.EndpointIncompatible => LocalizationService.Get("ControllerErrorIncompatible"),
+            ErrorCode.EndpointStaleResult => LocalizationService.Get("ControllerErrorStale"),
+            ErrorCode.EndpointTransportFailed => LocalizationService.Get("ControllerErrorTransport"),
+            _ => null
+        };
+        if (localized is null)
+        {
+            return ErrorSanitizer.SanitizeNullable(detail) ?? string.Empty;
+        }
+
+        string? sanitizedDetail = ErrorSanitizer.SanitizeNullable(detail);
+        return string.IsNullOrEmpty(sanitizedDetail)
+            ? localized
+            : LocalizationService.Format("ControllerErrorWithDetailFormat", localized, sanitizedDetail);
+    }
 
     private static string FormatRate(double bytesPerSecond)
     {

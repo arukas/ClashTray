@@ -16,6 +16,12 @@
   <data name="ControllerStateIncompatible" xml:space="preserve"><value>端点不兼容</value></data>
   <data name="ControllerStateFailed" xml:space="preserve"><value>连接失败</value></data>
   <data name="ControllerStateDisconnected" xml:space="preserve"><value>未连接</value></data>
+  <data name="ControllerErrorWithDetailFormat" xml:space="preserve"><value>{0}：{1}</value></data>
+  <data name="ControllerErrorAuthentication" xml:space="preserve"><value>远程控制器认证失败</value></data>
+  <data name="ControllerErrorCertificate" xml:space="preserve"><value>远程控制器证书验证失败</value></data>
+  <data name="ControllerErrorIncompatible" xml:space="preserve"><value>远程控制器不兼容</value></data>
+  <data name="ControllerErrorStale" xml:space="preserve"><value>远程控制器数据已过期，当前视图为只读</value></data>
+  <data name="ControllerErrorTransport" xml:space="preserve"><value>远程控制器连接失败</value></data>
   <data name="ControllerLastConfirmedFormat" xml:space="preserve"><value>上次确认：{0}</value></data>
   <data name="ControllerNoConfirmedData" xml:space="preserve"><value>尚无已确认数据</value></data>
   <data name="ControllerEndpointButton.Content" xml:space="preserve"><value>核心未运行</value></data>
