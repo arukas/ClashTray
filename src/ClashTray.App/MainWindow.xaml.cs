@@ -52,6 +52,7 @@ public sealed partial class MainWindow : Window
     private EndpointSessionState _activeEndpointState = EndpointSessionState.Disconnected;
     private DateTimeOffset? _activeControllerLastConfirmedAt;
     private string _activeEndpointDisplayName = EndpointId.Local.Value;
+    private EndpointCapability _activeEndpointCapabilities = EndpointCapabilityDefaults.Local;
 
     private bool ActiveControllerWritable =>
         _activeEndpointKind == EndpointKind.Local
@@ -161,6 +162,7 @@ public sealed partial class MainWindow : Window
         _activeEndpointState = snapshot.ActiveController.State;
         _activeControllerLastConfirmedAt = snapshot.ActiveController.LastConfirmedAt;
         _activeEndpointDisplayName = snapshot.ActiveController.Endpoint.DisplayName;
+        _activeEndpointCapabilities = snapshot.ActiveController.Capabilities;
         UpdateSnapshot(RuntimeSnapshotAdapter.ToRuntimeSnapshot(
             snapshot));
     }
@@ -175,6 +177,8 @@ public sealed partial class MainWindow : Window
         bool localController = _activeEndpointKind == EndpointKind.Local;
         bool controllerWritable = localController
             || _activeEndpointState == EndpointSessionState.Connected;
+        bool canSwitchMode = controllerWritable
+            && HasActiveEndpointCapability(EndpointCapability.SwitchMode);
         bool coreBusy = core.State is CoreState.Validating
             or CoreState.Starting
             or CoreState.Stopping
@@ -196,12 +200,14 @@ public sealed partial class MainWindow : Window
                 ? null
                 : LocalizationService.Get("RemoteLocalNetworkActionUnavailable"));
         bool coreRunning = core.State == CoreState.Running;
-        RuleModeButton.IsEnabled = coreRunning && controllerWritable;
-        GlobalModeButton.IsEnabled = coreRunning && controllerWritable;
-        DirectModeButton.IsEnabled = coreRunning && controllerWritable;
-        string? modeTooltip = controllerWritable
+        RuleModeButton.IsEnabled = coreRunning && canSwitchMode;
+        GlobalModeButton.IsEnabled = coreRunning && canSwitchMode;
+        DirectModeButton.IsEnabled = coreRunning && canSwitchMode;
+        string? modeTooltip = canSwitchMode
             ? null
-            : LocalizationService.Get("RemoteControllerReadOnly");
+            : controllerWritable
+                ? LocalizationService.Get("RemoteControllerCapabilityUnavailable")
+                : LocalizationService.Get("RemoteControllerReadOnly");
         ToolTipService.SetToolTip(RuleModeButton, modeTooltip);
         ToolTipService.SetToolTip(GlobalModeButton, modeTooltip);
         ToolTipService.SetToolTip(DirectModeButton, modeTooltip);
@@ -395,31 +401,38 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        UpdateActivePage(snapshot, controllerWritable);
+        UpdateActivePage(snapshot, controllerWritable, _activeEndpointCapabilities);
     }
 
-    private void UpdateActivePage(RuntimeSnapshot snapshot, bool? controllerWritable = null)
+    private void UpdateActivePage(
+        RuntimeSnapshot snapshot,
+        bool? controllerWritable = null,
+        EndpointCapability? capabilities = null)
     {
         bool writable = controllerWritable ?? ActiveControllerWritable;
+        EndpointCapability activeCapabilities = capabilities ?? _activeEndpointCapabilities;
         switch (_activePage)
         {
             case PanelPage.Proxy:
-                _proxyPage?.UpdateSnapshot(snapshot, writable);
+                _proxyPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
                 break;
             case PanelPage.Rules:
-                _rulesPage?.UpdateSnapshot(snapshot, writable);
+                _rulesPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
                 break;
             case PanelPage.Connections:
-                _connectionsPage?.UpdateSnapshot(snapshot, writable);
+                _connectionsPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
                 break;
             case PanelPage.Logs:
-                _logsPage?.UpdateSnapshot(snapshot, writable);
+                _logsPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
                 break;
             case PanelPage.Settings:
-                _settingsPage?.UpdateSnapshot(snapshot, writable);
+                _settingsPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
                 break;
         }
     }
+
+    private bool HasActiveEndpointCapability(EndpointCapability capability) =>
+        (_activeEndpointCapabilities & capability) == capability;
 
     public void ShowError(string message)
     {
@@ -642,7 +655,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        await _app.SetModeAsync(ProxyMode.Rule);
+        if (HasActiveEndpointCapability(EndpointCapability.SwitchMode))
+        {
+            await _app.SetModeAsync(ProxyMode.Rule);
+        }
     }
 
     private async void GlobalModeButton_Click(object sender, RoutedEventArgs e)
@@ -652,7 +668,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        await _app.SetModeAsync(ProxyMode.Global);
+        if (HasActiveEndpointCapability(EndpointCapability.SwitchMode))
+        {
+            await _app.SetModeAsync(ProxyMode.Global);
+        }
     }
 
     private async void DirectModeButton_Click(object sender, RoutedEventArgs e)
@@ -662,7 +681,10 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        await _app.SetModeAsync(ProxyMode.Direct);
+        if (HasActiveEndpointCapability(EndpointCapability.SwitchMode))
+        {
+            await _app.SetModeAsync(ProxyMode.Direct);
+        }
     }
 
     private async void ImportLocalButton_Click(object sender, RoutedEventArgs e) => await ImportLocalConfigurationAsync();
@@ -835,7 +857,7 @@ public sealed partial class MainWindow : Window
             // Keep the currently projected endpoint when navigating. Using
             // _runtime.Snapshot here would replace a remote projection with
             // the local device snapshot until the next remote refresh.
-            UpdateActivePage(_latestDisplayedSnapshot, ActiveControllerWritable);
+            UpdateActivePage(_latestDisplayedSnapshot, ActiveControllerWritable, _activeEndpointCapabilities);
         }
     }
 

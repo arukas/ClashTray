@@ -14,6 +14,7 @@ public sealed partial class ProxyPage : UserControl
     private RuntimeSnapshot? _snapshot;
     private string? _signature;
     private bool _controllerWritable = true;
+    private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
 
     public ProxyPage(ClashTrayRuntime runtime)
     {
@@ -33,14 +34,27 @@ public sealed partial class ProxyPage : UserControl
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
-        UpdateSnapshot(snapshot, controllerWritable: true);
+        UpdateSnapshot(snapshot, controllerWritable: true, EndpointCapabilityDefaults.Local);
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
     {
+        UpdateSnapshot(
+            snapshot,
+            controllerWritable,
+            controllerWritable ? EndpointCapabilityDefaults.Local : EndpointCapability.None);
+    }
+
+    public void UpdateSnapshot(
+        RuntimeSnapshot snapshot,
+        bool controllerWritable,
+        EndpointCapability capabilities)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
-        bool interactivityChanged = _controllerWritable != controllerWritable;
+        bool interactivityChanged = _controllerWritable != controllerWritable
+            || _controllerCapabilities != capabilities;
         _controllerWritable = controllerWritable;
+        _controllerCapabilities = capabilities;
         bool proxyDataUnchanged = _snapshot is not null
             && ReferenceEquals(_snapshot.ProxyGroups, snapshot.ProxyGroups)
             && ReferenceEquals(_snapshot.ProxyNodes, snapshot.ProxyNodes)
@@ -127,18 +141,16 @@ public sealed partial class ProxyPage : UserControl
             {
                 Content = new FontIcon { Glyph = "\uE9D9", FontSize = 14 },
                 Style = (Style)Application.Current.Resources["ClashTrayIconButtonStyle"],
-                IsEnabled = _controllerWritable
+                IsEnabled = HasCapability(EndpointCapability.TestDelay)
                     && snapshot.Core.State == CoreState.Running
                     && group.Members.Count > 0
                     && !_testingGroups.Contains(group.Name)
             };
-            ToolTipService.SetToolTip(test, _controllerWritable
-                ? LocalizationService.Get("ToolTipTestGroup")
-                : LocalizationService.Get("RemoteControllerReadOnly"));
+            ToolTipService.SetToolTip(test, GetActionTooltip("ToolTipTestGroup", EndpointCapability.TestDelay));
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(test, LocalizationService.Format("AutomationTestGroupFormat", group.Name));
             test.Click += async (_, _) =>
             {
-                if (!_controllerWritable)
+                if (!HasCapability(EndpointCapability.TestDelay))
                 {
                     return;
                 }
@@ -173,7 +185,7 @@ public sealed partial class ProxyPage : UserControl
                 SelectionMode = ListViewSelectionMode.Single,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 IsTabStop = false,
-                IsEnabled = _controllerWritable
+                IsEnabled = HasCapability(EndpointCapability.SwitchProxy)
             };
             // The dashboard owns scrolling. Disabling (not hiding) the inner
             // viewport lets wheel/touch/keyboard navigation use that one scroll host.
@@ -274,7 +286,7 @@ public sealed partial class ProxyPage : UserControl
                     return;
                 }
 
-                if (!_controllerWritable)
+                if (!HasCapability(EndpointCapability.SwitchProxy))
                 {
                     list.SelectedItem = list.Items
                         .OfType<ListViewItem>()
@@ -387,15 +399,16 @@ public sealed partial class ProxyPage : UserControl
             {
                 Content = new FontIcon { Glyph = "\uE72C", FontSize = 15 },
                 Style = (Style)Application.Current.Resources["ClashTrayIconButtonStyle"],
-                IsEnabled = _controllerWritable
+                IsEnabled = HasCapability(EndpointCapability.RefreshProvider)
             };
-            ToolTipService.SetToolTip(refresh, _controllerWritable
-                ? LocalizationService.Format("ToolTipRefreshProviderFormat", provider.Name)
-                : LocalizationService.Get("RemoteControllerReadOnly"));
+            ToolTipService.SetToolTip(refresh, GetActionTooltip(
+                "ToolTipRefreshProviderFormat",
+                EndpointCapability.RefreshProvider,
+                provider.Name));
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(refresh, LocalizationService.Format("AutomationRefreshProviderFormat", provider.Name));
             refresh.Click += async (_, _) =>
             {
-                if (!_controllerWritable)
+                if (!HasCapability(EndpointCapability.RefreshProvider))
                 {
                     return;
                 }
@@ -416,6 +429,29 @@ public sealed partial class ProxyPage : UserControl
         int.TryParse(delay, out int value) ? value > 0 ? $"{value} ms" : LocalizationService.Get("DelayTimeout") : delay;
 
     private Style SecondaryTextStyle => (Style)Resources["ProxySecondaryText"];
+
+    private bool HasCapability(EndpointCapability capability) =>
+        _controllerWritable && (_controllerCapabilities & capability) == capability;
+
+    private string GetActionTooltip(
+        string resourceKey,
+        EndpointCapability capability,
+        params object[] arguments)
+    {
+        if (!_controllerWritable)
+        {
+            return LocalizationService.Get("RemoteControllerReadOnly");
+        }
+
+        if ((_controllerCapabilities & capability) != capability)
+        {
+            return LocalizationService.Get("RemoteControllerCapabilityUnavailable");
+        }
+
+        return arguments.Length == 0
+            ? LocalizationService.Get(resourceKey)
+            : LocalizationService.Format(resourceKey, arguments);
+    }
 
     private void NodeSearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {

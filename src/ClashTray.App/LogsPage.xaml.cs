@@ -45,6 +45,12 @@ public sealed partial class LogsPage : UserControl
         ApplyFilter();
     }
 
+    public void UpdateSnapshot(
+        RuntimeSnapshot snapshot,
+        bool controllerWritable,
+        EndpointCapability capabilities) =>
+        UpdateSnapshot(snapshot, controllerWritable);
+
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
 
     private void LevelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplyFilter();

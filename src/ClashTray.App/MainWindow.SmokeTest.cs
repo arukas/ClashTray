@@ -414,6 +414,59 @@ public sealed partial class MainWindow
             throw new InvalidOperationException("Connected remote controller actions did not recover.");
         }
 
+        EndpointCapability restrictedCapabilities = EndpointCapabilityDefaults.Remote
+            & ~EndpointCapability.ObserveRules
+            & ~EndpointCapability.ObserveProviders
+            & ~EndpointCapability.SwitchMode
+            & ~EndpointCapability.SwitchProxy
+            & ~EndpointCapability.TestDelay
+            & ~EndpointCapability.RefreshProvider
+            & ~EndpointCapability.CloseConnection
+            & ~EndpointCapability.ClearCache
+            & ~EndpointCapability.UpdateGeo;
+        UpdateAppSnapshot(remoteSnapshot with
+        {
+            ActiveController = connectedController with { Capabilities = restrictedCapabilities }
+        });
+        RootGrid.UpdateLayout();
+        StackPanel restrictedGroups = (StackPanel)_proxyPage!.FindName("GroupsPanel");
+        if (RuleModeButton.IsEnabled
+            || GlobalModeButton.IsEnabled
+            || DirectModeButton.IsEnabled
+            || restrictedGroups.Children.Count == 0
+            || ((Grid)((StackPanel)((Border)restrictedGroups.Children[0]).Child).Children[0]).Children[2] is not Button restrictedTestButton
+            || restrictedTestButton.IsEnabled)
+        {
+            throw new InvalidOperationException("Remote capability restrictions were not reflected in the proxy controls.");
+        }
+
+        NavigateTo(_rulesPage, PanelPage.Rules);
+        await Task.Delay(50);
+        if (((Button)_rulesPage!.FindName("RefreshRulesButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote capability restrictions were not reflected in rule refresh.");
+        }
+
+        NavigateTo(_connectionsPage, PanelPage.Connections);
+        await Task.Delay(50);
+        if (((Button)_connectionsPage!.FindName("CloseAllButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote capability restrictions were not reflected in connection actions.");
+        }
+
+        NavigateTo(_settingsPage, PanelPage.Settings);
+        await Task.Delay(50);
+        if (((Button)_settingsPage!.FindName("ClearDnsButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("ClearFakeIpButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("UpdateGeoButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("RefreshProviderButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote capability restrictions were not reflected in maintenance actions.");
+        }
+
+        UpdateAppSnapshot(remoteSnapshot with { ActiveController = connectedController });
+        NavigateTo(_proxyPage, PanelPage.Proxy);
+
         await File.WriteAllTextAsync(
             Path.Combine(directory, "remote-freshness-checks.json"),
             JsonSerializer.Serialize(new
@@ -430,6 +483,7 @@ public sealed partial class MainWindow
                 RemoteLogClearDisabled = true,
                 RemoteMaintenanceActionsDisabled = true,
                 ConnectedRemoteActionsReenabled = true,
+                RestrictedCapabilityActionsDisabled = true,
                 NetworkStateChanged = false,
                 TunTouched = false
             }, DiagnosticJsonOptions));

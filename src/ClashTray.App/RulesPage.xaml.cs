@@ -11,6 +11,7 @@ public sealed partial class RulesPage : UserControl
     private IReadOnlyList<RuleInfo> _rules = [];
     private bool _refreshing;
     private bool _controllerWritable = true;
+    private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
 
     public RulesPage(ClashTrayRuntime runtime)
     {
@@ -21,20 +22,31 @@ public sealed partial class RulesPage : UserControl
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
-        UpdateSnapshot(snapshot, controllerWritable: true);
+        UpdateSnapshot(snapshot, controllerWritable: true, EndpointCapabilityDefaults.Local);
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
     {
+        UpdateSnapshot(
+            snapshot,
+            controllerWritable,
+            controllerWritable ? EndpointCapabilityDefaults.Local : EndpointCapability.None);
+    }
+
+    public void UpdateSnapshot(
+        RuntimeSnapshot snapshot,
+        bool controllerWritable,
+        EndpointCapability capabilities)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
-        bool interactivityChanged = _controllerWritable != controllerWritable;
+        bool interactivityChanged = _controllerWritable != controllerWritable
+            || _controllerCapabilities != capabilities;
         _controllerWritable = controllerWritable;
-        RefreshRulesButton.IsEnabled = _controllerWritable && !_refreshing;
+        _controllerCapabilities = capabilities;
+        RefreshRulesButton.IsEnabled = CanRefreshRules && !_refreshing;
         ToolTipService.SetToolTip(
             RefreshRulesButton,
-            _controllerWritable
-                ? null
-                : LocalizationService.Get("RemoteControllerReadOnly"));
+            GetRefreshTooltip());
         if (ReferenceEquals(_rules, snapshot.Rules) && !interactivityChanged)
         {
             return;
@@ -50,7 +62,7 @@ public sealed partial class RulesPage : UserControl
 
     private async void RefreshRulesButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_refreshing || !_controllerWritable)
+        if (_refreshing || !CanRefreshRules)
         {
             return;
         }
@@ -72,7 +84,7 @@ public sealed partial class RulesPage : UserControl
         finally
         {
             _refreshing = false;
-            RefreshRulesButton.IsEnabled = _controllerWritable;
+            RefreshRulesButton.IsEnabled = CanRefreshRules;
         }
     }
 
@@ -95,5 +107,22 @@ public sealed partial class RulesPage : UserControl
             RulesListView.Items.Add(new ListViewItem { Content = $"{rule.Type}  {rule.Payload}  → {rule.Proxy}" });
         }
         EmptyListText.Visibility = RulesListView.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private bool CanRefreshRules =>
+        _controllerWritable
+        && (_controllerCapabilities & (EndpointCapability.ObserveRules | EndpointCapability.ObserveProviders))
+            == (EndpointCapability.ObserveRules | EndpointCapability.ObserveProviders);
+
+    private string? GetRefreshTooltip()
+    {
+        if (CanRefreshRules)
+        {
+            return null;
+        }
+
+        return !_controllerWritable
+            ? LocalizationService.Get("RemoteControllerReadOnly")
+            : LocalizationService.Get("RemoteControllerCapabilityUnavailable");
     }
 }

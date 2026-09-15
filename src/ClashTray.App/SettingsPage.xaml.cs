@@ -24,6 +24,7 @@ public sealed partial class SettingsPage : UserControl
     private EndpointId? _testingEndpointId;
     private readonly List<NetworkRuleEditorRow> _networkRuleRows = [];
     private bool _controllerWritable = true;
+    private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
 
     public SettingsPage(ClashTrayRuntime runtime)
     {
@@ -36,13 +37,25 @@ public sealed partial class SettingsPage : UserControl
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
-        UpdateSnapshot(snapshot, controllerWritable: true);
+        UpdateSnapshot(snapshot, controllerWritable: true, EndpointCapabilityDefaults.Local);
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
     {
+        UpdateSnapshot(
+            snapshot,
+            controllerWritable,
+            controllerWritable ? EndpointCapabilityDefaults.Local : EndpointCapability.None);
+    }
+
+    public void UpdateSnapshot(
+        RuntimeSnapshot snapshot,
+        bool controllerWritable,
+        EndpointCapability capabilities)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
         _controllerWritable = controllerWritable;
+        _controllerCapabilities = capabilities;
         UpdateControllerActionButtons();
         _lastSnapshot = snapshot;
         LoadSettings(_runtime.Settings);
@@ -605,7 +618,7 @@ public sealed partial class SettingsPage : UserControl
 
     private async void ClearFakeIpButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!_controllerWritable)
+        if (!HasControllerCapability(EndpointCapability.ClearCache))
         {
             return;
         }
@@ -623,7 +636,7 @@ public sealed partial class SettingsPage : UserControl
 
     private async void ClearDnsButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!_controllerWritable)
+        if (!HasControllerCapability(EndpointCapability.ClearCache))
         {
             return;
         }
@@ -641,7 +654,7 @@ public sealed partial class SettingsPage : UserControl
 
     private async void UpdateGeoButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!_controllerWritable)
+        if (!HasControllerCapability(EndpointCapability.UpdateGeo))
         {
             return;
         }
@@ -659,7 +672,7 @@ public sealed partial class SettingsPage : UserControl
 
     private async void RefreshProviderButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!_controllerWritable)
+        if (!HasControllerCapability(EndpointCapability.RefreshProvider))
         {
             return;
         }
@@ -698,22 +711,40 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
-        ClearDnsButton.IsEnabled = _controllerWritable;
-        ClearFakeIpButton.IsEnabled = _controllerWritable;
-        UpdateGeoButton.IsEnabled = _controllerWritable;
+        bool canClearCache = HasControllerCapability(EndpointCapability.ClearCache);
+        bool canUpdateGeo = HasControllerCapability(EndpointCapability.UpdateGeo);
+        ClearDnsButton.IsEnabled = canClearCache;
+        ClearFakeIpButton.IsEnabled = canClearCache;
+        UpdateGeoButton.IsEnabled = canUpdateGeo;
         bool providerSelected = ProvidersListView.SelectedItem is ListViewItem
         {
             Tag: ValueTuple<ProviderStatus, bool>
         };
-        RefreshProviderButton.IsEnabled = _controllerWritable && providerSelected;
-        string? tooltip = _controllerWritable
+        bool canRefreshProvider = HasControllerCapability(EndpointCapability.RefreshProvider);
+        RefreshProviderButton.IsEnabled = canRefreshProvider && providerSelected;
+        string? cacheTooltip = canClearCache
             ? null
-            : LocalizationService.Get("RemoteControllerReadOnly");
-        ToolTipService.SetToolTip(ClearDnsButton, tooltip);
-        ToolTipService.SetToolTip(ClearFakeIpButton, tooltip);
-        ToolTipService.SetToolTip(UpdateGeoButton, tooltip);
-        ToolTipService.SetToolTip(RefreshProviderButton, tooltip);
+            : !_controllerWritable
+                ? LocalizationService.Get("RemoteControllerReadOnly")
+                : LocalizationService.Get("RemoteControllerCapabilityUnavailable");
+        string? geoTooltip = canUpdateGeo
+            ? null
+            : !_controllerWritable
+                ? LocalizationService.Get("RemoteControllerReadOnly")
+                : LocalizationService.Get("RemoteControllerCapabilityUnavailable");
+        string? providerTooltip = canRefreshProvider
+            ? null
+            : !_controllerWritable
+                ? LocalizationService.Get("RemoteControllerReadOnly")
+                : LocalizationService.Get("RemoteControllerCapabilityUnavailable");
+        ToolTipService.SetToolTip(ClearDnsButton, cacheTooltip);
+        ToolTipService.SetToolTip(ClearFakeIpButton, cacheTooltip);
+        ToolTipService.SetToolTip(UpdateGeoButton, geoTooltip);
+        ToolTipService.SetToolTip(RefreshProviderButton, providerTooltip);
     }
+
+    private bool HasControllerCapability(EndpointCapability capability) =>
+        _controllerWritable && (_controllerCapabilities & capability) == capability;
 
     private async void InstallCoreButton_Click(object sender, RoutedEventArgs e)
     {

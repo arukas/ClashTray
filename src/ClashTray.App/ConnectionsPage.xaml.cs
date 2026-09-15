@@ -10,6 +10,7 @@ public sealed partial class ConnectionsPage : UserControl
     private readonly ClashTrayRuntime _runtime;
     private IReadOnlyList<ConnectionInfo> _connections = [];
     private bool _controllerWritable = true;
+    private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
 
     public ConnectionsPage(ClashTrayRuntime runtime)
     {
@@ -20,14 +21,27 @@ public sealed partial class ConnectionsPage : UserControl
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
-        UpdateSnapshot(snapshot, controllerWritable: true);
+        UpdateSnapshot(snapshot, controllerWritable: true, EndpointCapabilityDefaults.Local);
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
     {
+        UpdateSnapshot(
+            snapshot,
+            controllerWritable,
+            controllerWritable ? EndpointCapabilityDefaults.Local : EndpointCapability.None);
+    }
+
+    public void UpdateSnapshot(
+        RuntimeSnapshot snapshot,
+        bool controllerWritable,
+        EndpointCapability capabilities)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
-        bool interactivityChanged = _controllerWritable != controllerWritable;
+        bool interactivityChanged = _controllerWritable != controllerWritable
+            || _controllerCapabilities != capabilities;
         _controllerWritable = controllerWritable;
+        _controllerCapabilities = capabilities;
         UpdateActionButtons();
         if (ReferenceEquals(_connections, snapshot.Connections) && !interactivityChanged)
         {
@@ -88,7 +102,7 @@ public sealed partial class ConnectionsPage : UserControl
 
     private async void CloseSelectedButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!_controllerWritable)
+        if (!HasCapability(EndpointCapability.CloseConnection))
         {
             return;
         }
@@ -108,7 +122,7 @@ public sealed partial class ConnectionsPage : UserControl
 
     private async void CloseAllButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!_controllerWritable)
+        if (!HasCapability(EndpointCapability.CloseConnection))
         {
             return;
         }
@@ -131,12 +145,18 @@ public sealed partial class ConnectionsPage : UserControl
         }
 
         bool hasSelection = ConnectionsListView.SelectedItem is ListViewItem { Tag: ConnectionInfo };
-        CloseSelectedButton.IsEnabled = _controllerWritable && hasSelection;
-        CloseAllButton.IsEnabled = _controllerWritable && ConnectionsListView.Items.Count > 0;
-        string? tooltip = _controllerWritable
+        bool canCloseConnections = HasCapability(EndpointCapability.CloseConnection);
+        CloseSelectedButton.IsEnabled = canCloseConnections && hasSelection;
+        CloseAllButton.IsEnabled = canCloseConnections && ConnectionsListView.Items.Count > 0;
+        string? tooltip = canCloseConnections
             ? null
-            : LocalizationService.Get("RemoteControllerReadOnly");
+            : !_controllerWritable
+                ? LocalizationService.Get("RemoteControllerReadOnly")
+                : LocalizationService.Get("RemoteControllerCapabilityUnavailable");
         ToolTipService.SetToolTip(CloseSelectedButton, tooltip);
         ToolTipService.SetToolTip(CloseAllButton, tooltip);
     }
+
+    private bool HasCapability(EndpointCapability capability) =>
+        _controllerWritable && (_controllerCapabilities & capability) == capability;
 }
