@@ -78,6 +78,62 @@ public sealed class RemoteEndpointTransportTests
         await Assert.ThrowsExactlyAsync<HttpRequestException>(() => api.GetVersionAsync());
     }
 
+    [TestMethod]
+    public async Task LiveLoopbackControllerCompletesConnectorAndSessionManagerHandshake()
+    {
+        await using LocalControllerFixture fixture = await LocalControllerFixture.StartAsync();
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "ClashTrayIntegrationTests",
+            Guid.NewGuid().ToString("N"));
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+
+        try
+        {
+            EndpointDescriptor endpoint = EndpointUriNormalizer.CreateRemoteDescriptor(
+                new EndpointId("loopback"),
+                "Loopback controller",
+                fixture.BaseUri) with
+            {
+                Security = EndpointTransportSecurity.HttpsCustomCertificate
+            };
+            EndpointRecord record = new(endpoint, SecretReference: "loopback-secret");
+            EndpointSecretStore secretStore = new(paths);
+            EndpointCertificateStore certificateStore = new(paths);
+            await secretStore.SetAsync("loopback-secret", "loopback-secret-value");
+            await certificateStore.SetAsync(
+                "loopback-ca",
+                fixture.CertificateAuthority.Export(X509ContentType.Cert));
+            record = record with { CertificateReference = "loopback-ca" };
+
+            EndpointTransportOptionsResolver optionsResolver = new(secretStore, certificateStore);
+            MihomoEndpointSessionConnector connector = new(
+                (id, _) => Task.FromResult<EndpointRecord?>(id == endpoint.Id ? record : null),
+                optionsResolver);
+            await using EndpointSessionManager manager = new(
+                ControllerEndpointFactory.CreateLocal(9090),
+                connector,
+                new EndpointSessionBackoffPolicy([TimeSpan.FromMilliseconds(1)], TimeSpan.Zero));
+
+            EndpointSession? session = await manager.SelectAsync(endpoint);
+
+            Assert.IsNotNull(session);
+            Assert.AreEqual(EndpointSessionState.Connected, manager.Status.State);
+            Assert.AreEqual("v1.19.30-test", session.Handshake.Version);
+            Assert.AreEqual(EndpointCapabilityDefaults.Remote, session.Capabilities);
+            Assert.AreEqual("Bearer loopback-secret-value", fixture.RestAuthorization);
+            Assert.AreEqual(endpoint.Id, session.Endpoint.Id);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     private sealed class LocalControllerFixture : IAsyncDisposable
     {
         private readonly WebApplication _app;
