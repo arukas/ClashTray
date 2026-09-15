@@ -9,7 +9,10 @@ namespace ClashTray.Core;
 
 public sealed record EndpointTransportOptions(
     string Secret = "",
-    X509Certificate2? CustomCaCertificate = null);
+    X509Certificate2? CustomCaCertificate = null,
+    TimeSpan? RestTimeout = null,
+    TimeSpan? WriteTimeout = null,
+    TimeSpan? WebSocketHandshakeTimeout = null);
 
 public sealed class EndpointTransport : IDisposable
 {
@@ -25,7 +28,10 @@ public sealed class EndpointTransport : IDisposable
         HttpClient httpClient,
         string? authorizationValue,
         X509Certificate2? customCaCertificate,
-        bool bypassesSystemProxy)
+        bool bypassesSystemProxy,
+        TimeSpan? restTimeout = null,
+        TimeSpan? writeTimeout = null,
+        TimeSpan? webSocketHandshakeTimeout = null)
     {
         Endpoint = endpoint;
         BaseUri = baseUri;
@@ -34,6 +40,18 @@ public sealed class EndpointTransport : IDisposable
         _authorizationValue = authorizationValue;
         _customCaCertificate = customCaCertificate;
         BypassesSystemProxy = bypassesSystemProxy;
+        RestTimeout = EndpointTransportPolicy.ResolveTimeout(
+            restTimeout,
+            nameof(restTimeout),
+            EndpointTransportPolicy.DefaultRestTimeout);
+        WriteTimeout = EndpointTransportPolicy.ResolveTimeout(
+            writeTimeout,
+            nameof(writeTimeout),
+            EndpointTransportPolicy.DefaultWriteTimeout);
+        WebSocketHandshakeTimeout = EndpointTransportPolicy.ResolveTimeout(
+            webSocketHandshakeTimeout,
+            nameof(webSocketHandshakeTimeout),
+            EndpointTransportPolicy.DefaultWebSocketHandshakeTimeout);
     }
 
     public EndpointDescriptor Endpoint { get; }
@@ -43,6 +61,12 @@ public sealed class EndpointTransport : IDisposable
     public Uri WebSocketUri { get; }
 
     public bool BypassesSystemProxy { get; }
+
+    public TimeSpan RestTimeout { get; }
+
+    public TimeSpan WriteTimeout { get; }
+
+    public TimeSpan WebSocketHandshakeTimeout { get; }
 
     public HttpClient HttpClient
     {
@@ -129,6 +153,18 @@ public static class EndpointTransportFactory
             endpoint.BaseUri,
             endpoint.Security == EndpointTransportSecurity.HttpExplicitlyConfirmed);
         ValidateSecurity(endpoint.Security, baseUri, options.CustomCaCertificate);
+        TimeSpan restTimeout = EndpointTransportPolicy.ResolveTimeout(
+            options.RestTimeout,
+            nameof(options.RestTimeout),
+            EndpointTransportPolicy.DefaultRestTimeout);
+        TimeSpan writeTimeout = EndpointTransportPolicy.ResolveTimeout(
+            options.WriteTimeout,
+            nameof(options.WriteTimeout),
+            EndpointTransportPolicy.DefaultWriteTimeout);
+        TimeSpan webSocketHandshakeTimeout = EndpointTransportPolicy.ResolveTimeout(
+            options.WebSocketHandshakeTimeout,
+            nameof(options.WebSocketHandshakeTimeout),
+            EndpointTransportPolicy.DefaultWebSocketHandshakeTimeout);
 
         Uri webSocketUri = new UriBuilder(baseUri)
         {
@@ -156,7 +192,11 @@ public static class EndpointTransportFactory
 
             httpClient = new HttpClient(handler, disposeHandler: true)
             {
-                BaseAddress = baseUri
+                BaseAddress = baseUri,
+                // Request budgets are applied by MihomoApiClient so reads, writes, and
+                // response bodies share one cancellation policy. Avoid a second hidden
+                // HttpClient timeout racing that policy.
+                Timeout = Timeout.InfiniteTimeSpan
             };
 
             string? authorizationValue = null;
@@ -174,7 +214,10 @@ public static class EndpointTransportFactory
                 httpClient,
                 authorizationValue,
                 customCaCertificate,
-                bypassesSystemProxy: !handler.UseProxy);
+                bypassesSystemProxy: !handler.UseProxy,
+                restTimeout,
+                writeTimeout,
+                webSocketHandshakeTimeout);
         }
         catch
         {

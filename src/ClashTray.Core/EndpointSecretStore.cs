@@ -8,7 +8,6 @@ public sealed class EndpointSecretStore
 {
     private const int CurrentSchemaVersion = 1;
     private const int MaxStoreBytes = 512 * 1024;
-    private const int MaxSecretCharacters = 16 * 1024;
     private readonly AppPaths _paths;
     private readonly JsonSerializerOptions _options = new(JsonSerializerDefaults.Web)
     {
@@ -183,7 +182,7 @@ public sealed class EndpointSecretStore
     private static void ValidateSecret(string secret)
     {
         ArgumentNullException.ThrowIfNull(secret);
-        if (secret.Length > MaxSecretCharacters)
+        if (secret.EnumerateRunes().Count() > EndpointTransportPolicy.MaxSecretCharacters)
         {
             throw new ArgumentException("Endpoint secret is too long.", nameof(secret));
         }

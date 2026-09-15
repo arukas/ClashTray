@@ -300,6 +300,42 @@ public sealed class MihomoApiCompatibilityTests
     }
 
     [TestMethod]
+    public async Task ReadRequestUsesConfiguredTimeoutBudget()
+    {
+        using BlockingHandler handler = new BlockingHandler();
+        using HttpClient httpClient = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan
+        };
+        MihomoApiClient api = new MihomoApiClient(
+            httpClient,
+            new Uri("http://127.0.0.1:9090/"),
+            string.Empty,
+            restTimeout: TimeSpan.FromMilliseconds(80));
+
+        await Assert.ThrowsExactlyAsync<TimeoutException>(() => api.GetVersionAsync());
+        Assert.IsTrue(handler.CancellationObserved);
+    }
+
+    [TestMethod]
+    public async Task WriteRequestUsesSeparateConfiguredTimeoutBudget()
+    {
+        using BlockingHandler handler = new BlockingHandler();
+        using HttpClient httpClient = new HttpClient(handler)
+        {
+            Timeout = Timeout.InfiniteTimeSpan
+        };
+        MihomoApiClient api = new MihomoApiClient(
+            httpClient,
+            new Uri("http://127.0.0.1:9090/"),
+            string.Empty,
+            writeTimeout: TimeSpan.FromMilliseconds(80));
+
+        await Assert.ThrowsExactlyAsync<TimeoutException>(() => api.SetModeAsync(ProxyMode.Rule));
+        Assert.IsTrue(handler.CancellationObserved);
+    }
+
+    [TestMethod]
     public void ParserBoundsConnectionAndRuleLists()
     {
         string connectionItems = string.Join(
@@ -418,8 +454,30 @@ public sealed class MihomoApiCompatibilityTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new ByteArrayContent(new byte[16 * 1024 * 1024 + 1])
+                Content = new ByteArrayContent(new byte[MihomoApiClient.DefaultMaxJsonResponseBytes + 1])
             });
+    }
+
+    private sealed class BlockingHandler : HttpMessageHandler
+    {
+        public bool CancellationObserved { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                CancellationObserved = true;
+                throw;
+            }
+
+            throw new InvalidOperationException("The blocking handler should not complete normally.");
+        }
     }
 
     private static StreamingApiContext CreateStreamingApi(

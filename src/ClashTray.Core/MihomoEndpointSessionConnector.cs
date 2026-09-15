@@ -101,6 +101,9 @@ public sealed class MihomoEndpointSessionConnector : IEndpointSessionConnector
                     transport.HttpClient,
                     transport.BaseUri,
                     string.Empty,
+                    restTimeout: transport.RestTimeout,
+                    writeTimeout: transport.WriteTimeout,
+                    webSocketHandshakeTimeout: transport.WebSocketHandshakeTimeout,
                     webSocketFactory: transport.CreateWebSocket,
                     webSocketUriBuilder: transport.BuildWebSocketUri);
                 using JsonDocument version = await api.GetVersionAsync(cancellationToken).ConfigureAwait(false);

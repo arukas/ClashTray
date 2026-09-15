@@ -50,7 +50,10 @@ public sealed class MihomoStreamException : IOException
 
 public sealed class MihomoApiClient
 {
-    private const int MaxJsonResponseBytes = 16 * 1024 * 1024;
+    public static readonly TimeSpan DefaultRestTimeout = EndpointTransportPolicy.DefaultRestTimeout;
+    public static readonly TimeSpan DefaultWriteTimeout = EndpointTransportPolicy.DefaultWriteTimeout;
+    public static readonly TimeSpan DefaultWebSocketHandshakeTimeout = EndpointTransportPolicy.DefaultWebSocketHandshakeTimeout;
+    public const int DefaultMaxJsonResponseBytes = EndpointTransportPolicy.MaxJsonResponseBytes;
     private const int StreamingReadBufferBytes = 16 * 1024;
     public const int DefaultMaxStreamingRecordBytes = 256 * 1024;
     public static readonly TimeSpan DefaultStreamingFirstRecordTimeout = TimeSpan.FromSeconds(3);
@@ -65,6 +68,10 @@ public sealed class MihomoApiClient
     private readonly string _secret;
     private readonly Func<ClientWebSocket>? _webSocketFactory;
     private readonly Func<string, Uri>? _webSocketUriBuilder;
+    private readonly TimeSpan _restTimeout;
+    private readonly TimeSpan _writeTimeout;
+    private readonly TimeSpan _webSocketHandshakeTimeout;
+    private readonly int _maxJsonResponseBytes;
     private readonly TimeSpan _streamingFirstRecordTimeout;
     private readonly int _maxStreamingRecordBytes;
 
@@ -75,7 +82,11 @@ public sealed class MihomoApiClient
         TimeSpan? streamingFirstRecordTimeout = null,
         int maxStreamingRecordBytes = DefaultMaxStreamingRecordBytes,
         Func<ClientWebSocket>? webSocketFactory = null,
-        Func<string, Uri>? webSocketUriBuilder = null)
+        Func<string, Uri>? webSocketUriBuilder = null,
+        TimeSpan? restTimeout = null,
+        TimeSpan? writeTimeout = null,
+        TimeSpan? webSocketHandshakeTimeout = null,
+        int maxJsonResponseBytes = DefaultMaxJsonResponseBytes)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(controllerUri);
@@ -86,12 +97,26 @@ public sealed class MihomoApiClient
         }
 
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxStreamingRecordBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxJsonResponseBytes);
 
         _httpClient = httpClient;
         _controllerUri = controllerUri;
         _secret = secret;
         _webSocketFactory = webSocketFactory;
         _webSocketUriBuilder = webSocketUriBuilder;
+        _restTimeout = EndpointTransportPolicy.ResolveTimeout(
+            restTimeout,
+            nameof(restTimeout),
+            DefaultRestTimeout);
+        _writeTimeout = EndpointTransportPolicy.ResolveTimeout(
+            writeTimeout,
+            nameof(writeTimeout),
+            DefaultWriteTimeout);
+        _webSocketHandshakeTimeout = EndpointTransportPolicy.ResolveTimeout(
+            webSocketHandshakeTimeout,
+            nameof(webSocketHandshakeTimeout),
+            DefaultWebSocketHandshakeTimeout);
+        _maxJsonResponseBytes = maxJsonResponseBytes;
         _streamingFirstRecordTimeout = streamingFirstRecordTimeout ?? DefaultStreamingFirstRecordTimeout;
         _maxStreamingRecordBytes = maxStreamingRecordBytes;
     }
@@ -99,47 +124,67 @@ public sealed class MihomoApiClient
     public async Task<JsonDocument> GetAsync(string path, CancellationToken cancellationToken = default)
     {
         using HttpRequestMessage request = CreateRequest(HttpMethod.Get, path);
-        using HttpResponseMessage response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await ReadJsonAsync(response.Content, cancellationToken);
+        return await SendJsonAsync(
+            request,
+            _restTimeout,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<JsonDocument> PutAsync(string path, object payload, CancellationToken cancellationToken = default)
     {
-        using HttpRequestMessage request = CreateRequest(HttpMethod.Put, path);
-        request.Content = JsonContent.Create(payload, options: JsonOptions);
-        using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await ReadJsonAsync(response.Content, cancellationToken);
+        HttpRequestMessage request = CreateRequest(HttpMethod.Put, path);
+        using (request)
+        {
+            request.Content = JsonContent.Create(payload, options: JsonOptions);
+            return await SendJsonAsync(
+                request,
+                _writeTimeout,
+                HttpCompletionOption.ResponseContentRead,
+                cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task<JsonDocument> PostAsync(string path, object? payload = null, CancellationToken cancellationToken = default)
     {
-        using HttpRequestMessage request = CreateRequest(HttpMethod.Post, path);
-        if (payload is not null)
+        HttpRequestMessage request = CreateRequest(HttpMethod.Post, path);
+        using (request)
         {
-            request.Content = JsonContent.Create(payload, options: JsonOptions);
-        }
+            if (payload is not null)
+            {
+                request.Content = JsonContent.Create(payload, options: JsonOptions);
+            }
 
-        using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await ReadJsonAsync(response.Content, cancellationToken);
+            return await SendJsonAsync(
+                request,
+                _writeTimeout,
+                HttpCompletionOption.ResponseContentRead,
+                cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task<JsonDocument> PatchAsync(string path, object payload, CancellationToken cancellationToken = default)
     {
-        using HttpRequestMessage request = CreateRequest(HttpMethod.Patch, path);
-        request.Content = JsonContent.Create(payload, options: JsonOptions);
-        using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
-        return await ReadJsonAsync(response.Content, cancellationToken);
+        HttpRequestMessage request = CreateRequest(HttpMethod.Patch, path);
+        using (request)
+        {
+            request.Content = JsonContent.Create(payload, options: JsonOptions);
+            return await SendJsonAsync(
+                request,
+                _writeTimeout,
+                HttpCompletionOption.ResponseContentRead,
+                cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task DeleteAsync(string path, CancellationToken cancellationToken = default)
     {
         using HttpRequestMessage request = CreateRequest(HttpMethod.Delete, path);
-        using HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
-        await EnsureSuccessAsync(response, cancellationToken);
+        await SendAsync(
+            request,
+            _writeTimeout,
+            HttpCompletionOption.ResponseContentRead,
+            cancellationToken).ConfigureAwait(false);
     }
 
     public Task<JsonDocument> GetVersionAsync(CancellationToken cancellationToken = default) =>
@@ -259,11 +304,19 @@ public sealed class MihomoApiClient
     public async Task<ClientWebSocket> ConnectWebSocketAsync(string path, CancellationToken cancellationToken = default)
     {
         ClientWebSocket? socket = null;
+        using CancellationTokenSource timeout = CreateTimeoutSource(
+            _webSocketHandshakeTimeout,
+            cancellationToken);
         try
         {
             socket = CreateWebSocket();
-            await socket.ConnectAsync(BuildWebSocketUri(path), cancellationToken);
+            await socket.ConnectAsync(BuildWebSocketUri(path), timeout.Token).ConfigureAwait(false);
             return socket;
+        }
+        catch (OperationCanceledException exception)
+            when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new TimeoutException("Mihomo WebSocket 握手超时。", exception);
         }
         catch
         {
@@ -326,9 +379,65 @@ public sealed class MihomoApiClient
             statusCode: response.StatusCode);
     }
 
-    private static async Task<JsonDocument> ReadJsonAsync(HttpContent content, CancellationToken cancellationToken)
+    private async Task<JsonDocument> SendJsonAsync(
+        HttpRequestMessage request,
+        TimeSpan timeout,
+        HttpCompletionOption completionOption,
+        CancellationToken cancellationToken)
     {
-        byte[] bytes = await ReadBytesAsync(content, MaxJsonResponseBytes, cancellationToken);
+        using CancellationTokenSource timeoutSource = CreateTimeoutSource(timeout, cancellationToken);
+        try
+        {
+            using HttpResponseMessage response = await _httpClient.SendAsync(
+                    request,
+                    completionOption,
+                    timeoutSource.Token)
+                .ConfigureAwait(false);
+            await EnsureSuccessAsync(response, timeoutSource.Token).ConfigureAwait(false);
+            return await ReadJsonAsync(response.Content, timeoutSource.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception)
+            when (!cancellationToken.IsCancellationRequested && timeoutSource.IsCancellationRequested)
+        {
+            throw new TimeoutException("Mihomo Controller 请求超时。", exception);
+        }
+    }
+
+    private async Task SendAsync(
+        HttpRequestMessage request,
+        TimeSpan timeout,
+        HttpCompletionOption completionOption,
+        CancellationToken cancellationToken)
+    {
+        using CancellationTokenSource timeoutSource = CreateTimeoutSource(timeout, cancellationToken);
+        try
+        {
+            using HttpResponseMessage response = await _httpClient.SendAsync(
+                    request,
+                    completionOption,
+                    timeoutSource.Token)
+                .ConfigureAwait(false);
+            await EnsureSuccessAsync(response, timeoutSource.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception)
+            when (!cancellationToken.IsCancellationRequested && timeoutSource.IsCancellationRequested)
+        {
+            throw new TimeoutException("Mihomo Controller 请求超时。", exception);
+        }
+    }
+
+    private static CancellationTokenSource CreateTimeoutSource(
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        CancellationTokenSource source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        source.CancelAfter(timeout);
+        return source;
+    }
+
+    private async Task<JsonDocument> ReadJsonAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        byte[] bytes = await ReadBytesAsync(content, _maxJsonResponseBytes, cancellationToken).ConfigureAwait(false);
         return bytes.Length == 0 ? JsonDocument.Parse("{}") : JsonDocument.Parse(bytes);
     }
 
@@ -365,7 +474,8 @@ public sealed class MihomoApiClient
     private async Task<JsonDocument> GetStreamingSnapshotAsync(string path, CancellationToken cancellationToken)
     {
         using HttpRequestMessage request = CreateRequest(HttpMethod.Get, path);
-        using CancellationTokenSource firstRecordTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using CancellationTokenSource operationTimeout = CreateTimeoutSource(_restTimeout, cancellationToken);
+        using CancellationTokenSource firstRecordTimeout = CancellationTokenSource.CreateLinkedTokenSource(operationTimeout.Token);
         firstRecordTimeout.CancelAfter(_streamingFirstRecordTimeout);
 
         try
@@ -374,10 +484,12 @@ public sealed class MihomoApiClient
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 firstRecordTimeout.Token);
-            await EnsureSuccessAsync(response, firstRecordTimeout.Token);
-            return await ReadFirstJsonLineAsync(response.Content, path, firstRecordTimeout.Token);
+            await EnsureSuccessAsync(response, firstRecordTimeout.Token).ConfigureAwait(false);
+            return await ReadFirstJsonLineAsync(response.Content, path, firstRecordTimeout.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException exception)
+            when (!cancellationToken.IsCancellationRequested
+                && (firstRecordTimeout.IsCancellationRequested || operationTimeout.IsCancellationRequested))
         {
             throw new TimeoutException(
                 $"Mihomo {path} 首条指标记录读取超时。",

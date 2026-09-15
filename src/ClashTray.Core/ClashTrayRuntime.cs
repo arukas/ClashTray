@@ -75,7 +75,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly object _proxyRecoveryGate = new();
     private Task? _proxyRecoveryTask;
 
-    private const int MaxLogMessageBytes = 1024 * 1024;
+    private const int MaxLogMessageBytes = EndpointTransportPolicy.MaxWebSocketMessageBytes;
     private static readonly TimeSpan RemoteRefreshInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan RemoteRefreshRetryDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan RemoteRefreshMaxRetryDelay = TimeSpan.FromSeconds(30);

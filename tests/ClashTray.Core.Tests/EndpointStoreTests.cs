@@ -211,6 +211,25 @@ public sealed class EndpointStoreTests
     }
 
     [TestMethod]
+    public async Task SecretStoreRejectsSecretBeyondRemoteEndpointLimit()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointSecretStore store = new(paths);
+
+        try
+        {
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => store.SetAsync(
+                "office-secret",
+                new string('x', EndpointTransportPolicy.MaxSecretCharacters + 1)));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
     public async Task CorruptSecretStoreIsQuarantinedWithoutReturningSecretData()
     {
         string root = CreateRoot();

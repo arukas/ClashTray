@@ -75,7 +75,22 @@ public sealed class EndpointUriNormalizerTests
         Assert.ThrowsExactly<ArgumentException>(() =>
             EndpointUriNormalizer.CreateRemoteDescriptor(
                 new EndpointId("id"),
-                new string('x', 129),
+                new string('x', EndpointTransportPolicy.MaxDisplayNameCharacters + 1),
                 new Uri("https://example.test")));
+    }
+
+    [TestMethod]
+    public void RejectsControlCharactersAndAcceptsUnicodeScalarsWithinLimit()
+    {
+        EndpointDescriptor descriptor = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("unicode"),
+            new string('界', EndpointTransportPolicy.MaxDisplayNameCharacters),
+            new Uri("https://example.test"));
+
+        Assert.AreEqual(EndpointTransportPolicy.MaxDisplayNameCharacters, descriptor.DisplayName.EnumerateRunes().Count());
+        Assert.ThrowsExactly<ArgumentException>(() => EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("control"),
+            "Office\nController",
+            new Uri("https://example.test")));
     }
 }

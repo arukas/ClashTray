@@ -36,6 +36,46 @@ public sealed class EndpointTransportFactoryTests
     }
 
     [TestMethod]
+    public void TransportUsesDocumentedTimeoutPolicyAndDisablesHiddenHttpTimeout()
+    {
+        EndpointDescriptor endpoint = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("https://mihomo.example.test"));
+        TimeSpan restTimeout = TimeSpan.FromSeconds(7);
+        TimeSpan writeTimeout = TimeSpan.FromSeconds(11);
+        TimeSpan webSocketTimeout = TimeSpan.FromSeconds(9);
+
+        using EndpointTransport transport = EndpointTransportFactory.Create(
+            endpoint,
+            new EndpointTransportOptions(
+                RestTimeout: restTimeout,
+                WriteTimeout: writeTimeout,
+                WebSocketHandshakeTimeout: webSocketTimeout));
+
+        Assert.AreEqual(restTimeout, transport.RestTimeout);
+        Assert.AreEqual(writeTimeout, transport.WriteTimeout);
+        Assert.AreEqual(webSocketTimeout, transport.WebSocketHandshakeTimeout);
+        Assert.AreEqual(Timeout.InfiniteTimeSpan, transport.HttpClient.Timeout);
+    }
+
+    [TestMethod]
+    public void TransportRejectsNonPositiveTimeouts()
+    {
+        EndpointDescriptor endpoint = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("office"),
+            "Office",
+            new Uri("https://mihomo.example.test"));
+
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => EndpointTransportFactory.Create(
+            endpoint,
+            new EndpointTransportOptions(RestTimeout: TimeSpan.Zero)));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => EndpointTransportFactory.Create(
+            endpoint,
+            new EndpointTransportOptions(WriteTimeout: Timeout.InfiniteTimeSpan)));
+    }
+
+    [TestMethod]
     public void ApiClientUsesEndpointTransportForWebSocketPolicy()
     {
         using X509Certificate2 ca = CreateCaCertificate("ClashTray WebSocket CA");

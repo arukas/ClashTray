@@ -1,13 +1,11 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core;
 
 public static class EndpointUriNormalizer
 {
-    private const int MaxUriCharacters = 2048;
-    private const int MaxDisplayNameCharacters = 128;
-
     public static EndpointDescriptor CreateRemoteDescriptor(
         EndpointId id,
         string displayName,
@@ -33,9 +31,15 @@ public static class EndpointUriNormalizer
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id.Value);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
-        if (displayName.Trim().Length > MaxDisplayNameCharacters)
+        string normalizedDisplayName = displayName.Trim();
+        if (normalizedDisplayName.EnumerateRunes().Count() > EndpointTransportPolicy.MaxDisplayNameCharacters)
         {
             throw new ArgumentException("Endpoint display name is too long.", nameof(displayName));
+        }
+
+        if (normalizedDisplayName.EnumerateRunes().Any(static rune => Rune.GetUnicodeCategory(rune) == System.Globalization.UnicodeCategory.Control))
+        {
+            throw new ArgumentException("Endpoint display name cannot contain control characters.", nameof(displayName));
         }
 
         Uri normalizedUri = NormalizeBaseUri(baseUri, allowExplicitHttp);
@@ -47,7 +51,7 @@ public static class EndpointUriNormalizer
         return new EndpointDescriptor(
             new EndpointId(id.Value.Trim()),
             EndpointKind.Remote,
-            displayName.Trim(),
+            normalizedDisplayName,
             normalizedUri,
             security,
             isEnabled);
@@ -57,7 +61,7 @@ public static class EndpointUriNormalizer
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         string trimmed = value.Trim();
-        if (trimmed.Length > MaxUriCharacters)
+        if (trimmed.Length > EndpointTransportPolicy.MaxUriCharacters)
         {
             throw new ArgumentException("Endpoint URI is too long.", nameof(value));
         }

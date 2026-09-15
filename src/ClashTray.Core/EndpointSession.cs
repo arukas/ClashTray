@@ -25,6 +25,9 @@ public sealed class EndpointSession : IAsyncDisposable
             transport.HttpClient,
             transport.BaseUri,
             string.Empty,
+            restTimeout: transport.RestTimeout,
+            writeTimeout: transport.WriteTimeout,
+            webSocketHandshakeTimeout: transport.WebSocketHandshakeTimeout,
             webSocketFactory: transport.CreateWebSocket,
             webSocketUriBuilder: transport.BuildWebSocketUri);
         Capabilities = capabilities;
@@ -68,17 +71,8 @@ public sealed class EndpointSession : IAsyncDisposable
         string path,
         CancellationToken cancellationToken = default)
     {
-        ClientWebSocket socket = CreateWebSocket();
-        try
-        {
-            await socket.ConnectAsync(BuildWebSocketUri(path), cancellationToken);
-            return socket;
-        }
-        catch
-        {
-            socket.Dispose();
-            throw;
-        }
+        ThrowIfDisposed();
+        return await Api.ConnectWebSocketAsync(path, cancellationToken).ConfigureAwait(false);
     }
 
     public ValueTask DisposeAsync()
