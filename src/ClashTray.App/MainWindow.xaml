@@ -22,6 +22,7 @@
                     <TextBlock x:Name="CoreStateText" x:Uid="CoreStateText" FontSize="12"/>
                     <Button x:Name="ControllerEndpointButton" x:Uid="ControllerEndpointButton" FontSize="12" Padding="0" BorderThickness="0" Background="Transparent" Click="ControllerEndpointButton_Click" IsEnabled="False"/>
                 </StackPanel>
+                <TextBlock x:Name="ControllerFreshnessText" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="Collapsed"/>
             </StackPanel>
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
                 <Button x:Name="ThemeButton" x:Uid="ThemeButton" Style="{StaticResource ClashTrayIconButtonStyle}">

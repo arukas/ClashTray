@@ -8,6 +8,16 @@
   <!-- MainWindow chrome -->
   <data name="LogoButton.AutomationProperties.Name" xml:space="preserve"><value>ClashTray logo</value></data>
   <data name="CoreStateText.Text" xml:space="preserve"><value>Stopped</value></data>
+  <data name="ControllerStateConnected" xml:space="preserve"><value>Connected</value></data>
+  <data name="ControllerStateConnecting" xml:space="preserve"><value>Connecting</value></data>
+  <data name="ControllerStateReconnecting" xml:space="preserve"><value>Reconnecting</value></data>
+  <data name="ControllerStateAuthenticationFailed" xml:space="preserve"><value>Authentication failed</value></data>
+  <data name="ControllerStateCertificateFailed" xml:space="preserve"><value>Certificate validation failed</value></data>
+  <data name="ControllerStateIncompatible" xml:space="preserve"><value>Endpoint incompatible</value></data>
+  <data name="ControllerStateFailed" xml:space="preserve"><value>Connection failed</value></data>
+  <data name="ControllerStateDisconnected" xml:space="preserve"><value>Disconnected</value></data>
+  <data name="ControllerLastConfirmedFormat" xml:space="preserve"><value>Last confirmed: {0}</value></data>
+  <data name="ControllerNoConfirmedData" xml:space="preserve"><value>No confirmed data yet</value></data>
   <data name="ControllerEndpointButton.Content" xml:space="preserve"><value>Core not running</value></data>
   <data name="ControllerEndpointButton.AutomationProperties.Name" xml:space="preserve"><value>Open the local controller</value></data>
   <data name="ThemeButton.ToolTipService.ToolTip" xml:space="preserve"><value>Change theme</value></data>

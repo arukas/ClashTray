@@ -49,6 +49,9 @@ public sealed partial class MainWindow : Window
     private EndpointKind _activeEndpointKind = EndpointKind.Local;
     private readonly Queue<(double Up, double Down)> _trafficHistory = new();
     private DateTime _lastTrafficSample;
+    private EndpointSessionState _activeEndpointState = EndpointSessionState.Disconnected;
+    private DateTimeOffset? _activeControllerLastConfirmedAt;
+    private string _activeEndpointDisplayName = EndpointId.Local.Value;
 
     public MainWindow(App app)
     {
@@ -151,6 +154,9 @@ public sealed partial class MainWindow : Window
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         _activeEndpointKind = snapshot.ActiveController.Endpoint.Kind;
+        _activeEndpointState = snapshot.ActiveController.State;
+        _activeControllerLastConfirmedAt = snapshot.ActiveController.LastConfirmedAt;
+        _activeEndpointDisplayName = snapshot.ActiveController.Endpoint.DisplayName;
         UpdateSnapshot(RuntimeSnapshotAdapter.ToRuntimeSnapshot(
             snapshot));
     }
@@ -190,16 +196,9 @@ public sealed partial class MainWindow : Window
         RuleModeButton.IsChecked = coreRunning && core.Mode == ProxyMode.Rule;
         GlobalModeButton.IsChecked = coreRunning && core.Mode == ProxyMode.Global;
         DirectModeButton.IsChecked = coreRunning && core.Mode == ProxyMode.Direct;
-        CoreStateText.Text = core.State switch
-        {
-            CoreState.Running => LocalizationService.Get("CoreStateRunning"),
-            CoreState.Starting => LocalizationService.Get("CoreStateStarting"),
-            CoreState.Stopping => LocalizationService.Get("CoreStateStopping"),
-            CoreState.Restarting => LocalizationService.Get("CoreStateRestarting"),
-            CoreState.Failed => LocalizationService.Get("CoreStateFailed"),
-            CoreState.Missing => LocalizationService.Get("CoreStateMissing"),
-            _ => LocalizationService.Get("CoreStateStopped")
-        };
+        CoreStateText.Text = localController
+            ? FormatCoreState(core.State)
+            : FormatEndpointState(_activeEndpointState);
         CoreActionButton.Content = new FontIcon
         {
             Glyph = core.State == CoreState.Running ? "\uF305" : "\uE768",
@@ -212,13 +211,24 @@ public sealed partial class MainWindow : Window
                 : core.State == CoreState.Running
                     ? LocalizationService.Get("ToolTipRestartCore")
                     : LocalizationService.Get("ToolTipStartCore"));
-        StatusDot.Fill = new SolidColorBrush(core.State switch
-        {
-            CoreState.Running => Colors.Green,
-            CoreState.Failed => Colors.Red,
-            CoreState.Starting or CoreState.Stopping or CoreState.Restarting or CoreState.Validating => Colors.Orange,
-            _ => Colors.Gray
-        });
+        StatusDot.Fill = new SolidColorBrush(localController
+            ? core.State switch
+            {
+                CoreState.Running => Colors.Green,
+                CoreState.Failed => Colors.Red,
+                CoreState.Starting or CoreState.Stopping or CoreState.Restarting or CoreState.Validating => Colors.Orange,
+                _ => Colors.Gray
+            }
+            : _activeEndpointState switch
+            {
+                EndpointSessionState.Connected => Colors.Green,
+                EndpointSessionState.Connecting or EndpointSessionState.Reconnecting => Colors.Orange,
+                EndpointSessionState.AuthenticationFailed
+                    or EndpointSessionState.CertificateFailed
+                    or EndpointSessionState.Incompatible
+                    or EndpointSessionState.Failed => Colors.Red,
+                _ => Colors.Gray
+            });
         string appVersion = typeof(MainWindow)
             .Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
@@ -231,8 +241,7 @@ public sealed partial class MainWindow : Window
         ControllerEndpointButton.Content = !localController
             ? LocalizationService.Format(
                 "ControllerRemoteFormat",
-                _runtime?.AppSnapshot.ActiveController.Endpoint.DisplayName
-                    ?? LocalizationService.Get("ControllerRemoteNotAvailable"))
+                _activeEndpointDisplayName)
             : coreRunning
                 ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}/ui/"
                 : LocalizationService.Get("ControllerCoreNotRunning");
@@ -246,6 +255,20 @@ public sealed partial class MainWindow : Window
                 : dashboardAvailable
                     ? LocalizationService.Get("ToolTipControllerOpenDashboard")
                     : LocalizationService.Get("ToolTipControllerMissingDashboard"));
+        if (localController)
+        {
+            ControllerFreshnessText.Visibility = Visibility.Collapsed;
+            ControllerFreshnessText.Text = string.Empty;
+        }
+        else
+        {
+            ControllerFreshnessText.Visibility = Visibility.Visible;
+            ControllerFreshnessText.Text = _activeControllerLastConfirmedAt is DateTimeOffset confirmedAt
+                ? LocalizationService.Format(
+                    "ControllerLastConfirmedFormat",
+                    confirmedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))
+                : LocalizationService.Get("ControllerNoConfirmedData");
+        }
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(
             ControllerEndpointButton,
             !localController
@@ -848,6 +871,29 @@ public sealed partial class MainWindow : Window
             e.Handled = true;
         }
     }
+
+    private static string FormatCoreState(CoreState state) => state switch
+    {
+        CoreState.Running => LocalizationService.Get("CoreStateRunning"),
+        CoreState.Starting => LocalizationService.Get("CoreStateStarting"),
+        CoreState.Stopping => LocalizationService.Get("CoreStateStopping"),
+        CoreState.Restarting => LocalizationService.Get("CoreStateRestarting"),
+        CoreState.Failed => LocalizationService.Get("CoreStateFailed"),
+        CoreState.Missing => LocalizationService.Get("CoreStateMissing"),
+        _ => LocalizationService.Get("CoreStateStopped")
+    };
+
+    private static string FormatEndpointState(EndpointSessionState state) => state switch
+    {
+        EndpointSessionState.Connected => LocalizationService.Get("ControllerStateConnected"),
+        EndpointSessionState.Connecting => LocalizationService.Get("ControllerStateConnecting"),
+        EndpointSessionState.Reconnecting => LocalizationService.Get("ControllerStateReconnecting"),
+        EndpointSessionState.AuthenticationFailed => LocalizationService.Get("ControllerStateAuthenticationFailed"),
+        EndpointSessionState.CertificateFailed => LocalizationService.Get("ControllerStateCertificateFailed"),
+        EndpointSessionState.Incompatible => LocalizationService.Get("ControllerStateIncompatible"),
+        EndpointSessionState.Failed => LocalizationService.Get("ControllerStateFailed"),
+        _ => LocalizationService.Get("ControllerStateDisconnected")
+    };
 
     private static string FormatRate(double bytesPerSecond)
     {

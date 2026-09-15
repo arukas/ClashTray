@@ -8,6 +8,16 @@
   <!-- MainWindow chrome -->
   <data name="LogoButton.AutomationProperties.Name" xml:space="preserve"><value>ClashTray Logo</value></data>
   <data name="CoreStateText.Text" xml:space="preserve"><value>已停止</value></data>
+  <data name="ControllerStateConnected" xml:space="preserve"><value>已连接</value></data>
+  <data name="ControllerStateConnecting" xml:space="preserve"><value>连接中</value></data>
+  <data name="ControllerStateReconnecting" xml:space="preserve"><value>正在重连</value></data>
+  <data name="ControllerStateAuthenticationFailed" xml:space="preserve"><value>认证失败</value></data>
+  <data name="ControllerStateCertificateFailed" xml:space="preserve"><value>证书验证失败</value></data>
+  <data name="ControllerStateIncompatible" xml:space="preserve"><value>端点不兼容</value></data>
+  <data name="ControllerStateFailed" xml:space="preserve"><value>连接失败</value></data>
+  <data name="ControllerStateDisconnected" xml:space="preserve"><value>未连接</value></data>
+  <data name="ControllerLastConfirmedFormat" xml:space="preserve"><value>上次确认：{0}</value></data>
+  <data name="ControllerNoConfirmedData" xml:space="preserve"><value>尚无已确认数据</value></data>
   <data name="ControllerEndpointButton.Content" xml:space="preserve"><value>核心未运行</value></data>
   <data name="ControllerEndpointButton.AutomationProperties.Name" xml:space="preserve"><value>打开本机控制器</value></data>
   <data name="ThemeButton.ToolTipService.ToolTip" xml:space="preserve"><value>切换主题</value></data>

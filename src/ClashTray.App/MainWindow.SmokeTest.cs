@@ -114,6 +114,7 @@ public sealed partial class MainWindow
         }
         await VerifyNodeScrollingAsync(directory, sample);
         await VerifyProxyDelayDisplayAsync(directory, sample);
+        await VerifyRemoteFreshnessPresentationAsync(directory, sample);
         await VerifySettingsDraftAsync(directory);
         NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect actual);
         NativeMethods.Rect anchor = GetTrayRect();
@@ -278,6 +279,71 @@ public sealed partial class MainWindow
             InputLimits = "Wheel, touch and physical keyboard require manual verification."
         }, DiagnosticJsonOptions));
         DashboardScrollViewer.ChangeView(null, 0, null, true);
+    }
+
+    private async Task VerifyRemoteFreshnessPresentationAsync(string directory, RuntimeSnapshot sample)
+    {
+        AppSnapshot local = _runtime!.AppSnapshot;
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("smoke-remote"),
+            "示例远程端点",
+            new Uri("https://remote.example.test"));
+        DateTimeOffset lastConfirmedAt = DateTimeOffset.UtcNow.AddMinutes(-3);
+        ControllerSessionSnapshot remoteController = new(
+            remote,
+            EndpointSessionState.Reconnecting,
+            1,
+            lastConfirmedAt,
+            sample.Core,
+            sample.ProxyGroups,
+            sample.ProxyNodes,
+            sample.Connections,
+            sample.Rules,
+            sample.Providers,
+            sample.RuleProviders,
+            sample.Logs,
+            EndpointCapabilityDefaults.Remote,
+            "smoke stale controller");
+        AppSnapshot remoteSnapshot = local with
+        {
+            ActiveController = remoteController,
+            Endpoints = local.Endpoints.Append(remote).ToArray()
+        };
+
+        UpdateAppSnapshot(remoteSnapshot);
+        RootGrid.UpdateLayout();
+        string expectedFreshness = LocalizationService.Format(
+            "ControllerLastConfirmedFormat",
+            lastConfirmedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
+        if (CoreStateText.Text != LocalizationService.Get("ControllerStateReconnecting")
+            || ControllerFreshnessText.Visibility != Visibility.Visible
+            || ControllerFreshnessText.Text != expectedFreshness
+            || !string.Equals(
+                ControllerEndpointButton.Content as string,
+                LocalizationService.Format("ControllerRemoteFormat", remote.DisplayName),
+                StringComparison.Ordinal)
+            || CoreActionButton.IsEnabled
+            || SystemProxySwitch.IsEnabled
+            || TunSwitch.IsEnabled)
+        {
+            throw new InvalidOperationException("Remote stale state was not visible or local controls were enabled.");
+        }
+
+        await SaveDiagnosticFrameAsync(directory, "remote-stale-controller");
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "remote-freshness-checks.json"),
+            JsonSerializer.Serialize(new
+            {
+                RemoteState = "Reconnecting",
+                LastConfirmedTimestampVisible = true,
+                LocalCoreActionDisabled = true,
+                LocalSystemProxyActionDisabled = true,
+                LocalTunActionDisabled = true,
+                NetworkStateChanged = false,
+                TunTouched = false
+            }, DiagnosticJsonOptions));
+
+        UpdateAppSnapshot(local);
     }
 
     private async Task VerifySettingsDraftAsync(string directory)
