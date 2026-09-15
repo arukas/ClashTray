@@ -135,6 +135,58 @@ public sealed class NetworkSwitchRuntimeControllerTests
         }
     }
 
+    [TestMethod]
+    public async Task PermissionRequiredStatusCarriesStableErrorCode()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        NetworkRuleStore store = new(paths);
+        await store.SaveAsync(new NetworkSwitchRuleSet(true, null, []));
+        await using FakeNetworkContextSource source = new(new NetworkContextSnapshot(
+            1,
+            DateTimeOffset.UtcNow,
+            NetworkConnectivityKind.WiFi,
+            null,
+            "wifi-interface",
+            NetworkPermissionState.Denied,
+            false,
+            true));
+        NetworkSwitchRuntimeController controller = new(
+            store,
+            source,
+            (context, rules) => new NetworkSwitchPolicyInput(
+                rules.AutomaticSwitchingEnabled,
+                context,
+                rules.Rules,
+                rules.DefaultConfigurationId,
+                "office",
+                new HashSet<string>(["home", "office"], StringComparer.OrdinalIgnoreCase)),
+            (request, _) => Task.FromResult(new ConfigurationSwitchResult(
+                request.OperationId,
+                ConfigurationSwitchOutcome.Committed,
+                ConfigurationSwitchStage.Committed,
+                ErrorCode.None)),
+            debounce: TimeSpan.FromMilliseconds(20),
+            cooldown: TimeSpan.FromSeconds(1));
+
+        try
+        {
+            await controller.InitializeAsync();
+            using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(5));
+            while (controller.Status.State != NetworkSwitchState.PermissionRequired)
+            {
+                await Task.Delay(10, timeout.Token);
+            }
+
+            Assert.AreEqual(ErrorCode.NetworkPermissionRequired, controller.Status.ErrorCode);
+        }
+        finally
+        {
+            await controller.DisposeAsync();
+            DeleteRoot(root);
+        }
+    }
+
     private static NetworkContextSnapshot CreateContext(
         long revision,
         string ssid,

@@ -305,13 +305,22 @@ public sealed class NetworkSwitchRuntimeController : IAsyncDisposable
         string? errorMessage = lastDecision?.State == NetworkSwitchState.Failed
             ? lastDecision.Message
             : null;
+        ErrorCode errorCode = lastDecision?.Reason switch
+        {
+            NetworkSwitchReason.PermissionRequired => ErrorCode.NetworkPermissionRequired,
+            NetworkSwitchReason.AmbiguousNetwork => ErrorCode.NetworkAmbiguous,
+            NetworkSwitchReason.MissingTarget => ErrorCode.NetworkRuleTargetMissing,
+            NetworkSwitchReason.ExecutionFailed => ErrorCode.ConfigurationSwitchFailed,
+            _ => ErrorCode.None
+        };
         return new(
             true,
             state,
             context?.PermissionState ?? NetworkPermissionState.Unknown,
             context,
             lastDecision,
-            errorMessage);
+            errorMessage,
+            errorCode);
     }
 
     private static NetworkSwitchStatus CreateUnavailableStatus(string errorMessage) => new(

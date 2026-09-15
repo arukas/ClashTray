@@ -103,4 +103,5 @@ public sealed record NetworkSwitchStatus(
     NetworkPermissionState PermissionState,
     NetworkContextSnapshot? Context,
     NetworkSwitchDecision? LastDecision,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    ErrorCode ErrorCode = ErrorCode.None);
