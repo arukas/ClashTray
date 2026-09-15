@@ -239,11 +239,11 @@ jobs:
           }
 
           $fullArtifact = "ClashTray-$env:RELEASE_VERSION-win-x64-Full.exe"
-          $fullChecksum = "$fullArtifact.sha256"
+          $fullChecksum = [System.IO.Path]::ChangeExtension($fullArtifact, '.sha256')
           $noCetArtifact = "ClashTray-$env:RELEASE_VERSION-win-x64-NoCET.exe"
-          $noCetChecksum = "$noCetArtifact.sha256"
+          $noCetChecksum = [System.IO.Path]::ChangeExtension($noCetArtifact, '.sha256')
           $miniArtifact = "ClashTray-$env:RELEASE_VERSION-win-x64-Mini.exe"
-          $miniChecksum = "$miniArtifact.sha256"
+          $miniChecksum = [System.IO.Path]::ChangeExtension($miniArtifact, '.sha256')
 
           $notesLines = @(
             '## 下载',
