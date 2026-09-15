@@ -382,7 +382,38 @@ public sealed partial class MainWindow
             throw new InvalidOperationException("Remote stale log clearing was not disabled.");
         }
 
+        NavigateTo(_settingsPage, PanelPage.Settings);
+        await Task.Delay(50);
+        ListView remoteProviders = (ListView)_settingsPage!.FindName("ProvidersListView");
+        remoteProviders.SelectedIndex = 0;
+        await Task.Delay(20);
+        if (((Button)_settingsPage!.FindName("ClearDnsButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("ClearFakeIpButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("UpdateGeoButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("RefreshProviderButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote stale maintenance actions were not disabled.");
+        }
+
         NavigateTo(_proxyPage, PanelPage.Proxy);
+        ControllerSessionSnapshot connectedController = remoteController with
+        {
+            State = EndpointSessionState.Connected,
+            ErrorMessage = null
+        };
+        UpdateAppSnapshot(remoteSnapshot with { ActiveController = connectedController });
+        RootGrid.UpdateLayout();
+        StackPanel connectedGroups = (StackPanel)_proxyPage!.FindName("GroupsPanel");
+        if (!RuleModeButton.IsEnabled
+            || !GlobalModeButton.IsEnabled
+            || !DirectModeButton.IsEnabled
+            || connectedGroups.Children.Count == 0
+            || ((Grid)((StackPanel)((Border)connectedGroups.Children[0]).Child).Children[0]).Children[2] is not Button connectedTestButton
+            || !connectedTestButton.IsEnabled)
+        {
+            throw new InvalidOperationException("Connected remote controller actions did not recover.");
+        }
+
         await File.WriteAllTextAsync(
             Path.Combine(directory, "remote-freshness-checks.json"),
             JsonSerializer.Serialize(new
@@ -397,6 +428,8 @@ public sealed partial class MainWindow
                 RemoteRulesRefreshDisabled = true,
                 RemoteConnectionCloseDisabled = true,
                 RemoteLogClearDisabled = true,
+                RemoteMaintenanceActionsDisabled = true,
+                ConnectedRemoteActionsReenabled = true,
                 NetworkStateChanged = false,
                 TunTouched = false
             }, DiagnosticJsonOptions));

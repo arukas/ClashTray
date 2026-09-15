@@ -136,9 +136,9 @@
                 </ComboBox>
                 <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Left">
 
-                    <Button x:Uid="ClearDnsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearDnsButton_Click" />
-                    <Button x:Uid="ClearFakeIpButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearFakeIpButton_Click" />
-                    <Button x:Uid="UpdateGeoButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="UpdateGeoButton_Click" />
+                    <Button x:Name="ClearDnsButton" x:Uid="ClearDnsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearDnsButton_Click" />
+                    <Button x:Name="ClearFakeIpButton" x:Uid="ClearFakeIpButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ClearFakeIpButton_Click" />
+                    <Button x:Name="UpdateGeoButton" x:Uid="UpdateGeoButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="UpdateGeoButton_Click" />
                 </StackPanel>
             </StackPanel>
         </Border>
@@ -147,7 +147,7 @@
             <StackPanel Spacing="8">
                 <TextBlock x:Uid="ProvidersHeader" FontWeight="SemiBold" />
                 <ListView x:Name="ProvidersListView" x:Uid="ProvidersListView" SelectionChanged="ProvidersListView_SelectionChanged" ScrollViewer.VerticalScrollMode="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled" />
-                <Button x:Uid="RefreshProviderButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="RefreshProviderButton_Click" HorizontalAlignment="Left" />
+                <Button x:Name="RefreshProviderButton" x:Uid="RefreshProviderButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="RefreshProviderButton_Click" HorizontalAlignment="Left" />
             </StackPanel>
         </Border>
 

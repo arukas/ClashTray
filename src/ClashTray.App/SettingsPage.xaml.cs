@@ -23,6 +23,7 @@ public sealed partial class SettingsPage : UserControl
     private EndpointId? _editingEndpointId;
     private EndpointId? _testingEndpointId;
     private readonly List<NetworkRuleEditorRow> _networkRuleRows = [];
+    private bool _controllerWritable = true;
 
     public SettingsPage(ClashTrayRuntime runtime)
     {
@@ -35,7 +36,14 @@ public sealed partial class SettingsPage : UserControl
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
+        UpdateSnapshot(snapshot, controllerWritable: true);
+    }
+
+    public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
+        _controllerWritable = controllerWritable;
+        UpdateControllerActionButtons();
         _lastSnapshot = snapshot;
         LoadSettings(_runtime.Settings);
         UpdateProviders(snapshot);
@@ -597,6 +605,11 @@ public sealed partial class SettingsPage : UserControl
 
     private async void ClearFakeIpButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!_controllerWritable)
+        {
+            return;
+        }
+
         try
         {
             await _runtime.ClearFakeIpCacheAsync();
@@ -610,6 +623,11 @@ public sealed partial class SettingsPage : UserControl
 
     private async void ClearDnsButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!_controllerWritable)
+        {
+            return;
+        }
+
         try
         {
             await _runtime.ClearDnsCacheAsync();
@@ -623,6 +641,11 @@ public sealed partial class SettingsPage : UserControl
 
     private async void UpdateGeoButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!_controllerWritable)
+        {
+            return;
+        }
+
         try
         {
             await _runtime.UpdateGeoAsync();
@@ -636,6 +659,11 @@ public sealed partial class SettingsPage : UserControl
 
     private async void RefreshProviderButton_Click(object sender, RoutedEventArgs e)
     {
+        if (!_controllerWritable)
+        {
+            return;
+        }
+
         if (ProvidersListView.SelectedItem is not ListViewItem { Tag: ValueTuple<ProviderStatus, bool> selected })
         {
             StatusText.Text = LocalizationService.Get("SelectProviderFirst");
@@ -655,11 +683,36 @@ public sealed partial class SettingsPage : UserControl
 
     private void ProvidersListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        UpdateControllerActionButtons();
         if (ProvidersListView.SelectedItem is ListViewItem { Tag: ValueTuple<ProviderStatus, bool> selected })
         {
             StatusText.Text = ErrorSanitizer.Sanitize(
                 selected.Item1.Error ?? LocalizationService.Format("ProviderStatusSummaryFormat", selected.Item1.Name, selected.Item1.Count));
         }
+    }
+
+    private void UpdateControllerActionButtons()
+    {
+        if (ClearDnsButton is null)
+        {
+            return;
+        }
+
+        ClearDnsButton.IsEnabled = _controllerWritable;
+        ClearFakeIpButton.IsEnabled = _controllerWritable;
+        UpdateGeoButton.IsEnabled = _controllerWritable;
+        bool providerSelected = ProvidersListView.SelectedItem is ListViewItem
+        {
+            Tag: ValueTuple<ProviderStatus, bool>
+        };
+        RefreshProviderButton.IsEnabled = _controllerWritable && providerSelected;
+        string? tooltip = _controllerWritable
+            ? null
+            : LocalizationService.Get("RemoteControllerReadOnly");
+        ToolTipService.SetToolTip(ClearDnsButton, tooltip);
+        ToolTipService.SetToolTip(ClearFakeIpButton, tooltip);
+        ToolTipService.SetToolTip(UpdateGeoButton, tooltip);
+        ToolTipService.SetToolTip(RefreshProviderButton, tooltip);
     }
 
     private async void InstallCoreButton_Click(object sender, RoutedEventArgs e)
@@ -1165,6 +1218,7 @@ public sealed partial class SettingsPage : UserControl
         ListViewItem? restored = ProvidersListView.Items.OfType<ListViewItem>().FirstOrDefault(item =>
             item.Tag is ValueTuple<ProviderStatus, bool> itemData && itemData.Item1.Name == selectedName);
         ProvidersListView.SelectedItem = restored;
+        UpdateControllerActionButtons();
     }
 
     private static ListViewItem CreateProviderItem(ProviderStatus provider, bool rules) =>

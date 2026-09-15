@@ -416,7 +416,7 @@ public sealed partial class MainWindow : Window
                 _logsPage?.UpdateSnapshot(snapshot, writable);
                 break;
             case PanelPage.Settings:
-                _settingsPage?.UpdateSnapshot(snapshot);
+                _settingsPage?.UpdateSnapshot(snapshot, writable);
                 break;
         }
     }
