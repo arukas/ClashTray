@@ -188,7 +188,7 @@ public sealed class RemoteEndpointTransportTests
             using X509Certificate2 certificate = request.Create(
                 certificateAuthority,
                 DateTimeOffset.UtcNow.AddMinutes(-5),
-                DateTimeOffset.UtcNow.AddHours(1),
+                DateTimeOffset.UtcNow.AddMinutes(45),
                 RandomNumberGenerator.GetBytes(16));
             using X509Certificate2 certificateWithKey = certificate.CopyWithPrivateKey(key);
             return X509CertificateLoader.LoadPkcs12(
