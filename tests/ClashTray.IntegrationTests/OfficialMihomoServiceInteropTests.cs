@@ -16,7 +16,7 @@ public sealed class OfficialMihomoServiceInteropTests
 
     [TestMethod]
     [TestCategory("RequiresOfficialMihomo")]
-    public async Task ServiceStartsAndStopsPinnedMihomoWithTunPermanentlyDisabled()
+    public async Task ServiceStartsRestartsAndStopsPinnedMihomoWithTunPermanentlyDisabled()
     {
         string? executablePath = FindMihomoExecutable();
         if (executablePath is null)
@@ -102,6 +102,22 @@ public sealed class OfficialMihomoServiceInteropTests
                 string.Empty);
             string version = await WaitForVersionAsync(api);
             Assert.AreEqual(BundledMihomo.Version, version);
+
+            ServiceResponse restartResponse = await controller.HandleAsync(
+                new ServiceRequest(
+                    Guid.NewGuid(),
+                    ServiceCommand.RestartCore,
+                    JsonSerializer.Serialize(payload)),
+                CancellationToken.None);
+            Assert.IsTrue(restartResponse.Succeeded, restartResponse.Error);
+            Assert.AreEqual(CoreState.Running, restartResponse.Core);
+
+            ServiceResponse restartedStatus = await WaitForSafeStatusAsync(controller);
+            Assert.IsTrue(restartedStatus.Succeeded, restartedStatus.Error);
+            Assert.AreEqual(CoreState.Running, restartedStatus.Core);
+            Assert.AreEqual(TunState.Off, restartedStatus.Tun);
+            string restartedVersion = await WaitForVersionAsync(api);
+            Assert.AreEqual(BundledMihomo.Version, restartedVersion);
 
             ServiceResponse stopResponse = await controller.HandleAsync(
                 new ServiceRequest(Guid.NewGuid(), ServiceCommand.StopCore),
