@@ -39,7 +39,7 @@
 - 远程端点连接状态与网络切换状态带稳定 `ErrorCode`；认证失败、证书失败、不兼容、传输失败、权限不足、网络歧义和规则目标丢失可供上层本地化。
 - loopback HTTPS Controller 夹具已经覆盖 `MihomoEndpointSessionConnector + EndpointSessionManager` 的真实握手链路；远程陈旧快照会标记 `EndpointStaleResult`，恢复后清除。
 - 固定的官方 Mihomo v1.19.30 已通过 PE x64、受管安装清单和 SHA-256 校验，并在 `tun.enable: false` 的最小配置下完成配置验证、启动、loopback REST `/version` 与 `/configs` 访问，以及 `/logs` WebSocket 握手。
-- `ServiceRuntimeController` 已用同一份受管核心完成启动、状态确认和停止的集成验证；测试探针只允许确认 TUN 已关闭，用于确保本轮不进入 TUN-enabled 路径。
+- `ServiceRuntimeController` 已用同一份受管核心完成启动、状态确认、重启和停止的集成验证；测试探针只允许确认 TUN 已关闭，用于确保本轮不进入 TUN-enabled 路径。
 
 这些增量仍不等于发布完成。当前明确未关闭的项目包括公网/局域网远程 Controller 互操作、真实 Windows 网络权限/睡眠恢复与安装矩阵、实际 System Proxy 和 TUN 验收、已安装 Windows Service/命名管道矩阵、Full/NoCET/Mini 发行产物，以及配置切换端到端证据。配置事务证据按当前执行顺序暂缓，不应标记为已完成。
 
