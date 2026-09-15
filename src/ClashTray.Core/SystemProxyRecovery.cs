@@ -72,7 +72,13 @@ public static class SystemProxyRecovery
             }
 
             using RegistryKey? internetSettings = Registry.Users.OpenSubKey($"{sid}\\{InternetSettingsPath}", writable: true);
-            if (internetSettings is null || !IsOwnedByClashTray(internetSettings, ownership))
+            if (internetSettings is null)
+            {
+                return;
+            }
+
+            ProxyRegistryState current = ReadState(internetSettings);
+            if (!SystemProxyOwnershipPolicy.CanRestore(current, backup, ownership))
             {
                 return;
             }
@@ -84,10 +90,13 @@ public static class SystemProxyRecovery
         }
     }
 
-    private static bool IsOwnedByClashTray(RegistryKey key, ProxyOwnershipState ownership) =>
-        GetDword(key, "ProxyEnable") == 1
-        && string.Equals(key.GetValue("ProxyServer") as string, ownership.ProxyServer, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(key.GetValue("ProxyOverride") as string ?? string.Empty, ownership.ProxyOverride ?? string.Empty, StringComparison.Ordinal);
+    private static ProxyRegistryState ReadState(RegistryKey key) =>
+        new(
+            GetDword(key, "ProxyEnable"),
+            key.GetValue("ProxyServer") as string,
+            key.GetValue("ProxyOverride") as string,
+            key.GetValue("AutoConfigURL") as string,
+            GetDword(key, "AutoDetect"));
 
     private static void WriteState(RegistryKey key, ProxyRegistryState state)
     {

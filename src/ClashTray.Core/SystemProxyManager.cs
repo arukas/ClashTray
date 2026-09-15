@@ -24,7 +24,7 @@ public sealed class SystemProxyManager : ISystemProxyController
     {
         ProxyRegistryState current = ReadCurrentState();
         ProxyOwnershipState? ownership = ReadOwnership();
-        if (ownership is not null && IsOwnedByClashTray(current, ownership))
+        if (ownership is not null && SystemProxyOwnershipPolicy.IsOwnedByClashTray(current, ownership))
         {
             State = SystemProxyState.On;
         }
@@ -50,10 +50,17 @@ public sealed class SystemProxyManager : ISystemProxyController
         {
             current = ReadCurrentState();
             ProxyOwnershipState? existingOwnership = ReadOwnership();
-            if (existingOwnership is not null && !IsOwnedByClashTray(current, existingOwnership))
+            if (existingOwnership is not null
+                && !SystemProxyOwnershipPolicy.IsOwnedByClashTray(current, existingOwnership))
             {
                 State = SystemProxyState.RestoreRequired;
                 throw new InvalidOperationException("系统代理已被其他程序修改，请先确认并恢复原设置。");
+            }
+
+            if (existingOwnership is null && File.Exists(_paths.ProxyBackupFile))
+            {
+                State = SystemProxyState.RestoreRequired;
+                throw new InvalidOperationException("系统代理存在待恢复的原始设置，请先完成恢复后再启用。");
             }
 
             if (!File.Exists(_paths.ProxyBackupFile))
@@ -68,9 +75,15 @@ public sealed class SystemProxyManager : ISystemProxyController
             key.SetValue("ProxyEnable", 1, RegistryValueKind.DWord);
             key.SetValue("ProxyServer", $"127.0.0.1:{port}", RegistryValueKind.String);
             key.SetValue("ProxyOverride", bypassList, RegistryValueKind.String);
+            ProxyRegistryState appliedState = current with
+            {
+                ProxyEnable = 1,
+                ProxyServer = $"127.0.0.1:{port}",
+                ProxyOverride = bypassList
+            };
             await AtomicFile.WriteJsonAsync(
                 _paths.ProxyOwnershipFile,
-                new ProxyOwnershipState($"127.0.0.1:{port}", bypassList),
+                SystemProxyOwnershipPolicy.Create(appliedState),
                 _jsonOptions,
                 cancellationToken);
             InternetSettingsNotifier.Notify();
@@ -117,7 +130,9 @@ public sealed class SystemProxyManager : ISystemProxyController
             if (File.Exists(_paths.ProxyBackupFile))
             {
                 ProxyRegistryState? backup = JsonSerializer.Deserialize<ProxyRegistryState>(await File.ReadAllTextAsync(_paths.ProxyBackupFile, cancellationToken), _jsonOptions);
-                if (backup is not null && ownership is not null && IsOwnedByClashTray(current, ownership))
+                if (backup is not null
+                    && ownership is not null
+                    && SystemProxyOwnershipPolicy.CanRestore(current, backup, ownership))
                 {
                     WriteState(backup);
                     File.Delete(_paths.ProxyBackupFile);
@@ -129,7 +144,7 @@ public sealed class SystemProxyManager : ISystemProxyController
                     return;
                 }
             }
-            else if (ownership is not null && IsOwnedByClashTray(current, ownership))
+            else if (ownership is not null && SystemProxyOwnershipPolicy.IsOwnedByClashTray(current, ownership))
             {
                 current = current with { ProxyEnable = 0, ProxyServer = null, ProxyOverride = null };
                 WriteState(current);
@@ -207,10 +222,6 @@ public sealed class SystemProxyManager : ISystemProxyController
         }
     }
 
-    private static bool IsOwnedByClashTray(ProxyRegistryState state, ProxyOwnershipState ownership) =>
-        state.ProxyEnable == 1
-        && string.Equals(state.ProxyServer, ownership.ProxyServer, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(state.ProxyOverride ?? string.Empty, ownership.ProxyOverride ?? string.Empty, StringComparison.Ordinal);
 }
 
 public sealed record ProxyRegistryState(
@@ -219,8 +230,6 @@ public sealed record ProxyRegistryState(
     string? ProxyOverride,
     string? AutoConfigUrl,
     int AutoDetect);
-
-public sealed record ProxyOwnershipState(string ProxyServer, string? ProxyOverride);
 
 internal static class InternetSettingsNotifier
 {
