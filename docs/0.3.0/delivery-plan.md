@@ -1,6 +1,6 @@
 # ClashTray 0.3.0 交付与质量计划
 
-> 状态：规划基线，待用户批准实施
+> 状态：实施中；发布门禁尚未通过
 > 对应需求：[产品需求](product-requirements.md)
 > 对应设计：[技术设计](technical-design.md)
 

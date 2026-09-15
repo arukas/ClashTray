@@ -36,6 +36,8 @@
 - 远程 Controller 的 loopback HTTPS/WSS transport 夹具、同源认证、系统信任/自定义 CA 校验、超时和响应大小限制。
 - System Proxy 所有权快照覆盖代理地址、覆盖列表、自动配置地址和自动检测状态；外部修改时拒绝误恢复。
 - 远程 Controller 部分刷新失败时保留上次确认数据和时间戳，并在主面板和页面操作中明确进入只读状态；连接恢复后操作重新启用。
+- 远程端点连接状态与网络切换状态带稳定 `ErrorCode`；认证失败、证书失败、不兼容、传输失败、权限不足、网络歧义和规则目标丢失可供上层本地化。
+- loopback HTTPS Controller 夹具已经覆盖 `MihomoEndpointSessionConnector + EndpointSessionManager` 的真实握手链路；远程陈旧快照会标记 `EndpointStaleResult`，恢复后清除。
 
 这些增量仍不等于发布完成。当前明确未关闭的项目包括真实受管 Mihomo 进程互操作、真实 Windows 网络权限/睡眠恢复与安装矩阵、实际 System Proxy 和 TUN 验收、Full/NoCET/Mini 发行产物，以及配置切换端到端证据。配置事务证据按当前执行顺序暂缓，不应标记为已完成。
 
