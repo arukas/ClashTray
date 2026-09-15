@@ -427,6 +427,7 @@ public sealed class RuntimeEndpointTests
 
             AppSnapshot confirmed = runtime.AppSnapshot;
             Assert.AreEqual(EndpointSessionState.Connected, confirmed.ActiveController.State);
+            Assert.AreEqual(ErrorCode.None, confirmed.ActiveController.ErrorCode);
             DateTimeOffset confirmedAt = confirmed.ActiveController.LastConfirmedAt!.Value;
 
             connector.FailTraffic = true;
@@ -436,6 +437,7 @@ public sealed class RuntimeEndpointTests
             Assert.AreEqual(EndpointSessionState.Reconnecting, stale.ActiveController.State);
             Assert.AreEqual(confirmedAt, stale.ActiveController.LastConfirmedAt);
             Assert.IsFalse(string.IsNullOrWhiteSpace(stale.ActiveController.ErrorMessage));
+            Assert.AreEqual(ErrorCode.EndpointStaleResult, stale.ActiveController.ErrorCode);
 
             connector.FailTraffic = false;
             await runtime.RefreshDataAsync();
@@ -443,6 +445,7 @@ public sealed class RuntimeEndpointTests
             AppSnapshot recovered = runtime.AppSnapshot;
             Assert.AreEqual(EndpointSessionState.Connected, recovered.ActiveController.State);
             Assert.IsNull(recovered.ActiveController.ErrorMessage);
+            Assert.AreEqual(ErrorCode.None, recovered.ActiveController.ErrorCode);
             Assert.IsNotNull(recovered.ActiveController.LastConfirmedAt);
         }
         finally

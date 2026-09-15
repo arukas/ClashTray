@@ -3322,7 +3322,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 Providers = remoteData.Providers,
                 RuleProviders = remoteData.RuleProviders,
                 Logs = remoteData.Logs,
-                ErrorMessage = remoteData.ErrorMessage ?? snapshot.ErrorMessage
+                ErrorMessage = remoteData.ErrorMessage ?? snapshot.ErrorMessage,
+                ErrorCode = remoteData.ErrorMessage is null
+                    ? snapshot.ErrorCode
+                    : ErrorCode.EndpointStaleResult
             };
     }
 
