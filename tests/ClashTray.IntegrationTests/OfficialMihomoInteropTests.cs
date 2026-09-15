@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Text.Json;
 using ClashTray.Contracts;
 using ClashTray.Core;
@@ -66,6 +67,12 @@ public sealed class OfficialMihomoInteropTests
             bool? tunEnabled = MihomoDataParser.ParseTunEnabled(configuration);
             Assert.IsNotNull(tunEnabled);
             Assert.IsFalse(tunEnabled.Value, "The real-core smoke configuration must keep TUN disabled.");
+
+            using CancellationTokenSource webSocketTimeout = new(TimeSpan.FromSeconds(10));
+            using ClientWebSocket logsSocket = await api.ConnectWebSocketAsync(
+                "/logs?level=info&format=structured",
+                webSocketTimeout.Token);
+            Assert.AreEqual(WebSocketState.Open, logsSocket.State);
         }
         finally
         {
