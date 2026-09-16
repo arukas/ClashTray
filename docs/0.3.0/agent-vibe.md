@@ -4,7 +4,7 @@
 > 它本身不授权实施；只有用户明确说“开始开发 / 按此文档实现 0.3.0”等指令后才进入编码。
 > 正式依据是仓库根目录 AGENTS.md 与本目录的产品需求、技术设计、交付计划。
 
-> **0.3.0 Beta 范围冻结：** 本版本不做 Wi-Fi/SSID 配置切换、SSID 读取、网络变化监听、网络规则编辑或位置权限处理。相关章节若保留，只能作为后续版本参考；Agent 不得为了补齐旧计划而重新接入生产网络上下文源。
+> **0.3.0 范围冻结：** 本版本不做 Wi-Fi/SSID 配置切换、SSID 读取、网络变化监听、网络规则编辑或位置权限处理。相关章节若保留，只能作为后续版本参考；Agent 不得为了补齐旧计划而重新接入生产网络上下文源。
 
 ## 先进入正确状态
 
@@ -13,7 +13,7 @@
 你的目标是交付一个可以放心升级的 ClashTray 0.3.0：
 
 - 0.2.0 的本机路径仍然稳。
-- 手动配置切换可验证、可提交、可回滚；SSID 自动切换顺延。
+- 手动配置切换可验证、可提交、可回滚；SSID 自动切换顺延到后续版本。
 - 远程 Mihomo 好用，但永远碰不到本机特权边界。
 - 中文和 English 完整，不再把用户文本散落在代码里。
 - 成功路径舒服，失败路径也不会让用户断网。
@@ -49,7 +49,7 @@
 - 不把 secret 放进 URL、日志、异常、备份、测试快照或 UI 状态对象。
 - 不提供 Ignore TLS、Accept Any Certificate 或 HTTPS 自动降级。
 - REST 和 WebSocket 必须从同一个 EndpointTransportPolicy 创建。
-- 不在网络事件回调里直接重启核心；0.3.0 Beta 不创建网络事件源。
+- 不在网络事件回调里直接重启核心；0.3.0 不创建网络事件源。
 - 不先保存 ActiveConfigurationId 再祈祷重启成功。
 - 不乐观更新开关；显示 OS、Service、Mihomo 已确认的状态。
 - 不一次性重写整个 ClashTrayRuntime。
@@ -67,7 +67,7 @@
 3. 做最小结构变更，让旧路径继续通过。
 4. 加一个完整纵向能力，包括状态、取消、超时、回滚、错误和 UI。
 5. 运行相关测试，再运行完整 solution 测试。
-6. 如果涉及 Windows UI、代理、TUN、Service 或安装器，做真实环境验收并记录未验证项；不要为本 Beta 启用 Wi-Fi/SSID 验收路径。
+6. 如果涉及 Windows UI、代理、TUN、Service 或安装器，做真实环境验收并记录未验证项；不要为 0.3.0 启用 Wi-Fi/SSID 验收路径。
 7. 检查 git diff，只保留当前工作项；不要覆盖用户已有修改。
 8. 更新与行为直接相关的文档。
 
@@ -133,9 +133,9 @@
 
 ### 4. SSID 自动切换顺延
 
-0.3.0 Beta 不实现 SSID 自动切换，也不创建 `WindowsNetworkContextSource`。不读取 SSID、不监听网络变化、不保存网络规则、不申请或引导位置权限；`INetworkContextSource`、`NetworkRuleStore`、`NetworkSwitchPolicyEngine` 和事件管线只能作为后续版本的设计/测试预留。
+0.3.0 不实现 SSID 自动切换，也不创建 `WindowsNetworkContextSource`。不读取 SSID、不监听网络变化、不保存网络规则、不申请或引导位置权限；`INetworkContextSource`、`NetworkRuleStore`、`NetworkSwitchPolicyEngine` 和事件管线只能作为后续版本的设计/测试预留。
 
-如果未来重新立项，必须从权限、隐私、latest-wins、防抖、冷却、手动覆盖、回滚和真实 Windows 验收重新建立证据；本 Beta 的隐藏 UI 和合成 smoke 不构成这些能力的交付证明。
+如果未来重新立项，必须从权限、隐私、latest-wins、防抖、冷却、手动覆盖、回滚和真实 Windows 验收重新建立证据；本版本的隐藏 UI 和合成 smoke 不构成这些能力的交付证明。
 
 ### 5. 统一 transport，再开放远程
 
@@ -262,7 +262,7 @@ dotnet test ClashTray.sln --configuration Release --property:Platform=x64
 3. 数据迁移。
 4. TLS、secret 和能力隔离。
 5. 真实 Windows 与升级验收。
-6. Beta 范围和发布说明与实际代码一致。
+6. 0.3.0 范围和发布说明与实际代码一致。
 
 如果仍然不够，整个 Remote Endpoint 切片移动到 0.3.1。不要交付“能连上，但证书、WebSocket、回滚和权限以后再补”的版本。
 
@@ -272,7 +272,7 @@ dotnet test ClashTray.sln --configuration Release --property:Platform=x64
 
 - 原代理和设置都在。
 - 什么新功能都不会擅自开启。
-- 0.3.0 Beta 不出现 SSID 自动切换入口，也不读取或监听 Wi-Fi/SSID；该能力顺延到后续版本。
+- 0.3.0 不出现 SSID 自动切换入口，也不读取或监听 Wi-Fi/SSID；该能力顺延到后续版本。
 - 添加远程端点时默认走 HTTPS，secret 受保护，错误证书在 REST/WSS 都被拒绝。
 - 看远程节点时，本机 System Proxy、TUN 和 Service 仍明确属于这台电脑。
 - 任何断线、睡眠、崩溃、坏配置或坏存储都不会让 UI 假装成功，更不会悄悄留下断网状态。
