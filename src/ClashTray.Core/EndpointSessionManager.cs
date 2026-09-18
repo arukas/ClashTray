@@ -300,9 +300,9 @@ public sealed class EndpointSessionManager : IAsyncDisposable
             previousOperation = _operation;
             long generation = Interlocked.Increment(ref _generation);
             long selectionRevision = _status.SelectionRevision + 1;
+            cancellationToken.ThrowIfCancellationRequested();
             CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(
-                _lifetimeCancellation.Token,
-                cancellationToken);
+                _lifetimeCancellation.Token);
             operation = new SelectionOperation(endpoint, generation, selectionRevision, cancellation);
             _operation = operation;
             connectingStatus = new EndpointSessionStatusEventArgs(
@@ -320,7 +320,12 @@ public sealed class EndpointSessionManager : IAsyncDisposable
         _ = CancelAndDisposeOperationAsync(previousOperation);
         await DisposeSessionAsync(previousSession);
         RaiseStatusChanged(connectingStatus);
-        return await RunSelectionAsync(operation).ConfigureAwait(false);
+        // Selecting an endpoint is an accepted session-side effect. The caller
+        // may stop waiting, but its token must not cancel the shared selection
+        // or make a later caller observe a half-committed session.
+        return await RunSelectionAsync(operation)
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<EndpointSession?> RunSelectionAsync(SelectionOperation operation)
@@ -342,23 +347,13 @@ public sealed class EndpointSessionManager : IAsyncDisposable
                         .ConfigureAwait(false);
                     ArgumentNullException.ThrowIfNull(session);
 
-                    if (!IsCurrent(operation)
-                        || session.Generation != operation.Generation
-                        || session.SelectionRevision != operation.SelectionRevision
-                        || session.Endpoint.Id != operation.Endpoint.Id)
-                    {
-                        await session.DisposeAsync().ConfigureAwait(false);
-                        return null;
-                    }
-
-                    EndpointSessionStatusEventArgs connectedStatus;
+                    EndpointSessionStatusEventArgs? connectedStatus = null;
                     lock (_gate)
                     {
-                        if (!IsCurrentUnsafe(operation))
-                        {
-                            connectedStatus = _status;
-                        }
-                        else
+                        if (IsCurrentUnsafe(operation)
+                            && session.Generation == operation.Generation
+                            && session.SelectionRevision == operation.SelectionRevision
+                            && session.Endpoint.Id == operation.Endpoint.Id)
                         {
                             _current = session;
                             connectedStatus = new EndpointSessionStatusEventArgs(
@@ -374,7 +369,7 @@ public sealed class EndpointSessionManager : IAsyncDisposable
                         }
                     }
 
-                    if (connectedStatus.State != EndpointSessionState.Connected)
+                    if (connectedStatus is null)
                     {
                         await session.DisposeAsync().ConfigureAwait(false);
                         return null;
@@ -527,14 +522,6 @@ public sealed class EndpointSessionManager : IAsyncDisposable
                 errorCode);
             _status = status;
             return status;
-        }
-    }
-
-    private bool IsCurrent(SelectionOperation operation)
-    {
-        lock (_gate)
-        {
-            return IsCurrentUnsafe(operation);
         }
     }
 

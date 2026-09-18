@@ -527,7 +527,7 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
-    public async Task ManualRefreshDoesNotRaceControllerMutation()
+    public async Task ManualRefreshDoesNotHoldMutationLane()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
@@ -546,9 +546,8 @@ public sealed class RuntimeStateTests
             await handler.FirstVersionRequestEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             Task modeChange = runtime.SetModeAsync(ProxyMode.Direct);
-            await Task.Delay(TimeSpan.FromMilliseconds(50));
-
-            Assert.AreEqual(0, handler.ModePatchCount);
+            await handler.ModePatchEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.AreEqual(1, handler.ModePatchCount);
             handler.ReleaseFirstVersionRequest();
             await Task.WhenAll(refresh, modeChange);
 
@@ -566,7 +565,7 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
-    public async Task CoreUpdateSerializesRefreshUntilInstallCompletes()
+    public async Task CoreUpdateDoesNotHoldReadRefreshBehindInstall()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
@@ -588,8 +587,8 @@ public sealed class RuntimeStateTests
             await service.InstallEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             refresh = runtime.RefreshDataAsync();
-            await Task.Delay(TimeSpan.FromMilliseconds(50));
-            Assert.IsFalse(refresh.IsCompleted);
+            await refresh.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.IsTrue(update is { IsCompleted: false });
 
             service.ReleaseInstall();
             await Task.WhenAll(update, refresh);
@@ -615,7 +614,7 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
-    public async Task DeleteConfigurationSerializesRefreshUntilSettingsAreSaved()
+    public async Task DeleteConfigurationDoesNotHoldReadRefreshBehindSettingsSave()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
@@ -648,8 +647,8 @@ public sealed class RuntimeStateTests
             await settings.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             refresh = runtime.RefreshDataAsync();
-            await Task.Delay(TimeSpan.FromMilliseconds(50));
-            Assert.IsFalse(refresh.IsCompleted);
+            await refresh.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.IsTrue(delete is { IsCompleted: false });
 
             settings.ReleaseSave();
             await Task.WhenAll(delete, refresh);
@@ -675,7 +674,7 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
-    public async Task ReloadConfigurationSerializesRefreshDuringValidation()
+    public async Task ReloadConfigurationDoesNotHoldReadRefreshDuringValidation()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
@@ -705,8 +704,8 @@ public sealed class RuntimeStateTests
             await validator.ValidationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             refresh = runtime.RefreshDataAsync();
-            await Task.Delay(TimeSpan.FromMilliseconds(50));
-            Assert.IsFalse(refresh.IsCompleted);
+            await refresh.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.IsTrue(reload is { IsCompleted: false });
 
             validator.ReleaseValidation();
             await Task.WhenAll(reload, refresh);
@@ -1748,6 +1747,9 @@ public sealed class RuntimeStateTests
         public TaskCompletionSource<bool> FirstVersionRequestEntered { get; } =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public TaskCompletionSource<bool> ModePatchEntered { get; } =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
         private TaskCompletionSource<bool> ReleaseFirstVersionRequestSource { get; } =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -1802,6 +1804,7 @@ public sealed class RuntimeStateTests
 
                 if (payload.RootElement.TryGetProperty("mode", out JsonElement mode))
                 {
+                    ModePatchEntered.TrySetResult(true);
                     Mode = Enum.Parse<ProxyMode>(mode.GetString()!, ignoreCase: true);
                     ModePatchCount++;
                 }

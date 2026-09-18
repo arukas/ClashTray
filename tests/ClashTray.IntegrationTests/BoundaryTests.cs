@@ -17,6 +17,31 @@ public sealed class BoundaryTests
     }
 
     [TestMethod]
+    public async Task ServiceRequestIdJoinsSameObservationAndRejectsPayloadReuse()
+    {
+        await using ServiceRuntimeController controller = new ServiceRuntimeController();
+        Guid requestId = Guid.NewGuid();
+        ServiceRequest request = new(requestId, ServiceCommand.GetStatus);
+
+        Task<ServiceResponse> firstTask = controller.HandleAsync(request, CancellationToken.None);
+        Task<ServiceResponse> secondTask = controller.HandleAsync(request, CancellationToken.None);
+        ServiceResponse[] responses = await Task.WhenAll(firstTask, secondTask);
+
+        Assert.AreEqual(requestId, responses[0].RequestId);
+        Assert.AreEqual(requestId, responses[1].RequestId);
+        Assert.AreEqual(ServiceProtocol.CurrentVersion, responses[0].ProtocolVersion);
+        Assert.AreEqual(ServiceDispatchState.Completed, responses[0].DispatchState);
+        Assert.IsTrue(responses[0].Succeeded);
+
+        ServiceResponse conflict = await controller.HandleAsync(
+            new ServiceRequest(requestId, ServiceCommand.GetStatus, "{}"),
+            CancellationToken.None);
+
+        Assert.IsFalse(conflict.Succeeded);
+        StringAssert.Contains(conflict.Error, "请求 ID 已用于不同的命令", StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     [DataRow("test-secret")]
     [DataRow("")]
     public async Task TunCommandCannotTargetControllerWithoutRunningCore(string secret)

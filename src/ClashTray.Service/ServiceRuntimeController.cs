@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using ClashTray.Contracts;
 using ClashTray.Core;
@@ -13,6 +14,11 @@ namespace ClashTray.Service;
 internal sealed class ServiceRuntimeController : IAsyncDisposable
 {
     private static readonly TimeSpan StatusQueryTimeout = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan DefaultOperationTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan TunOperationTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan CoreUpdateOperationTimeout = TimeSpan.FromMinutes(6);
+    private static readonly TimeSpan RequestCacheTtl = TimeSpan.FromMinutes(2);
+    private const int MaxCachedRequests = 128;
     private readonly AppPaths _paths;
     private readonly MihomoProcessManager _processManager = new();
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(5) };
@@ -21,10 +27,13 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private readonly CoreUpdater _coreUpdater;
     private readonly SemaphoreSlim _operationGate = new(1, 1);
     private readonly BooleanSingleFlight<TunTransactionResult> _tunSingleFlight =
-        new("TUN");
+        new("TUN", cancelWhenNoWaiters: false);
     private readonly object _tunLogGate = new();
     private readonly ITunNetworkHealthProbe _tunHealthProbe;
     private readonly TunTransactionCoordinator _tunTransactions;
+    private readonly CancellationTokenSource _lifetimeCts = new();
+    private readonly object _requestCacheGate = new();
+    private readonly Dictionary<Guid, CachedRequest> _requestCache = [];
     private MihomoApiClient? _api;
     private TunState _tunState = TunState.Off;
     private int _tunDesired;
@@ -32,6 +41,15 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private long _tunListenerErrorSequence;
     private long _tunConfirmedListenerErrorSequence;
     private string? _lastTunListenerError;
+
+    private sealed class CachedRequest
+    {
+        public required string Fingerprint { get; init; }
+
+        public required TaskCompletionSource<ServiceResponse> Completion { get; init; }
+
+        public DateTimeOffset ExpiresAt { get; set; }
+    }
 
     public ServiceRuntimeController(AppPaths? paths = null, string? managedUserSid = null)
         : this(paths, managedUserSid, null)
@@ -55,7 +73,102 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     public CoreState CoreState => _processManager.State;
 
-    public async Task<ServiceResponse> HandleAsync(ServiceRequest request, CancellationToken cancellationToken)
+    public Task<ServiceResponse> HandleAsync(ServiceRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return HandleWithRequestCacheAsync(request, cancellationToken);
+    }
+
+    private async Task<ServiceResponse> HandleWithRequestCacheAsync(
+        ServiceRequest request,
+        CancellationToken callerCancellationToken)
+    {
+        if (request.ProtocolVersion != ServiceProtocol.CurrentVersion)
+        {
+            return Failure(
+                request,
+                $"不支持的 ClashTray 服务协议版本：{request.ProtocolVersion}。",
+                _processManager.State);
+        }
+
+        if (request.RequestId == Guid.Empty)
+        {
+            return await HandleCoreAsync(request, callerCancellationToken).ConfigureAwait(false);
+        }
+
+        string fingerprint = ComputeRequestFingerprint(request);
+        CachedRequest cached;
+        bool owner = false;
+        lock (_requestCacheGate)
+        {
+            PurgeExpiredRequestsUnsafe();
+            if (_requestCache.TryGetValue(request.RequestId, out CachedRequest? existing))
+            {
+                if (!string.Equals(existing.Fingerprint, fingerprint, StringComparison.Ordinal))
+                {
+                    return Failure(
+                        request,
+                        "服务请求 ID 已用于不同的命令，拒绝重复执行。",
+                        _processManager.State);
+                }
+
+                cached = existing;
+            }
+            else
+            {
+                cached = new CachedRequest
+                {
+                    Fingerprint = fingerprint,
+                    Completion = new TaskCompletionSource<ServiceResponse>(
+                        TaskCreationOptions.RunContinuationsAsynchronously),
+                    ExpiresAt = DateTimeOffset.UtcNow.Add(RequestCacheTtl)
+                };
+                _requestCache.Add(request.RequestId, cached);
+                owner = true;
+            }
+        }
+
+        if (owner)
+        {
+            _ = ExecuteCachedRequestAsync(request, cached);
+        }
+
+        return await cached.Completion.Task
+            .WaitAsync(callerCancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task ExecuteCachedRequestAsync(ServiceRequest request, CachedRequest cached)
+    {
+        try
+        {
+            using CancellationTokenSource operationTimeout = CreateTimeout(
+                GetOperationTimeout(request.Command),
+                _lifetimeCts.Token);
+            ServiceResponse response = await HandleCoreAsync(request, operationTimeout.Token)
+                .ConfigureAwait(false);
+            cached.Completion.TrySetResult(response);
+        }
+        catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
+        {
+            cached.Completion.TrySetCanceled(_lifetimeCts.Token);
+        }
+        catch (Exception exception)
+        {
+            cached.Completion.TrySetResult(
+                Failure(request, ErrorSanitizer.Sanitize(exception), _processManager.State));
+        }
+        finally
+        {
+            lock (_requestCacheGate)
+            {
+                cached.ExpiresAt = DateTimeOffset.UtcNow.Add(RequestCacheTtl);
+                PurgeExpiredRequestsUnsafe();
+            }
+        }
+    }
+
+    private async Task<ServiceResponse> HandleCoreAsync(ServiceRequest request, CancellationToken cancellationToken)
     {
         try
         {
@@ -97,13 +210,52 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
     }
 
+    private static TimeSpan GetOperationTimeout(ServiceCommand command) => command switch
+    {
+        ServiceCommand.GetStatus => StatusQueryTimeout,
+        ServiceCommand.EnableTun or ServiceCommand.DisableTun => TunOperationTimeout,
+        ServiceCommand.InstallCore or ServiceCommand.RollbackCore => CoreUpdateOperationTimeout,
+        _ => DefaultOperationTimeout
+    };
+
+    private static string ComputeRequestFingerprint(ServiceRequest request)
+    {
+        string content = $"{request.ProtocolVersion}:{request.Command}:{request.Payload}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+    }
+
+    private void PurgeExpiredRequestsUnsafe()
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        foreach (Guid requestId in _requestCache
+                     .Where(pair => pair.Value.ExpiresAt <= now)
+                     .Select(pair => pair.Key)
+                     .ToArray())
+        {
+            _requestCache.Remove(requestId);
+        }
+
+        if (_requestCache.Count <= MaxCachedRequests)
+        {
+            return;
+        }
+
+        foreach (Guid requestId in _requestCache
+                     .OrderBy(pair => pair.Value.ExpiresAt)
+                     .Take(_requestCache.Count - MaxCachedRequests)
+                     .Select(pair => pair.Key)
+                     .ToArray())
+        {
+            _requestCache.Remove(requestId);
+        }
+    }
+
     private async Task<ServiceResponse> GetStatusAsync(ServiceRequest request, CancellationToken cancellationToken)
     {
         if (_processManager.State != CoreState.Running || _api is null || _activeCore is null)
         {
             if (_tunState is not TunState.Off and not TunState.Unavailable)
             {
-                _tunState = TunState.Unknown;
                 return Failure(request, "TUN 状态无法确认。为避免影响网络，未继续重试；请检查服务和诊断日志。", _processManager.State);
             }
 
@@ -122,7 +274,6 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             bool? value = MihomoDataParser.ParseTunEnabled(document);
             if (value is not bool enabled)
             {
-                _tunState = TunState.Unknown;
                 return Failure(request, "无法从 Mihomo 控制器确认 TUN 状态。", CoreState.Running);
             }
 
@@ -135,14 +286,12 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                     timeout.Token).ConfigureAwait(false);
                 if (!disabledHealth.MeetsDisabled)
                 {
-                    _tunState = TunState.Unknown;
                     return Failure(
                         request,
                         "TUN 状态无法确认。为避免影响网络，未继续重试；请检查服务和诊断日志。",
                         CoreState.Running);
                 }
 
-                _tunState = TunState.Off;
                 return Success(request);
             }
 
@@ -150,7 +299,6 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             {
                 if (_tunListenerErrorSequence > _tunConfirmedListenerErrorSequence)
                 {
-                    _tunState = TunState.Unknown;
                     return Failure(
                         request,
                         "TUN 状态无法确认。为避免影响网络，未继续重试；请检查服务和诊断日志。",
@@ -160,7 +308,6 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
             if (_tunState != TunState.On)
             {
-                _tunState = TunState.Unknown;
                 return Failure(
                     request,
                     "TUN 状态无法确认。为避免影响网络，未继续重试；请检查服务和诊断日志。",
@@ -173,7 +320,6 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 timeout.Token).ConfigureAwait(false);
             if (!enabledHealth.MeetsEnabled)
             {
-                _tunState = TunState.Unknown;
                 return Failure(
                     request,
                     "TUN 状态无法确认。为避免影响网络，未继续重试；请检查服务和诊断日志。",
@@ -188,18 +334,17 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            _tunState = TunState.Unknown;
             return Failure(request, "查询 Mihomo TUN 状态超时，状态暂时无法确认。", CoreState.Running);
         }
         catch (Exception exception)
         {
-            _tunState = TunState.Unknown;
             return Failure(request, $"查询 Mihomo TUN 状态失败，状态暂时无法确认：{DescribeControllerError(exception)}", CoreState.Running);
         }
     }
 
     public async ValueTask DisposeAsync()
     {
+        await _lifetimeCts.CancelAsync().ConfigureAwait(false);
         bool safeToStopCore = _processManager.State != CoreState.Running
             && (_tunState is TunState.Off or TunState.Unavailable);
         try
@@ -229,6 +374,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             _operationGate.Dispose();
             _httpClient.Dispose();
             _coreUpdateHttpClient.Dispose();
+            _lifetimeCts.Dispose();
         }
     }
 
@@ -528,10 +674,13 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             return Failure(request, "TUN 请求参数无效。", _processManager.State);
         }
 
-        Volatile.Write(ref _tunDesired, enabled ? 1 : 0);
         TunTransactionResult result = await _tunSingleFlight.RequestAsync(
                 enabled,
-                (target, token) => ExecuteTunTransactionAsync(payload, target, token),
+                (target, token) =>
+                {
+                    Volatile.Write(ref _tunDesired, target ? 1 : 0);
+                    return ExecuteTunTransactionAsync(payload, target, token);
+                },
                 cancellationToken)
             .ConfigureAwait(false);
         _tunState = result.State;

@@ -14,28 +14,44 @@ public sealed class OperationBusyException : InvalidOperationException
     public OperationBusyException(string operationName)
         : base($"{operationName} 操作正在进行，请稍后重试。")
     {
+        OperationName = string.IsNullOrWhiteSpace(operationName) ? "操作" : operationName;
+        Outcome = OperationOutcome.Busy;
     }
 
     public OperationBusyException(string message, Exception innerException)
         : base(message, innerException)
     {
+        OperationName = "操作";
+        Outcome = OperationOutcome.Busy;
     }
+
+    public string OperationName { get; }
+
+    public OperationOutcome Outcome { get; }
 }
 
 /// <summary>
-/// A serializing gate that supports ordinary queued work and a strict
-/// try-enter path for lifecycle operations. The try-enter path also refuses to
-/// leapfrog an already waiting ordinary operation.
+/// Serializes local-device mutations and provides an explicit quiescing phase
+/// for shutdown. Queued ordinary work is rejected once quiescing begins; the
+/// cleanup owner waits for already admitted work to reach a safe point and then
+/// runs cleanup through its internal ownership path.
 /// </summary>
 internal sealed class OperationGate : IDisposable
 {
     private readonly SemaphoreSlim _semaphore = new(1, 1);
+    private readonly object _stateGate = new();
     private int _waiterCount;
+    private int _activeCount;
+    private int _quiescing;
     private int _disposed;
+    private TaskCompletionSource? _idleCompletion;
+
+    public bool IsQuiescing => Volatile.Read(ref _quiescing) != 0;
 
     public async Task WaitAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        ThrowIfQuiescing();
         Interlocked.Increment(ref _waiterCount);
         try
         {
@@ -45,26 +61,71 @@ internal sealed class OperationGate : IDisposable
         {
             Interlocked.Decrement(ref _waiterCount);
         }
+
+        if (IsQuiescing)
+        {
+            _semaphore.Release();
+            throw new RuntimeQuiescingException();
+        }
+
+        Interlocked.Increment(ref _activeCount);
     }
 
     public bool TryEnter()
     {
         ThrowIfDisposed();
-        if (Volatile.Read(ref _waiterCount) != 0)
+        if (IsQuiescing || Volatile.Read(ref _waiterCount) != 0)
         {
             return false;
         }
 
-        return _semaphore.Wait(0);
+        if (!_semaphore.Wait(0))
+        {
+            return false;
+        }
+
+        if (IsQuiescing)
+        {
+            _semaphore.Release();
+            return false;
+        }
+
+        Interlocked.Increment(ref _activeCount);
+        return true;
     }
 
     public void Exit()
     {
         ThrowIfDisposed();
         _semaphore.Release();
+        if (Interlocked.Decrement(ref _activeCount) == 0)
+        {
+            CompleteIdleWaiter();
+        }
     }
 
     public void Release() => Exit();
+
+    public void BeginQuiescing() => Interlocked.Exchange(ref _quiescing, 1);
+
+    public Task WaitForIdleAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        Task idleTask;
+        lock (_stateGate)
+        {
+            if (Volatile.Read(ref _activeCount) == 0)
+            {
+                return Task.CompletedTask;
+            }
+
+            _idleCompletion ??= new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            idleTask = _idleCompletion.Task;
+        }
+
+        return idleTask.WaitAsync(timeout, cancellationToken);
+    }
 
     public void Dispose()
     {
@@ -74,26 +135,48 @@ internal sealed class OperationGate : IDisposable
         }
     }
 
-    private void ThrowIfDisposed()
+    private void CompleteIdleWaiter()
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        TaskCompletionSource? completion;
+        lock (_stateGate)
+        {
+            completion = _idleCompletion;
+            _idleCompletion = null;
+        }
+
+        completion?.TrySetResult();
     }
+
+    private void ThrowIfQuiescing()
+    {
+        if (IsQuiescing)
+        {
+            throw new RuntimeQuiescingException();
+        }
+    }
+
+    private void ThrowIfDisposed() =>
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 }
 
 /// <summary>
-/// Coalesces repeated requests for one boolean target. A request for the
-/// target already in flight shares its task; a request for the opposite target
-/// fails immediately and is never queued.
+/// Coalesces repeated requests for one boolean target. The accepted system
+/// operation owns an internal lifetime token; a caller token only controls
+/// that caller's wait. An opposite target is rejected immediately and is never
+/// queued behind the active operation.
 /// </summary>
 public sealed class BooleanSingleFlight<T>
 {
     private readonly object _gate = new();
     private readonly string _operationName;
+    private readonly bool _cancelWhenNoWaiters;
     private ActiveOperation? _active;
+    private TaskCompletionSource? _idleCompletion;
 
-    public BooleanSingleFlight(string operationName)
+    public BooleanSingleFlight(string operationName, bool cancelWhenNoWaiters = true)
     {
         _operationName = string.IsNullOrWhiteSpace(operationName) ? "目标" : operationName;
+        _cancelWhenNoWaiters = cancelWhenNoWaiters;
     }
 
     public bool IsBusy
@@ -107,6 +190,27 @@ public sealed class BooleanSingleFlight<T>
         }
     }
 
+    public Task WaitForIdleAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        Task idleTask;
+        lock (_gate)
+        {
+            if (_active is null)
+            {
+                return Task.CompletedTask;
+            }
+
+            _idleCompletion ??= new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            idleTask = _idleCompletion.Task;
+        }
+
+        return idleTask.WaitAsync(timeout, cancellationToken);
+    }
+
     public Task<T> RequestAsync(
         bool target,
         Func<bool, CancellationToken, Task<T>> operation,
@@ -116,51 +220,84 @@ public sealed class BooleanSingleFlight<T>
         cancellationToken.ThrowIfCancellationRequested();
 
         ActiveOperation active;
+        ActiveOperation? retired = null;
         bool start = false;
         lock (_gate)
         {
             if (_active is not null)
             {
-                if (_active.Target != target)
+                if (_cancelWhenNoWaiters && _active.WaiterCount == 0)
+                {
+                    retired = _active;
+                    active = _active;
+                }
+                else if (_active.Target != target)
                 {
                     return Task.FromException<T>(new OperationBusyException(_operationName));
                 }
-
-                active = _active;
+                else
+                {
+                    active = _active;
+                    active.WaiterCount++;
+                }
             }
             else
             {
-                active = new ActiveOperation(target, operation, cancellationToken);
+                active = new ActiveOperation(target, operation);
                 _active = active;
                 start = true;
+                active.WaiterCount++;
             }
+        }
+
+        if (retired is not null)
+        {
+            return RetryAfterRetiredAsync(retired, target, operation, cancellationToken);
         }
 
         if (start)
         {
             _ = RunAsync(active);
-            // The caller that admitted the operation owns its cancellation
-            // token. Return the operation completion directly so a canceled
-            // owner cannot observe cancellation before the underlying work
-            // has released the single-flight slot. Duplicate callers retain
-            // independently cancellable waits below.
-            return active.Completion.Task;
         }
 
-        return WaitForCallerAsync(active.Completion.Task, cancellationToken);
+        return WaitForCallerAsync(active, cancellationToken);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Design",
         "CA1031",
-        Justification = "The operation task must capture arbitrary user-provided failures and release the slot.")]
+        Justification = "A canceled retired shared operation is deliberately ignored before starting the next caller's request.")]
+    private async Task<T> RetryAfterRetiredAsync(
+        ActiveOperation retired,
+        bool target,
+        Func<bool, CancellationToken, Task<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await retired.Completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+        }
+
+        return await RequestAsync(target, operation, cancellationToken).ConfigureAwait(false);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1031",
+        Justification = "The operation task captures arbitrary external failures and completes its own waiter.")]
     private async Task RunAsync(ActiveOperation active)
     {
         T? result = default;
         Exception? failure = null;
         try
         {
-            result = await active.Operation(active.Target, active.CancellationToken).ConfigureAwait(false);
+            result = await active.Operation(active.Target, active.Lifetime.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException exception)
         {
@@ -172,47 +309,86 @@ public sealed class BooleanSingleFlight<T>
         }
         finally
         {
+            TaskCompletionSource? idleCompletion = null;
             lock (_gate)
             {
                 if (ReferenceEquals(_active, active))
                 {
                     _active = null;
+                    idleCompletion = _idleCompletion;
+                    _idleCompletion = null;
                 }
             }
+
+            active.Lifetime.Dispose();
+            idleCompletion?.TrySetResult();
         }
 
+        Complete(active.Completion, result, failure);
+    }
+
+    private async Task<T> WaitForCallerAsync(
+        ActiveOperation active,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await active.Completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            ReleaseWaiter(active);
+        }
+    }
+
+    private void ReleaseWaiter(ActiveOperation active)
+    {
+        lock (_gate)
+        {
+            if (!ReferenceEquals(_active, active) || active.WaiterCount == 0)
+            {
+                return;
+            }
+
+            active.WaiterCount--;
+            if (active.WaiterCount == 0 && _cancelWhenNoWaiters)
+            {
+                _ = active.Lifetime.CancelAsync();
+            }
+        }
+    }
+
+    private static void Complete(
+        TaskCompletionSource<T> completion,
+        T? result,
+        Exception? failure)
+    {
         if (failure is OperationCanceledException canceledException)
         {
             CancellationToken token = canceledException.CancellationToken.CanBeCanceled
                 ? canceledException.CancellationToken
                 : new CancellationToken(canceled: true);
-            active.Completion.TrySetCanceled(token);
+            completion.TrySetCanceled(token);
         }
         else if (failure is not null)
         {
-            active.Completion.TrySetException(failure);
+            completion.TrySetException(failure);
         }
         else
         {
-            active.Completion.TrySetResult(result!);
+            completion.TrySetResult(result!);
         }
-    }
-
-    private static async Task<T> WaitForCallerAsync(Task<T> task, CancellationToken cancellationToken)
-    {
-        return await task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private sealed class ActiveOperation
     {
         public ActiveOperation(
             bool target,
-            Func<bool, CancellationToken, Task<T>> operation,
-            CancellationToken cancellationToken)
+            Func<bool, CancellationToken, Task<T>> operation)
         {
             Target = target;
             Operation = operation;
-            CancellationToken = cancellationToken;
+            Lifetime = new CancellationTokenSource();
             Completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
@@ -220,26 +396,30 @@ public sealed class BooleanSingleFlight<T>
 
         public Func<bool, CancellationToken, Task<T>> Operation { get; }
 
-        public CancellationToken CancellationToken { get; }
+        public CancellationTokenSource Lifetime { get; }
 
         public TaskCompletionSource<T> Completion { get; }
+
+        public int WaiterCount { get; set; }
     }
 }
 
 /// <summary>
-/// Shares one in-flight operation for a keyed request. Unlike
-/// <see cref="LatestWinsOperation{T}"/>, a new request does not replace the
-/// current work; it observes the same result. This is appropriate for
-/// idempotent delay probes where duplicate clicks have no additional value.
+/// Shares one in-flight operation for a keyed request. Duplicate callers can
+/// stop waiting independently without canceling the shared external work.
 /// </summary>
 public sealed class SingleFlightOperation<T>
 {
     private readonly object _gate = new();
+    private readonly string _operationName;
+    private readonly bool _cancelWhenNoWaiters;
     private ActiveOperation? _active;
 
-    public SingleFlightOperation(string operationName)
+    public SingleFlightOperation(string operationName, bool cancelWhenNoWaiters = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        _operationName = operationName;
+        _cancelWhenNoWaiters = cancelWhenNoWaiters;
     }
 
     public bool IsBusy
@@ -261,41 +441,76 @@ public sealed class SingleFlightOperation<T>
         cancellationToken.ThrowIfCancellationRequested();
 
         ActiveOperation active;
+        ActiveOperation? retired = null;
         bool start = false;
         lock (_gate)
         {
             if (_active is null)
             {
-                _active = new ActiveOperation(operation, cancellationToken);
+                _active = new ActiveOperation(operation);
                 start = true;
+                active = _active;
+                active.WaiterCount++;
             }
+            else if (_cancelWhenNoWaiters && _active.WaiterCount == 0)
+            {
+                active = _active;
+                retired = _active;
+            }
+            else
+            {
+                active = _active;
+                active.WaiterCount++;
+            }
+        }
 
-            active = _active;
+        if (retired is not null)
+        {
+            return RetryAfterRetiredAsync(retired, operation, cancellationToken);
         }
 
         if (start)
         {
             _ = RunAsync(active);
-            // See the boolean single-flight implementation above: the
-            // admitting caller must observe completion after cleanup, while
-            // duplicate callers may stop waiting independently.
-            return active.Completion.Task;
         }
 
-        return WaitForCallerAsync(active.Completion.Task, cancellationToken);
+        return WaitForCallerAsync(active, cancellationToken);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Design",
         "CA1031",
-        Justification = "The operation task must capture arbitrary user-provided failures and release the slot.")]
+        Justification = "A canceled retired shared operation is deliberately ignored before starting the next caller's request.")]
+    private async Task<T> RetryAfterRetiredAsync(
+        ActiveOperation retired,
+        Func<CancellationToken, Task<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await retired.Completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+        }
+
+        return await RequestAsync(operation, cancellationToken).ConfigureAwait(false);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1031",
+        Justification = "The operation task captures arbitrary external failures and completes its own waiter.")]
     private async Task RunAsync(ActiveOperation active)
     {
         T? result = default;
         Exception? failure = null;
         try
         {
-            result = await active.Operation(active.CancellationToken).ConfigureAwait(false);
+            result = await active.Operation(active.Lifetime.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException exception)
         {
@@ -315,6 +530,7 @@ public sealed class SingleFlightOperation<T>
                 }
             }
 
+            active.Lifetime.Dispose();
         }
 
         if (failure is OperationCanceledException canceledException)
@@ -334,44 +550,67 @@ public sealed class SingleFlightOperation<T>
         }
     }
 
-    private static async Task<T> WaitForCallerAsync(Task<T> task, CancellationToken cancellationToken) =>
-        await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    private async Task<T> WaitForCallerAsync(
+        ActiveOperation active,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await active.Completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                if (ReferenceEquals(_active, active) && active.WaiterCount > 0)
+                {
+                    active.WaiterCount--;
+                    if (active.WaiterCount == 0 && _cancelWhenNoWaiters)
+                    {
+                        _ = active.Lifetime.CancelAsync();
+                    }
+                }
+            }
+        }
+    }
 
     private sealed class ActiveOperation
     {
-        public ActiveOperation(
-            Func<CancellationToken, Task<T>> operation,
-            CancellationToken cancellationToken)
+        public ActiveOperation(Func<CancellationToken, Task<T>> operation)
         {
             Operation = operation;
-            CancellationToken = cancellationToken;
+            Lifetime = new CancellationTokenSource();
             Completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
         public Func<CancellationToken, Task<T>> Operation { get; }
 
-        public CancellationToken CancellationToken { get; }
+        public CancellationTokenSource Lifetime { get; }
 
         public TaskCompletionSource<T> Completion { get; }
+
+        public int WaiterCount { get; set; }
     }
 }
 
 /// <summary>
-/// Runs the current request and, while it is running, retains only the latest
-/// pending request. This is used for UI intent streams such as mode and node
-/// selection where stale intermediate clicks have no value.
+/// Runs the current request and retains only the latest pending request. Every
+/// caller receives the completion belonging to its own intent: an in-flight
+/// intent gets its own result, the retained latest intent gets its own result,
+/// and an intermediate pending intent is completed as Superseded.
 /// </summary>
 public sealed class LatestWinsOperation<T>
 {
     private readonly object _gate = new();
+    private readonly string _operationName;
     private bool _running;
-    private ActiveOperation? _pending;
-    private ActiveOperation? _active;
-    private List<TaskCompletionSource<T>> _waiters = [];
+    private ActiveIntent? _active;
+    private ActiveIntent? _pending;
 
     public LatestWinsOperation(string operationName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        _operationName = operationName;
     }
 
     public bool IsBusy
@@ -393,24 +632,27 @@ public sealed class LatestWinsOperation<T>
         ArgumentNullException.ThrowIfNull(operation);
         cancellationToken.ThrowIfCancellationRequested();
 
-        TaskCompletionSource<T> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        ActiveOperation? operationToStart = null;
+        ActiveIntent intent = new(value, operation, cancellationToken);
+        ActiveIntent? operationToStart = null;
+        ActiveIntent? superseded = null;
         lock (_gate)
         {
-            _waiters.Add(completion);
             if (_running)
             {
-                // Retain the complete latest request, not only its value. A
-                // superseded caller's cancellation token must not own a newer
-                // intent that arrived while the first operation was running.
-                _pending = new ActiveOperation(value, operation, cancellationToken);
+                superseded = _pending;
+                _pending = intent;
             }
             else
             {
                 _running = true;
-                operationToStart = new ActiveOperation(value, operation, cancellationToken);
-                _active = operationToStart;
+                _active = intent;
+                operationToStart = intent;
             }
+        }
+
+        if (superseded is not null)
+        {
+            superseded.Completion.TrySetException(new OperationSupersededException(_operationName));
         }
 
         if (operationToStart is not null)
@@ -418,28 +660,31 @@ public sealed class LatestWinsOperation<T>
             _ = RunAsync(operationToStart);
         }
 
-        return WaitForCallerAsync(completion.Task, cancellationToken);
+        return intent.Completion.Task.WaitAsync(cancellationToken);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Design",
         "CA1031",
-        Justification = "The operation task must capture arbitrary user-provided failures and complete every waiter.")]
-    private async Task RunAsync(ActiveOperation active)
+        Justification = "The operation task captures arbitrary external failures and completes its own waiter.")]
+    private async Task RunAsync(ActiveIntent active)
     {
         T? result = default;
         Exception? failure = null;
         try
         {
-            result = await active.Operation(active.Value, active.CancellationToken).ConfigureAwait(false);
+            result = await active.Operation(active.Value, active.Lifetime.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException exception)
+        {
+            failure = exception;
         }
         catch (Exception exception)
         {
             failure = exception;
         }
 
-        ActiveOperation? next = null;
-        List<TaskCompletionSource<T>>? completions = null;
+        ActiveIntent? next = null;
         lock (_gate)
         {
             if (ReferenceEquals(_active, active) && _pending is not null)
@@ -452,67 +697,80 @@ public sealed class LatestWinsOperation<T>
             {
                 _active = null;
                 _running = false;
-                completions = _waiters;
-                _waiters = [];
             }
         }
 
-        if (next is not null)
-        {
-            // A test double or a fast local endpoint can complete inline. Yield
-            // before starting the retained intent so a long click burst cannot
-            // recurse synchronously and overflow the stack.
-            await Task.Yield();
-            _ = RunAsync(next);
-            return;
-        }
+        active.Lifetime.Dispose();
+        Complete(active.Completion, result, failure);
 
-        if (completions is null)
+        if (next is null)
         {
             return;
         }
 
-        foreach (TaskCompletionSource<T> completion in completions)
+        if (next.CallerCancellation.IsCancellationRequested)
         {
-            if (failure is OperationCanceledException exception)
+            next.Completion.TrySetCanceled(next.CallerCancellation);
+            lock (_gate)
             {
-                CancellationToken token = exception.CancellationToken.CanBeCanceled
-                    ? exception.CancellationToken
-                    : new CancellationToken(canceled: true);
-                completion.TrySetCanceled(token);
+                if (ReferenceEquals(_active, next))
+                {
+                    _active = null;
+                    _running = false;
+                }
             }
-            else if (failure is not null)
-            {
-                completion.TrySetException(failure);
-            }
-            else
-            {
-                completion.TrySetResult(result!);
-            }
+
+            return;
+        }
+
+        await Task.Yield();
+        _ = RunAsync(next);
+    }
+
+    private static void Complete(
+        TaskCompletionSource<T> completion,
+        T? result,
+        Exception? failure)
+    {
+        if (failure is OperationCanceledException canceledException)
+        {
+            CancellationToken token = canceledException.CancellationToken.CanBeCanceled
+                ? canceledException.CancellationToken
+                : new CancellationToken(canceled: true);
+            completion.TrySetCanceled(token);
+        }
+        else if (failure is not null)
+        {
+            completion.TrySetException(failure);
+        }
+        else
+        {
+            completion.TrySetResult(result!);
         }
     }
 
-    private static async Task<T> WaitForCallerAsync(Task<T> task, CancellationToken cancellationToken)
+    private sealed class ActiveIntent
     {
-        return await task.WaitAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    private sealed class ActiveOperation
-    {
-        public ActiveOperation(
+        public ActiveIntent(
             T value,
             Func<T, CancellationToken, Task<T>> operation,
-            CancellationToken cancellationToken)
+            CancellationToken callerCancellation)
         {
             Value = value;
             Operation = operation;
-            CancellationToken = cancellationToken;
+            CallerCancellation = callerCancellation;
+            Lifetime = new CancellationTokenSource();
+            Completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
         public T Value { get; }
 
         public Func<T, CancellationToken, Task<T>> Operation { get; }
 
-        public CancellationToken CancellationToken { get; }
+        public CancellationToken CallerCancellation { get; }
+
+        public CancellationTokenSource Lifetime { get; }
+
+        public TaskCompletionSource<T> Completion { get; }
     }
 }

@@ -183,7 +183,23 @@ public enum ServiceCommand
     DisableTun
 }
 
-public sealed record ServiceRequest(Guid RequestId, ServiceCommand Command, string? Payload = null);
+public static class ServiceProtocol
+{
+    public const int CurrentVersion = 1;
+}
+
+public enum ServiceDispatchState
+{
+    NotDispatched,
+    DispatchedAwaitingResult,
+    Completed
+}
+
+public sealed record ServiceRequest(
+    Guid RequestId,
+    ServiceCommand Command,
+    string? Payload = null,
+    int ProtocolVersion = ServiceProtocol.CurrentVersion);
 
 public enum ServiceErrorCode
 {
@@ -201,7 +217,9 @@ public sealed record ServiceResponse(
     string? Payload = null,
     string? Error = null,
     CoreState Core = CoreState.Stopped,
-    ServiceErrorCode ErrorCode = ServiceErrorCode.None);
+    ServiceErrorCode ErrorCode = ServiceErrorCode.None,
+    ServiceDispatchState DispatchState = ServiceDispatchState.Completed,
+    int ProtocolVersion = ServiceProtocol.CurrentVersion);
 
 public sealed record ServiceCorePayload(
     string ConfigurationPath,

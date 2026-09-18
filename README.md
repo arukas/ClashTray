@@ -19,11 +19,11 @@ ClashTray 是使用 C#、.NET 10 和 WinUI 3 独立实现的 Windows Mihomo 客�
 - 网络开关：System Proxy 和 TUN 分开管理；System Proxy 保存并按所有权恢复原始 Windows 代理状态。
 - 可观测性：实时上下行速率、累计流量、连接数、内存、规则搜索、连接筛选和有界日志；外部节点、规则、连接和日志字段均有长度与数量上限，数据未变化时页面不会重建列表。
 - 设置与维护：HTTP / SOCKS / Mixed 端口、`allow-lan`、IPv6、TCP concurrent、日志级别、DNS/FakeIP 缓存、Geo 数据库、开机启动和定时订阅刷新。
-- 远程端点安全边界：可管理远程 Mihomo Controller 元数据、编辑传输模式，并为指定 HTTPS 端点保存受保护 secret / 自定义 CA；真实远程会话仍处于 0.3.0 alpha 收口阶段。
+- 远程端点安全边界：可管理远程 Mihomo Controller 元数据、编辑传输模式，并为指定 HTTPS 端点保存受保护 secret / 自定义 CA；真实远程会话仍处于 0.3.1 alpha 收口阶段。
 - 安全更新：核心来源固定为官方 MetaCubeX/Mihomo 发布，下载后校验 SHA-256，再以原子方式替换并支持回滚。
 - 语言与显示：简体中文 / English，系统、浅色、深色、高对比度和常见 DPI 缩放。
 
-> **0.3.0 范围：** 本版本明确不包含 Wi-Fi/SSID 自动切换、SSID 读取、网络变化监听、网络规则编辑或位置权限处理；相关能力顺延到后续版本。
+> **0.3.1 alpha 范围：** 本版本聚焦运行时状态并发、生命周期代际、跨进程请求语义和退出收敛；不包含 Wi-Fi/SSID 自动切换、SSID 读取、网络变化监听、网络规则编辑或位置权限处理，相关能力顺延到后续版本。
 
 ## 体积与发布版本
 
@@ -75,13 +75,13 @@ dotnet test ClashTray.sln --configuration Debug --property:Platform=x64 --no-bui
 
 ```powershell
 # 默认 Full：包含经过校验的 Mihomo 核心
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.0 -Variant Full
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.1 -Variant Full
 
 # 旧版 Windows 10 兼容包：自包含、包含核心、关闭 CET
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.0 -Variant NoCET
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.1 -Variant NoCET
 
 # 更小的 framework-dependent 版本；安装时检查 .NET 10 Desktop Runtime 和 Windows App Runtime 2.4+
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.0 -Variant Mini
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.1 -Variant Mini
 ```
 
 详见 [docs/setup.md](docs/setup.md)、[docs/release.md](docs/release.md) 和 [docs/roadmap.md](docs/roadmap.md)。旧的 `Build-MSIX.ps1` 和 `packaging/ClashTray.Package` 保留作实验性 / 历史打包材料；当前发布路径是 Inno Setup LZMA2 solid 压缩的 EXE 安装器。
@@ -94,7 +94,7 @@ dotnet test ClashTray.sln --configuration Debug --property:Platform=x64 --no-bui
 
 ## 规划
 
-当前重点是稳定完成日常使用路径：核心启动与恢复、System Proxy 所有权、TUN 回滚、订阅与 Provider 刷新、连接和日志排障、压缩发布与升级卸载。0.3.0 明确不包含 Wi-Fi/SSID 自动切换及相关网络监听；该能力顺延到后续版本。远程 Mihomo 的公网/局域网真实会话、ARM64、历史流量分析和更多语言也不作为 0.3.0 的完整功能交付。
+当前重点是稳定完成日常使用路径：核心启动与恢复、System Proxy 所有权、TUN 回滚、订阅与 Provider 刷新、连接和日志排障、压缩发布与升级卸载。0.3.1 alpha 继续不包含 Wi-Fi/SSID 自动切换及相关网络监听；该能力顺延到后续版本。远程 Mihomo 的公网/局域网真实会话、ARM64、历史流量分析和更多语言也不作为本 alpha 的完整功能交付。
 
 ## 致谢与许可
 

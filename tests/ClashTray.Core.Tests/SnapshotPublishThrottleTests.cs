@@ -46,4 +46,43 @@ public sealed class SnapshotPublishThrottleTests
 
         Assert.AreEqual(1, Volatile.Read(ref publishCount));
     }
+
+    [TestMethod]
+    public async Task PublishCallbackFailureDoesNotLeaveFutureRequestWaiting()
+    {
+        int publishCount = 0;
+        await using SnapshotPublishThrottle throttle = new SnapshotPublishThrottle(
+            () =>
+            {
+                Interlocked.Increment(ref publishCount);
+                throw new InvalidOperationException("synthetic publish failure");
+            },
+            CancellationToken.None,
+            TimeSpan.FromMilliseconds(1));
+
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => throttle.RequestAsync().WaitAsync(TimeSpan.FromSeconds(2)));
+
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+            () => throttle.RequestAsync().WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.AreEqual(1, Volatile.Read(ref publishCount));
+        Assert.IsNotNull(throttle.Fault);
+    }
+
+    [TestMethod]
+    public async Task DisposeCompletesPendingRequestWithoutAnOrphanWaiter()
+    {
+        int publishCount = 0;
+        await using SnapshotPublishThrottle throttle = new SnapshotPublishThrottle(
+            () => Interlocked.Increment(ref publishCount),
+            CancellationToken.None,
+            TimeSpan.FromSeconds(10));
+
+        await throttle.RequestAsync().WaitAsync(TimeSpan.FromSeconds(2));
+        Task pending = throttle.RequestAsync();
+        await throttle.DisposeAsync();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => pending);
+        Assert.AreEqual(1, Volatile.Read(ref publishCount));
+    }
 }

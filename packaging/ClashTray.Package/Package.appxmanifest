@@ -9,7 +9,7 @@
   <!-- The Version attribute is a template placeholder: Build-MSIX.ps1 always
        rewrites it from Directory.Build.props via Get-ProductVersion.ps1 before
        packing, so it must never be edited as an independent version source. -->
-  <Identity Name="ClashTray" Publisher="CN=ClashTray" Version="0.3.0.0" />
+  <Identity Name="ClashTray" Publisher="CN=ClashTray" Version="0.3.1.0" />
   <Properties>
     <DisplayName>ClashTray</DisplayName>
     <PublisherDisplayName>ClashTray Project</PublisherDisplayName>

@@ -126,13 +126,43 @@ public sealed class OperationAdmissionTests
         Task<ProxyMode> fourth = latest.RequestAsync(ProxyMode.Rule, ExecuteAsync);
 
         releaseFirst.TrySetResult(true);
-        ProxyMode[] results = await Task.WhenAll(first, second, third, fourth);
+        Assert.AreEqual(ProxyMode.Rule, await first);
+        await Assert.ThrowsExactlyAsync<OperationSupersededException>(() => second);
+        await Assert.ThrowsExactlyAsync<OperationSupersededException>(() => third);
+        Assert.AreEqual(ProxyMode.Rule, await fourth);
 
-        CollectionAssert.AreEqual(
-            new[] { ProxyMode.Rule, ProxyMode.Rule },
-            executed);
-        Assert.IsTrue(results.All(value => value == ProxyMode.Rule));
+        CollectionAssert.AreEqual(new[] { ProxyMode.Rule, ProxyMode.Rule }, executed);
         Assert.AreEqual(1, Volatile.Read(ref maximumActive));
+        Assert.IsFalse(latest.IsBusy);
+    }
+
+    [TestMethod]
+    public async Task CanceledPendingIntentDoesNotCancelTheInFlightCaller()
+    {
+        LatestWinsOperation<int> latest = new("mode");
+        TaskCompletionSource<bool> entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        Task<int> first = latest.RequestAsync(
+            1,
+            async (_, _) =>
+            {
+                entered.TrySetResult(true);
+                await release.Task;
+                return 1;
+            });
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        using CancellationTokenSource pendingCancellation = new();
+        Task<int> pending = latest.RequestAsync(
+            2,
+            (_, _) => Task.FromResult(2),
+            pendingCancellation.Token);
+        await pendingCancellation.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => pending);
+
+        release.TrySetResult(true);
+        Assert.AreEqual(1, await first);
         Assert.IsFalse(latest.IsBusy);
     }
 

@@ -11,7 +11,10 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
     private readonly TimeSpan _interval;
     private readonly Task _workerTask;
     private bool _pending;
+    private bool _disposed;
     private TaskCompletionSource? _pendingCompletion;
+    private Task? _disposeTask;
+    private Exception? _fault;
     private DateTimeOffset _lastPublished = DateTimeOffset.MinValue;
 
     public SnapshotPublishThrottle(
@@ -31,11 +34,22 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
         _workerTask = RunAsync();
     }
 
+    public Exception? Fault
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _fault;
+            }
+        }
+    }
+
     public void Queue()
     {
         lock (_gate)
         {
-            if (_stopCts.IsCancellationRequested || _pending)
+            if (_disposed || _stopCts.IsCancellationRequested || _fault is not null || _pending)
             {
                 return;
             }
@@ -51,7 +65,12 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
         Task pendingPublish;
         lock (_gate)
         {
-            if (_stopCts.IsCancellationRequested)
+            if (_fault is not null)
+            {
+                return Task.FromException(_fault);
+            }
+
+            if (_disposed || _stopCts.IsCancellationRequested)
             {
                 return Task.FromCanceled(_stopCts.Token);
             }
@@ -69,12 +88,25 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
         return pendingPublish.WaitAsync(cancellationToken);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        await _stopCts.CancelAsync();
+        Task disposeTask;
+        lock (_gate)
+        {
+            _disposeTask ??= DisposeCoreAsync();
+            disposeTask = _disposeTask;
+        }
+
+        return new ValueTask(disposeTask);
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        await _stopCts.CancelAsync().ConfigureAwait(false);
         TaskCompletionSource? pendingCompletion;
         lock (_gate)
         {
+            _disposed = true;
             pendingCompletion = _pendingCompletion;
             _pendingCompletion = null;
             _pending = false;
@@ -84,10 +116,7 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
         _signal.Release();
         try
         {
-            await _workerTask;
-        }
-        catch (OperationCanceledException) when (_stopCts.IsCancellationRequested)
-        {
+            await _workerTask.ConfigureAwait(false);
         }
         finally
         {
@@ -96,13 +125,17 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1031",
+        Justification = "A publish callback is an application boundary; its failure is captured as a terminal, observable worker fault.")]
     private async Task RunAsync()
     {
         try
         {
             while (true)
             {
-                await _signal.WaitAsync(_stopCts.Token);
+                await _signal.WaitAsync(_stopCts.Token).ConfigureAwait(false);
                 while (true)
                 {
                     TimeSpan delay;
@@ -127,7 +160,7 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
 
                     if (delay > TimeSpan.Zero)
                     {
-                        await Task.Delay(delay, _stopCts.Token);
+                        await Task.Delay(delay, _stopCts.Token).ConfigureAwait(false);
                         continue;
                     }
 
@@ -139,8 +172,8 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
                     catch (Exception exception)
                     {
                         completion?.TrySetException(exception);
-                        FailPending(exception);
-                        throw;
+                        SetTerminalFault(exception);
+                        return;
                     }
                 }
             }
@@ -151,9 +184,22 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            FailPending(exception);
-            throw;
+            SetTerminalFault(exception);
         }
+    }
+
+    private void SetTerminalFault(Exception exception)
+    {
+        TaskCompletionSource? pendingCompletion;
+        lock (_gate)
+        {
+            _fault ??= exception;
+            pendingCompletion = _pendingCompletion;
+            _pendingCompletion = null;
+            _pending = false;
+        }
+
+        pendingCompletion?.TrySetException(exception);
     }
 
     private void CancelPending()
@@ -167,18 +213,5 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
         }
 
         pendingCompletion?.TrySetCanceled(_stopCts.Token);
-    }
-
-    private void FailPending(Exception exception)
-    {
-        TaskCompletionSource? pendingCompletion;
-        lock (_gate)
-        {
-            pendingCompletion = _pendingCompletion;
-            _pendingCompletion = null;
-            _pending = false;
-        }
-
-        pendingCompletion?.TrySetException(exception);
     }
 }

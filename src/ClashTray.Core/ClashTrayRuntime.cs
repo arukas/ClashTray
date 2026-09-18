@@ -10,7 +10,9 @@ namespace ClashTray.Core;
 public sealed class ClashTrayRuntime : IAsyncDisposable
 {
     private readonly OperationGate _operationLock = new();
-    private readonly BooleanSingleFlight<TunState> _tunOperation = new("TUN");
+    private readonly BooleanSingleFlight<TunState> _tunOperation = new(
+        "TUN",
+        cancelWhenNoWaiters: false);
     private readonly LatestWinsOperation<ModeIntent> _modeOperation = new("模式");
     private readonly object _proxyOperationGate = new();
     private readonly Dictionary<string, LatestWinsOperation<ProxySelectionIntent>> _proxyOperations =
@@ -23,6 +25,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly SemaphoreSlim _subscriptionOperationLock = new(1, 1);
     private readonly SemaphoreSlim _dataRefreshLock = new(1, 1);
     private readonly CancellationTokenSource _runtimeCts = new();
+    private readonly object _disposeGate = new();
+    private readonly object _publishGate = new();
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(8) };
     private readonly BoundedLogBuffer _logBuffer = new(500);
     private readonly SnapshotPublishThrottle _throttledPublisher;
@@ -55,7 +59,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private CancellationTokenSource? _logStreamCts;
     private Task? _logStreamTask;
     private AppSettings _settings = new();
-    private RuntimeSnapshot _snapshot = CreateInitialSnapshot();
+    private readonly RuntimeStateStore _stateStore = new(CreateInitialSnapshot());
     private IReadOnlyList<EndpointDescriptor> _remoteEndpointDescriptors = [];
     private EndpointStoreLoadStatus _endpointStoreStatus = EndpointStoreLoadStatus.FirstRun;
     private string? _endpointStoreMessage;
@@ -72,10 +76,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private bool _usingServiceCore;
     private bool _coreHealthConfirmed;
     private TunState _confirmedTunState = TunState.Unavailable;
+    private long _coreLifecycleEpoch;
+    private long _proxyOwnershipRevision;
+    private long _proxyIntentRevision;
     private readonly object _proxyRecoveryGate = new();
     private Task? _proxyRecoveryTask;
+    private Task? _disposeTask;
 
     private const int MaxLogMessageBytes = EndpointTransportPolicy.MaxWebSocketMessageBytes;
+    private static readonly TimeSpan DisposeCleanupTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan RemoteRefreshInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan RemoteRefreshRetryDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan RemoteRefreshMaxRetryDelay = TimeSpan.FromSeconds(30);
@@ -109,6 +118,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private sealed record ProxySelectionIntent(string Group, string Proxy);
 
     private sealed record ModeIntent(ProxyMode Mode, bool RouteToRemote);
+
+    private readonly record struct CoreLossContext(
+        long LifecycleEpoch,
+        long ProcessGeneration,
+        long ControllerGeneration,
+        long ProxyOwnershipRevision,
+        long ProxyIntentRevision,
+        bool CoreHealthConfirmed);
 
     private readonly record struct ConnectionDataResult(
         bool Succeeded,
@@ -203,14 +220,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _processManager.LogLineReceived += OnProcessLogLine;
     }
 
-    public RuntimeSnapshot Snapshot => _snapshot;
+    public RuntimeSnapshot Snapshot => _stateStore.Snapshot;
 
-    public AppSnapshot AppSnapshot => AppSnapshotComposer.Compose(
-        _snapshot,
-        _settings,
-        Endpoints,
-        activeController: BuildActiveControllerSnapshot(),
-        controllerGeneration: ControllerGeneration);
+    public long SnapshotRevision => _stateStore.Revision;
+
+    public AppSnapshot AppSnapshot => ComposeAppSnapshot(Snapshot);
 
     public AppSettings Settings => _settings;
 
@@ -319,30 +333,30 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 IsActive = string.Equals(configuration.Id, activeConfigurationId, StringComparison.OrdinalIgnoreCase)
             })
             .ToArray();
-        _snapshot = _snapshot with
+        _stateStore.Update(snapshot => snapshot with
         {
             Configurations = configurations,
-            Core = _snapshot.Core with
+            Core = snapshot.Core with
             {
                 State = _coreDiscovery.FindExecutable() is null ? CoreState.Missing : CoreState.Stopped,
                 Version = FindCoreVersion()
             },
             SystemProxy = _localDevice.DetectSystemProxyState()
-        };
+        });
         await ApplyProgramOverridesAsync(coreRunning: false, cancellationToken: cancellationToken);
         try
         {
             ServiceResponse serviceStatus = await _localDevice.GetStatusAsync(cancellationToken);
-            _snapshot = _snapshot with
+            _stateStore.Update(snapshot => snapshot with
             {
                 Tun = AdoptServiceTunState(serviceStatus.Tun),
-                Core = _snapshot.Core with
+                Core = snapshot.Core with
                 {
-                    State = serviceStatus.Core == CoreState.Stopped && _snapshot.Core.State == CoreState.Missing
+                    State = serviceStatus.Core == CoreState.Stopped && snapshot.Core.State == CoreState.Missing
                         ? CoreState.Missing
                         : serviceStatus.Core
                 }
-            };
+            });
             Publish();
             if (serviceStatus.Core == CoreState.Running)
             {
@@ -403,7 +417,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (TimeoutException)
         {
-            _snapshot = _snapshot with { Tun = TunState.Unavailable };
+            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
             if (recoveryJournal is not null)
             {
                 if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored)
@@ -419,7 +433,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (IOException)
         {
-            _snapshot = _snapshot with { Tun = TunState.Unavailable };
+            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
             if (recoveryJournal is not null)
             {
                 if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored)
@@ -435,7 +449,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (UnauthorizedAccessException)
         {
-            _snapshot = _snapshot with { Tun = TunState.Unavailable };
+            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
             if (recoveryJournal is not null)
             {
                 if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored)
@@ -456,7 +470,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             && ShouldAutomaticallyStartCore(
                 _settings,
                 configurations.Any(configuration => configuration.IsActive),
-                _snapshot.Core.State))
+                Snapshot.Core.State))
         {
             await StartCoreAsync(cancellationToken);
         }
@@ -467,13 +481,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             or SettingsLoadStatus.ReadFailed
             or SettingsLoadStatus.RecoveryFailed)
         {
-            _snapshot = _snapshot with { ErrorMessage = settingsLoad.Message };
+            _stateStore.Update(snapshot => snapshot with { ErrorMessage = settingsLoad.Message });
             Publish();
         }
 
         if (!string.IsNullOrWhiteSpace(journalRecoveryMessage))
         {
-            _snapshot = _snapshot with { ErrorMessage = journalRecoveryMessage };
+            _stateStore.Update(snapshot => snapshot with { ErrorMessage = journalRecoveryMessage });
             Publish();
         }
     }
@@ -712,24 +726,30 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         try
         {
-            if (_snapshot.Core.State == CoreState.Running)
+            if (Snapshot.Core.State == CoreState.Running)
             {
                 return;
             }
+
+            Interlocked.Increment(ref _coreLifecycleEpoch);
 
             ConfigurationProfile? profile = GetActiveConfiguration();
             string? executable = _coreDiscovery.FindExecutable();
             if (executable is null)
             {
                 UpdateCoreState(CoreState.Missing, "未找到 Mihomo 核心，请在设置中安装或选择 mihomo.exe");
-                await RevokeSystemProxyForCoreLossAsync(operationLockHeld: true);
+                await RevokeSystemProxyForCoreLossAsync(
+                    operationLockHeld: true,
+                    cancellationToken: cancellationToken);
                 return;
             }
 
             if (profile is null)
             {
                 UpdateCoreState(CoreState.Failed, "请先导入一个 Mihomo 配置");
-                await RevokeSystemProxyForCoreLossAsync(operationLockHeld: true);
+                await RevokeSystemProxyForCoreLossAsync(
+                    operationLockHeld: true,
+                    cancellationToken: cancellationToken);
                 return;
             }
 
@@ -754,13 +774,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 serviceResponse = await _localDevice.StartCoreAsync(servicePayload, cancellationToken);
             }
-            catch (TimeoutException)
-            {
-            }
-            catch (ServiceUnavailableException)
-            {
-            }
-            catch (UnauthorizedAccessException)
+            catch (ServiceUnavailableException exception) when (exception.DispatchState == ServiceDispatchState.NotDispatched)
             {
             }
             catch (ServiceRequestUnknownException exception)
@@ -841,7 +855,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            await RevokeSystemProxyForCoreLossAsync(operationLockHeld: true);
+            await RevokeSystemProxyForCoreLossAsync(
+                operationLockHeld: true,
+                cancellationToken: cancellationToken);
             UpdateCoreState(CoreState.Failed, ErrorSanitizer.Sanitize(exception));
         }
         finally
@@ -870,6 +886,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         try
         {
+            Interlocked.Increment(ref _coreLifecycleEpoch);
             UpdateCoreState(CoreState.Stopping, null);
             _coreHealthConfirmed = false;
             SetController(null);
@@ -881,7 +898,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     ServiceResponse response = await _localDevice.StopCoreAsync(cancellationToken);
                     if (!response.Succeeded)
                     {
-                        _snapshot = _snapshot with { Tun = AdoptServiceTunState(response.Tun) };
+                        _stateStore.Update(snapshot => snapshot with { Tun = AdoptServiceTunState(response.Tun) });
                         if (response.Core == CoreState.Stopped)
                         {
                             _usingServiceCore = false;
@@ -897,11 +914,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                             response.Error ?? "ClashTray 服务无法停止 Mihomo。");
                     }
 
-                    _snapshot = _snapshot with { Tun = AdoptServiceTunState(response.Tun) };
+                    _stateStore.Update(snapshot => snapshot with { Tun = AdoptServiceTunState(response.Tun) });
                 }
                 catch (TimeoutException exception)
                 {
-                    _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
                     UpdateCoreState(CoreState.Failed, $"ClashTray 服务不可用，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
                     throw new InvalidOperationException(
                         "ClashTray 服务不可用，停止结果无法确认。",
@@ -909,7 +926,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 }
                 catch (ServiceUnavailableException exception)
                 {
-                    _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
                     UpdateCoreState(CoreState.Failed, $"ClashTray 服务不可用，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
                     throw new InvalidOperationException(
                         "ClashTray 服务不可用，停止结果无法确认。",
@@ -917,7 +934,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 }
                 catch (UnauthorizedAccessException exception)
                 {
-                    _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
                     UpdateCoreState(CoreState.Failed, $"ClashTray 服务访问被拒绝，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
                     throw new InvalidOperationException(
                         "ClashTray 服务访问被拒绝，停止结果无法确认。",
@@ -925,7 +942,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 }
                 catch (ServiceRequestUnknownException exception)
                 {
-                    _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
                     UpdateCoreState(CoreState.Failed, $"ClashTray 服务停止结果无法确认，请检查服务状态后重试：{ErrorSanitizer.Sanitize(exception)}");
                     throw new InvalidOperationException(
                         "ClashTray 服务停止结果无法确认，请检查服务状态后重试。",
@@ -933,7 +950,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 }
                 catch (IOException exception)
                 {
-                    _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
                     UpdateCoreState(CoreState.Failed, $"ClashTray 服务通信失败，停止结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
                     throw new InvalidOperationException(
                         "ClashTray 服务通信失败，停止结果无法确认。",
@@ -946,14 +963,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 await _processManager.StopAsync(cancellationToken);
                 _confirmedTunState = TunState.Off;
-                _snapshot = _snapshot with { Tun = TunState.Off };
+                _stateStore.Update(snapshot => snapshot with { Tun = TunState.Off });
             }
 
             UpdateCoreState(CoreState.Stopped, null);
         }
         finally
         {
-            await RevokeSystemProxyForCoreLossAsync(operationLockHeld: true);
+            await RevokeSystemProxyForCoreLossAsync(
+                operationLockHeld: true,
+                cancellationToken: cancellationToken);
             if (!operationLockHeld)
             {
                 _operationLock.Release();
@@ -1124,12 +1143,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             if (shouldRemainActive && !update.ContentChanged && !activeSelectionChanged)
             {
-                _logBuffer.Add(new LogEntry(
+                AddApplicationLog(new LogEntry(
                     DateTimeOffset.UtcNow,
                     "ClashTray",
                     "info",
                     "订阅内容 SHA-256 未变化，已跳过 Mihomo 重启。"));
-                _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
+                _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
                 Publish();
             }
         }
@@ -1206,7 +1225,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     ConfigurationSwitchRequest.Create(
                         ConfigurationSwitchSource.Manual,
                         profile.Id,
-                        restartCore: _snapshot.Core.State == CoreState.Running,
+                        restartCore: Snapshot.Core.State == CoreState.Running,
                         forceApply: true),
                     cancellationToken,
                     operationLockHeld: true);
@@ -1352,18 +1371,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         bool publish = true)
     {
         IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
-        _snapshot = _snapshot with
+        _stateStore.Update(snapshot => snapshot with
         {
             Configurations = configurations.Select(configuration => configuration with
             {
                 IsActive = string.Equals(configuration.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase)
             }).ToArray(),
-            Core = _snapshot.Core with
+            Core = snapshot.Core with
             {
                 ConfigurationName = configurations.FirstOrDefault(configuration =>
                     string.Equals(configuration.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase))?.Name
             }
-        };
+        });
         if (publish)
         {
             Publish();
@@ -1376,14 +1395,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         _settings = _settings with { ActiveConfigurationId = candidate.Id };
         IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
-        _snapshot = _snapshot with
+        _stateStore.Update(snapshot => snapshot with
         {
             Configurations = configurations.Select(configuration => configuration with
             {
                 IsActive = string.Equals(configuration.Id, candidate.Id, StringComparison.OrdinalIgnoreCase)
             }).ToArray(),
-            Core = _snapshot.Core with { ConfigurationName = candidate.Name }
-        };
+            Core = snapshot.Core with { ConfigurationName = candidate.Name }
+        });
     }
 
     private async Task CommitConfigurationSelectionAsync(
@@ -1539,7 +1558,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             bool wasActive = profile.IsActive
                 || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
-            if (wasActive && _snapshot.Core.State == CoreState.Running)
+            if (wasActive && Snapshot.Core.State == CoreState.Running)
             {
                 await StopCoreCoreAsync(operationLockHeld: true, cancellationToken);
             }
@@ -1552,14 +1571,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await _settingsStore.SaveAsync(_settings, cancellationToken);
             }
 
-            _snapshot = _snapshot with
+            _stateStore.Update(snapshot => snapshot with
             {
                 Configurations = configurations.Select(configuration => configuration with
                 {
                     IsActive = configuration.Id == _settings.ActiveConfigurationId
                 }).ToArray(),
-                Core = wasActive ? _snapshot.Core with { ConfigurationName = null } : _snapshot.Core
-            };
+                Core = wasActive ? snapshot.Core with { ConfigurationName = null } : snapshot.Core
+            });
             Publish();
         }
         finally
@@ -1664,7 +1683,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            string? previousProxy = _snapshot.ProxyGroups
+            string? previousProxy = Snapshot.ProxyGroups
                 .FirstOrDefault(item => string.Equals(item.Name, intent.Group, StringComparison.Ordinal))
                 ?.Current;
             Exception? disconnectException = null;
@@ -1704,7 +1723,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                                 generation,
                                 "节点切换期间核心会话已切换，请重新选择节点。");
                             disconnectException = exception;
-                            _logBuffer.Add(new LogEntry(
+                            AddApplicationLog(new LogEntry(
                                 DateTimeOffset.UtcNow,
                                 "ClashTray",
                                 "error",
@@ -1719,11 +1738,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (disconnectException is not null)
             {
                 const string message = "节点已切换，但未能断开旧连接。";
-                _snapshot = _snapshot with
+                _stateStore.Update(snapshot => snapshot with
                 {
                     ErrorMessage = message,
                     Logs = _logBuffer.Snapshot()
-                };
+                });
                 Publish();
                 throw new InvalidOperationException(message, disconnectException);
             }
@@ -1968,11 +1987,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
                 string? LatestDelay(string name, string? previous) => delays.TryGetValue(name, out int? delay)
                     ? delay?.ToString(System.Globalization.CultureInfo.InvariantCulture) : previous;
-                _snapshot = _snapshot with
+                _stateStore.Update(snapshot => snapshot with
                 {
                     ProxyGroups = proxies.Groups.Select(item => item with { Delay = LatestDelay(item.Name, item.Delay) }).ToArray(),
                     ProxyNodes = proxies.Nodes.Select(item => item with { Delay = LatestDelay(item.Name, item.Delay) }).ToArray()
-                };
+                });
                 Publish();
             }
             finally { _dataRefreshLock.Release(); }
@@ -2045,7 +2064,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public void ClearLogs()
     {
         _logBuffer.Clear();
-        _snapshot = _snapshot with { Logs = [] };
+        _stateStore.Update(snapshot => snapshot with { Logs = [] });
         Publish();
     }
 
@@ -2078,6 +2097,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             || settings.Ipv6 != previousSettings.Ipv6;
         bool coreRestartRequired = RequiresCoreRestart(previousSettings, settings);
         bool systemProxyBindingChanged = HasSystemProxyBindingChanged(previousSettings, settings);
+        bool systemProxyPreferenceChanged = settings.SystemProxyEnabled != previousSettings.SystemProxyEnabled;
         bool coreWasRunning = IsCoreRunningForSettings();
         bool settingsSaved = false;
         bool restartStarted = false;
@@ -2094,6 +2114,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             await _settingsStore.SaveAsync(settings, cancellationToken);
             settingsSaved = true;
             _settings = settings;
+            if (systemProxyPreferenceChanged)
+            {
+                Interlocked.Increment(ref _proxyIntentRevision);
+            }
 
             if (systemProxyBindingChanged
                 && _localDevice.SystemProxyState is SystemProxyState.On
@@ -2125,11 +2149,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 catch (Exception exception)
                 {
                     LogControllerFailure("程序局域网/IPv6 设置覆盖", "/configs", exception, 0);
-                    _snapshot = _snapshot with
+                    _stateStore.Update(snapshot => snapshot with
                     {
                         ErrorMessage = $"程序局域网/IPv6 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
                         Logs = _logBuffer.Snapshot()
-                    };
+                    });
                     throw new InvalidOperationException("运行中网络设置应用失败，正在恢复旧设置。", exception);
                 }
             }
@@ -2137,7 +2161,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (systemProxyBindingChanged)
             {
                 await ReconcileSystemProxyAsync(
-                    coreRunning: _snapshot.Core.State == CoreState.Running && _coreHealthConfirmed,
+                    coreRunning: Snapshot.Core.State == CoreState.Running && _coreHealthConfirmed,
                     cancellationToken);
             }
 
@@ -2204,11 +2228,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             string message = failures.Length == 0
                 ? "设置应用失败，已恢复旧设置。"
                 : "设置应用失败，旧设置或核心状态恢复失败，请检查核心状态。";
-            _snapshot = _snapshot with
+            _stateStore.Update(snapshot => snapshot with
             {
                 ErrorMessage = message,
                 Logs = _logBuffer.Snapshot()
-            };
+            });
             Publish();
 
             if (failures.Length > 0)
@@ -2227,18 +2251,34 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     }
 
     public Task SetSystemProxyAsync(bool enabled, CancellationToken cancellationToken = default) =>
-        SetSystemProxyCoreAsync(enabled, persistPreference: true, cancellationToken: cancellationToken);
+        SetSystemProxyCoreAsync(
+            enabled,
+            persistPreference: true,
+            cancellationToken: cancellationToken,
+            operationLockHeld: false);
 
     private async Task SetSystemProxyCoreAsync(
         bool enabled,
         bool persistPreference,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool operationLockHeld = false)
     {
-        await _operationLock.WaitAsync(cancellationToken);
+        bool operationLockAcquired = false;
+        if (!operationLockHeld)
+        {
+            await _operationLock.WaitAsync(cancellationToken);
+            operationLockAcquired = true;
+        }
+
         AppSettings previousSettings = _settings;
         bool preferenceChanged = persistPreference && previousSettings.SystemProxyEnabled != enabled;
         try
         {
+            if (persistPreference)
+            {
+                Interlocked.Increment(ref _proxyIntentRevision);
+            }
+
             if (preferenceChanged)
             {
                 await SaveSettingsForOperationAsync(
@@ -2249,12 +2289,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (enabled && !_coreHealthConfirmed)
             {
                 await RevokeSystemProxyForCoreLossAsync(operationLockHeld: true);
-                _snapshot = _snapshot with { SystemProxy = _localDevice.SystemProxyState };
+                _stateStore.Update(snapshot => snapshot with { SystemProxy = _localDevice.SystemProxyState });
                 Publish();
                 return;
             }
 
-            _snapshot = _snapshot with { SystemProxy = enabled ? SystemProxyState.Enabling : SystemProxyState.Disabling };
+            _stateStore.Update(snapshot => snapshot with { SystemProxy = enabled ? SystemProxyState.Enabling : SystemProxyState.Disabling });
             Publish();
             if (enabled)
             {
@@ -2265,23 +2305,28 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await _localDevice.DisableSystemProxyAsync(cancellationToken);
             }
 
-            _snapshot = _snapshot with { SystemProxy = _localDevice.SystemProxyState, ErrorMessage = null };
+            Interlocked.Increment(ref _proxyOwnershipRevision);
+            _stateStore.Update(snapshot => snapshot with { SystemProxy = _localDevice.SystemProxyState, ErrorMessage = null });
             Publish();
         }
         catch
         {
+            Interlocked.Increment(ref _proxyOwnershipRevision);
             if (preferenceChanged)
             {
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
-            _snapshot = _snapshot with { SystemProxy = _localDevice.SystemProxyState };
+            _stateStore.Update(snapshot => snapshot with { SystemProxy = _localDevice.SystemProxyState });
             Publish();
             throw;
         }
         finally
         {
-            _operationLock.Release();
+            if (operationLockAcquired)
+            {
+                _operationLock.Release();
+            }
         }
     }
 
@@ -2331,7 +2376,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         TunState? serviceResponseState = null;
         try
         {
-            _snapshot = _snapshot with { Tun = enabled ? TunState.Enabling : TunState.Disabling };
+            _stateStore.Update(snapshot => snapshot with { Tun = enabled ? TunState.Enabling : TunState.Disabling });
             Publish();
             ServiceTunPayload payload = new(
                 _settings.ControllerPort,
@@ -2343,11 +2388,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (!response.Succeeded)
             {
                 _confirmedTunState = response.Tun;
-                _snapshot = _snapshot with
+                _stateStore.Update(snapshot => snapshot with
                 {
                     Tun = response.Tun,
                     ErrorMessage = response.Error ?? "TUN 操作失败。"
-                };
+                });
                 Publish();
                 throw new ServiceCommandException(
                     response.ErrorCode,
@@ -2357,7 +2402,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (response.Tun != (enabled ? TunState.On : TunState.Off))
             {
                 _confirmedTunState = response.Tun;
-                _snapshot = _snapshot with { Tun = response.Tun, ErrorMessage = response.Error };
+                _stateStore.Update(snapshot => snapshot with { Tun = response.Tun, ErrorMessage = response.Error });
                 Publish();
                 throw new ServiceCommandException(
                     response.ErrorCode == ServiceErrorCode.None
@@ -2375,7 +2420,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             _confirmedTunState = response.Tun;
-            _snapshot = _snapshot with { Tun = response.Tun, ErrorMessage = null };
+            _stateStore.Update(snapshot => snapshot with { Tun = response.Tun, ErrorMessage = null });
             Publish();
             return response.Tun;
         }
@@ -2390,13 +2435,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 ? confirmedState
                 : TunState.Unknown;
             _confirmedTunState = state;
-            _snapshot = _snapshot with
+            _stateStore.Update(snapshot => snapshot with
             {
                 Tun = state,
                 ErrorMessage = serviceResponseState is TunState
                     ? null
                     : "TUN 操作已取消，状态无法确认。"
-            };
+            });
             Publish();
             throw;
         }
@@ -2408,7 +2453,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             _confirmedTunState = TunState.Unavailable;
-            _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
+            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
@@ -2420,7 +2465,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             _confirmedTunState = TunState.Failed;
-            _snapshot = _snapshot with { Tun = TunState.Failed, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
+            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Failed, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
             Publish();
             throw new InvalidOperationException("TUN 操作结果无法确认，请检查服务状态后重试。", exception);
         }
@@ -2432,7 +2477,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             _confirmedTunState = TunState.Unavailable;
-            _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
+            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
@@ -2444,7 +2489,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             _confirmedTunState = TunState.Unavailable;
-            _snapshot = _snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) };
+            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
             Publish();
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
@@ -2458,16 +2503,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (serviceResponseState is TunState responseState)
             {
                 _confirmedTunState = responseState;
-                _snapshot = _snapshot with
+                _stateStore.Update(snapshot => snapshot with
                 {
                     Tun = responseState,
-                    ErrorMessage = _snapshot.ErrorMessage ?? "TUN 操作结果无法确认。"
-                };
+                    ErrorMessage = snapshot.ErrorMessage ?? "TUN 操作结果无法确认。"
+                });
             }
             else
             {
                 _confirmedTunState = TunState.Failed;
-                _snapshot = _snapshot with { Tun = TunState.Failed };
+                _stateStore.Update(snapshot => snapshot with { Tun = TunState.Failed });
             }
             Publish();
             throw;
@@ -2525,7 +2570,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
-            bool wasRunning = _snapshot.Core.State == CoreState.Running;
+            bool wasRunning = Snapshot.Core.State == CoreState.Running;
             if (wasRunning)
             {
                 await StopCoreCoreAsync(operationLockHeld: true, cancellationToken);
@@ -2547,7 +2592,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
                 installed = true;
                 string path = response.Payload ?? _coreDiscovery.ManagedExecutablePath;
-                _snapshot = _snapshot with { Core = _snapshot.Core with { Version = FindCoreVersion(), ErrorMessage = null }, ErrorMessage = null };
+                _stateStore.Update(snapshot => snapshot with { Core = snapshot.Core with { Version = FindCoreVersion(), ErrorMessage = null }, ErrorMessage = null });
                 Publish();
                 if (wasRunning)
                 {
@@ -2557,15 +2602,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                         await StopCoreCoreAsync(operationLockHeld: true, CancellationToken.None);
                         await RollbackCoreUpdateAsync(CancellationToken.None);
                         rolledBack = true;
-                        _snapshot = _snapshot with
+                        _stateStore.Update(snapshot => snapshot with
                         {
-                            Core = _snapshot.Core with
+                            Core = snapshot.Core with
                             {
                                 Version = FindCoreVersion(),
                                 ErrorMessage = "新核心健康检查失败，已自动回滚。"
                             },
                             ErrorMessage = "新核心健康检查失败，已自动回滚。"
-                        };
+                        });
                         Publish();
                         await StartCoreCoreAsync(operationLockHeld: true, CancellationToken.None);
                         if (!IsCoreHealthy())
@@ -2573,12 +2618,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                             throw new InvalidOperationException("核心更新失败，且回滚后的旧核心也未能恢复。");
                         }
 
-                        _logBuffer.Add(new LogEntry(
+                        AddApplicationLog(new LogEntry(
                             DateTimeOffset.UtcNow,
                             "ClashTray",
                             "warning",
                             "新核心健康检查失败，已自动回滚并恢复旧核心。"));
-                        _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
+                        _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
                         Publish();
                         throw new InvalidOperationException("核心更新健康检查失败，已自动回滚并恢复旧核心。");
                     }
@@ -2590,16 +2635,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 if (installed && !rolledBack)
                 {
-                    if (_snapshot.Core.State == CoreState.Running || _api is not null || _usingServiceCore)
+                    if (Snapshot.Core.State == CoreState.Running || _api is not null || _usingServiceCore)
                     {
                         await StopCoreCoreAsync(operationLockHeld: true, CancellationToken.None);
                     }
 
                     await RollbackCoreUpdateAsync(CancellationToken.None);
-                    _snapshot = _snapshot with
+                    _stateStore.Update(snapshot => snapshot with
                     {
-                        Core = _snapshot.Core with { Version = FindCoreVersion() }
-                    };
+                        Core = snapshot.Core with { Version = FindCoreVersion() }
+                    });
                     Publish();
                 }
 
@@ -2618,7 +2663,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     }
 
     private bool IsCoreHealthy() =>
-        _snapshot.Core.State == CoreState.Running && _coreHealthConfirmed;
+        Snapshot.Core.State == CoreState.Running && _coreHealthConfirmed;
 
     private async Task RollbackCoreUpdateAsync(CancellationToken cancellationToken)
     {
@@ -2631,38 +2676,30 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task RefreshDataAsync(CancellationToken cancellationToken = default)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        EndpointSession? remoteSession = CaptureActiveRemoteSession(
+            EndpointCommand.ObserveStatus,
+            "刷新远程端点数据期间会话已切换，请重试。");
+        if (remoteSession is not null)
         {
-            EndpointSession? remoteSession = CaptureActiveRemoteSession(
-                EndpointCommand.ObserveStatus,
-                "刷新远程端点数据期间会话已切换，请重试。");
-            if (remoteSession is not null)
+            EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+            if (!await RefreshRemoteControllerSnapshotAsync(
+                    remoteSession,
+                    remoteStatus,
+                    cancellationToken)
+                .ConfigureAwait(false))
             {
-                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-                if (!await RefreshRemoteControllerSnapshotAsync(
-                        remoteSession,
-                        remoteStatus,
-                        cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException(
-                        "远程端点数据刷新结果无法确认，请重试。");
-                }
-
-                return;
+                throw new InvalidOperationException(
+                    "远程端点数据刷新结果无法确认，请重试。");
             }
 
-            if (_api is not null)
-            {
-                await RefreshFromApiWithRetryAsync(
-                    cancellationToken,
-                    operationLockHeld: true);
-            }
+            return;
         }
-        finally
+
+        if (_api is not null)
         {
-            _operationLock.Release();
+            await RefreshFromApiWithRetryAsync(
+                cancellationToken,
+                operationLockHeld: false);
         }
     }
 
@@ -2672,7 +2709,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         SetController(api);
         _usingServiceCore = usingServiceCore;
         _coreHealthConfirmed = true;
-        _snapshot = _snapshot with { Core = _snapshot.Core with { State = CoreState.Running } };
+        _stateStore.Update(snapshot => snapshot with { Core = snapshot.Core with { State = CoreState.Running } });
     }
 
     internal Task RefreshControllerDataForTestingAsync(CancellationToken cancellationToken = default) =>
@@ -2686,92 +2723,215 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     internal Task RevokeSystemProxyForTestingAsync() =>
         RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        _endpointSessions.StatusChanged -= OnEndpointSessionStatusChanged;
-        await StopRemoteRefreshAsync();
-        await _endpointSessions.DisposeAsync();
-        _networkSwitchRuntimeController.StatusChanged -= OnNetworkSwitchStatusChanged;
-        await _networkSwitchRuntimeController.DisposeAsync();
-
-        if (_usingServiceCore
-            && _snapshot.Tun is not (TunState.Off or TunState.Unavailable))
+        lock (_disposeGate)
         {
-            try
+            _disposeTask ??= DisposeCoreAsync();
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        List<Exception> cleanupFailures = [];
+        _operationLock.BeginQuiescing();
+        Interlocked.Increment(ref _coreLifecycleEpoch);
+        await _runtimeCts.CancelAsync().ConfigureAwait(false);
+
+        _endpointSessions.StatusChanged -= OnEndpointSessionStatusChanged;
+        _networkSwitchRuntimeController.StatusChanged -= OnNetworkSwitchStatusChanged;
+        _processManager.StateChanged -= OnProcessStateChanged;
+        _processManager.LogLineReceived -= OnProcessLogLine;
+
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "停止远程端点刷新",
+            _ => StopRemoteRefreshAsync());
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "释放端点会话",
+            _ => _endpointSessions.DisposeAsync().AsTask());
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "释放网络切换运行时",
+            _ => _networkSwitchRuntimeController.DisposeAsync().AsTask());
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "停止订阅调度器",
+            _ => _subscriptionScheduler.DisposeAsync().AsTask());
+
+        try
+        {
+            await _operationLock.WaitForIdleAsync(
+                    DisposeCleanupTimeout,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            RecordCleanupFailure(cleanupFailures, "等待普通操作安全点", exception);
+            // A timed-out operation may still complete later. Advance the
+            // lifecycle so its late I/O cannot commit into the shutting-down runtime.
+            Interlocked.Increment(ref _coreLifecycleEpoch);
+        }
+
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "等待 TUN 操作安全点",
+            token => _tunOperation.WaitForIdleAsync(DisposeCleanupTimeout, token));
+
+        bool usingServiceCore = _usingServiceCore;
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "关闭 TUN",
+            async token =>
             {
+                if (!usingServiceCore || Snapshot.Tun is TunState.Off or TunState.Unavailable)
+                {
+                    return;
+                }
+
                 await RequestTunOperationAsync(
                         enabled: false,
                         persistPreference: false,
-                        operationLockHeld: false,
-                        cancellationToken: CancellationToken.None)
+                        operationLockHeld: true,
+                        cancellationToken: token)
                     .ConfigureAwait(false);
-            }
-            catch
-            {
-            }
-        }
+            });
 
-        if (_snapshot.SystemProxy is SystemProxyState.On or SystemProxyState.RestoreRequired)
-        {
-            try
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "恢复系统代理",
+            async token =>
             {
-                await SetSystemProxyCoreAsync(false, persistPreference: false, cancellationToken: CancellationToken.None);
-            }
-            catch
-            {
-            }
-        }
+                if (Snapshot.SystemProxy is SystemProxyState.On or SystemProxyState.RestoreRequired)
+                {
+                    await SetSystemProxyCoreAsync(
+                            false,
+                            persistPreference: false,
+                            cancellationToken: token,
+                            operationLockHeld: true)
+                        .ConfigureAwait(false);
+                }
+            });
 
-        if (_usingServiceCore)
-        {
-            try
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "停止核心",
+            async token =>
             {
-                await StopCoreAsync(CancellationToken.None);
-            }
-            catch
-            {
-            }
-        }
+                if (usingServiceCore
+                    || Snapshot.Core.State is CoreState.Running
+                        or CoreState.Starting
+                        or CoreState.Stopping
+                        or CoreState.Restarting
+                    || _api is not null)
+                {
+                    await StopCoreCoreAsync(operationLockHeld: true, token).ConfigureAwait(false);
+                }
+            });
 
-        await _runtimeCts.CancelAsync();
-        await _throttledPublisher.DisposeAsync();
         SetController(null);
-        await StopLogStreamAsync();
-        if (_dataRefreshTask is not null)
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "停止日志流",
+            _ => StopLogStreamAsync());
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "等待数据刷新",
+            token => AwaitTaskBoundedAsync(_dataRefreshTask, token));
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "等待轮询",
+            token => AwaitTaskBoundedAsync(_pollingTask, token));
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "等待系统代理恢复",
+            _ => AwaitQueuedProxyRecoveryAsync());
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "释放核心进程管理器",
+            _ => _processManager.DisposeAsync().AsTask());
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "释放配置切换协调器",
+            _ => _configurationSwitchCoordinator.DisposeAsync().AsTask());
+        await RunCleanupStepAsync(
+            cleanupFailures,
+            "停止发布 worker",
+            _ => _throttledPublisher.DisposeAsync().AsTask());
+
+        _logStreamCts?.Dispose();
+        _logStreamCts = null;
+        _remoteRefreshCts?.Dispose();
+        _remoteRefreshCts = null;
+
+        if (cleanupFailures.Count > 0)
         {
+            string message = $"ClashTray 退出清理有 {cleanupFailures.Count} 项未能确认，已尽力释放其余资源。";
+            _stateStore.Update(snapshot => snapshot with
+            {
+                ErrorMessage = message,
+                Logs = _logBuffer.Snapshot()
+            });
             try
             {
-                await _dataRefreshTask;
+                Publish();
             }
-            catch (OperationCanceledException)
+            catch (Exception exception)
             {
+                cleanupFailures.Add(exception);
             }
         }
 
-        await _subscriptionScheduler.DisposeAsync();
-        if (_pollingTask is not null)
-        {
-            try
-            {
-                await _pollingTask;
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }
-
-        await _processManager.DisposeAsync();
-        await AwaitQueuedProxyRecoveryAsync();
-        _processManager.StateChanged -= OnProcessStateChanged;
-        _processManager.LogLineReceived -= OnProcessLogLine;
         _httpClient.Dispose();
         _subscriptionOperationLock.Dispose();
         _dataRefreshLock.Dispose();
         _remoteRefreshLifecycleLock.Dispose();
         _remoteRefreshReadLock.Dispose();
-        await _configurationSwitchCoordinator.DisposeAsync();
         _operationLock.Dispose();
         _runtimeCts.Dispose();
+    }
+
+    private async Task RunCleanupStepAsync(
+        ICollection<Exception> failures,
+        string operationName,
+        Func<CancellationToken, Task> operation)
+    {
+        using CancellationTokenSource timeout = new(DisposeCleanupTimeout);
+        try
+        {
+            await operation(timeout.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            RecordCleanupFailure(failures, operationName, exception);
+        }
+    }
+
+    private void RecordCleanupFailure(
+        ICollection<Exception> failures,
+        string operationName,
+        Exception exception)
+    {
+        Exception sanitized = new InvalidOperationException(
+            $"{operationName}：{ErrorSanitizer.Sanitize(exception)}",
+            exception);
+        failures.Add(sanitized);
+        AddApplicationLog(new LogEntry(
+            DateTimeOffset.UtcNow,
+            "ClashTray",
+            "error",
+            sanitized.Message));
+    }
+
+    private static async Task AwaitTaskBoundedAsync(Task? task, CancellationToken cancellationToken)
+    {
+        if (task is not null)
+        {
+            await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task RefreshFromApiAsync(
@@ -2794,32 +2954,40 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task RefreshCoreHealthAsync(MihomoApiClient api, CancellationToken cancellationToken)
     {
+        long lifecycleEpoch = Volatile.Read(ref _coreLifecycleEpoch);
+        long processGeneration = _processManager.Generation;
+        long controllerGeneration = ControllerGeneration;
         using JsonDocument version = await api.GetVersionAsync(cancellationToken);
         string? versionText = MihomoDataParser.ParseVersion(version);
         using JsonDocument configurationState = await api.GetConfigurationAsync(force: false, cancellationToken);
         ProxyMode? mode = MihomoDataParser.ParseMode(configurationState);
         bool? tunEnabled = MihomoDataParser.ParseTunEnabled(configurationState);
 
-        if (!ReferenceEquals(_api, api))
+        if (!IsCurrentCoreBinding(api, controllerGeneration, lifecycleEpoch, processGeneration))
         {
             return;
         }
 
         TunState observedTun = ResolveConfirmedTunState(tunEnabled);
-        _coreHealthConfirmed = true;
-        _snapshot = _snapshot with
+        if (!IsCurrentCoreBinding(api, controllerGeneration, lifecycleEpoch, processGeneration))
         {
-            Core = _snapshot.Core with
+            return;
+        }
+
+        _coreHealthConfirmed = true;
+        _stateStore.Update(snapshot => snapshot with
+        {
+            Core = snapshot.Core with
             {
                 State = CoreState.Running,
-                Version = versionText ?? _snapshot.Core.Version,
-                Mode = mode ?? _snapshot.Core.Mode,
+                Version = versionText ?? snapshot.Core.Version,
+                Mode = mode ?? snapshot.Core.Mode,
                 ErrorMessage = null
             },
             Logs = _logBuffer.Snapshot(),
             Tun = observedTun,
             ErrorMessage = null
-        };
+        });
         Publish();
         EnsureLogStreamStarted();
     }
@@ -2862,10 +3030,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationToken cancellationToken,
         bool includeRulesAndProviders = true)
     {
+        long lifecycleEpoch = Volatile.Read(ref _coreLifecycleEpoch);
+        long processGeneration = _processManager.Generation;
+        long controllerGeneration = ControllerGeneration;
         await _dataRefreshLock.WaitAsync(cancellationToken);
         try
         {
-            if (!ReferenceEquals(_api, api))
+            if (!IsCurrentCoreBinding(api, controllerGeneration, lifecycleEpoch, processGeneration))
             {
                 return;
             }
@@ -2876,15 +3047,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             Task<ConnectionDataResult> connectionsTask = TryGetConnectionDataAsync(api, cancellationToken);
             Task<IReadOnlyList<RuleInfo>> rulesTask = includeRulesAndProviders
                 ? TryGetRulesAsync(api, cancellationToken)
-                : Task.FromResult<IReadOnlyList<RuleInfo>>(_snapshot.Rules);
+                : Task.FromResult<IReadOnlyList<RuleInfo>>(Snapshot.Rules);
             Task<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> providersTask =
                 includeRulesAndProviders
                     ? TryGetProvidersAsync(api, cancellationToken)
                     : Task.FromResult<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)>(
-                        (_snapshot.Providers, _snapshot.RuleProviders));
+                        (Snapshot.Providers, Snapshot.RuleProviders));
             await Task.WhenAll(proxyTask, trafficTask, memoryTask, connectionsTask, rulesTask, providersTask);
 
-            if (!ReferenceEquals(_api, api))
+            if (!IsCurrentCoreBinding(api, controllerGeneration, lifecycleEpoch, processGeneration))
             {
                 return;
             }
@@ -2895,31 +3066,31 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             ConnectionDataResult connectionData = await connectionsTask;
             IReadOnlyList<RuleInfo> rulesData = await rulesTask;
             (IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders) providerData = await providersTask;
-            CoreStatus currentCore = _snapshot.Core;
+            CoreStatus currentCore = Snapshot.Core;
             TrafficSnapshot? traffic = trafficData.Value;
             IReadOnlyList<ProxyGroup> proxyGroups = proxyData.Succeeded
-                ? ReuseIfEqual(_snapshot.ProxyGroups, proxyData.Groups, ProxyGroupsEqual)
-                : _snapshot.ProxyGroups;
+                ? ReuseIfEqual(Snapshot.ProxyGroups, proxyData.Groups, ProxyGroupsEqual)
+                : Snapshot.ProxyGroups;
             IReadOnlyList<ProxyNode> proxyNodes = proxyData.Succeeded
-                ? ReuseIfEqual(_snapshot.ProxyNodes, proxyData.Nodes, ProxyNodesEqual)
-                : _snapshot.ProxyNodes;
+                ? ReuseIfEqual(Snapshot.ProxyNodes, proxyData.Nodes, ProxyNodesEqual)
+                : Snapshot.ProxyNodes;
             IReadOnlyList<ConnectionInfo> connections = connectionData.Succeeded
-                ? ReuseIfEqual(_snapshot.Connections, connectionData.Value, EqualityComparer<ConnectionInfo>.Default.Equals)
-                : _snapshot.Connections;
+                ? ReuseIfEqual(Snapshot.Connections, connectionData.Value, EqualityComparer<ConnectionInfo>.Default.Equals)
+                : Snapshot.Connections;
             IReadOnlyList<RuleInfo> rules = ReuseIfEqual(
-                _snapshot.Rules,
+                Snapshot.Rules,
                 rulesData,
                 EqualityComparer<RuleInfo>.Default.Equals);
             IReadOnlyList<ProviderStatus> providers = ReuseIfEqual(
-                _snapshot.Providers,
+                Snapshot.Providers,
                 providerData.Providers,
                 EqualityComparer<ProviderStatus>.Default.Equals);
             IReadOnlyList<ProviderStatus> ruleProviders = ReuseIfEqual(
-                _snapshot.RuleProviders,
+                Snapshot.RuleProviders,
                 providerData.RuleProviders,
                 EqualityComparer<ProviderStatus>.Default.Equals);
 
-            _snapshot = _snapshot with
+            _stateStore.Update(snapshot => snapshot with
             {
                 Core = currentCore with
                 {
@@ -2939,7 +3110,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 Providers = providers,
                 RuleProviders = ruleProviders,
                 Logs = _logBuffer.Snapshot()
-            };
+            });
             await _throttledPublisher.RequestAsync(cancellationToken);
         }
         finally
@@ -3018,7 +3189,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 throw new InvalidOperationException("Mihomo 未返回可识别的代理模式。");
             }
 
-            _snapshot = _snapshot with { Core = _snapshot.Core with { Mode = confirmedMode } };
+            _stateStore.Update(snapshot => snapshot with { Core = snapshot.Core with { Mode = confirmedMode } });
             Publish();
         }
         finally
@@ -3039,11 +3210,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             using JsonDocument proxies = await api.GetProxiesAsync(cancellationToken);
             EnsureControllerSession(api, generation, "节点刷新期间核心会话已切换，请重试。");
             (IReadOnlyList<ProxyGroup> groups, IReadOnlyList<ProxyNode> nodes) = MihomoDataParser.ParseProxies(proxies);
-            _snapshot = _snapshot with
+            _stateStore.Update(snapshot => snapshot with
             {
-                ProxyGroups = ReuseIfEqual(_snapshot.ProxyGroups, groups, ProxyGroupsEqual),
-                ProxyNodes = ReuseIfEqual(_snapshot.ProxyNodes, nodes, ProxyNodesEqual)
-            };
+                ProxyGroups = ReuseIfEqual(snapshot.ProxyGroups, groups, ProxyGroupsEqual),
+                ProxyNodes = ReuseIfEqual(snapshot.ProxyNodes, nodes, ProxyNodesEqual)
+            });
             Publish();
         }
         finally
@@ -3113,25 +3284,21 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     break;
                 }
 
-                await _operationLock.WaitAsync(_runtimeCts.Token);
-                try
-                {
-                    await RefreshFromApiAsync(
-                        _runtimeCts.Token,
-                        includeRulesAndProviders: false);
-                    await ApplyProgramOverridesAsync(
-                        coreRunning: true,
-                        cancellationToken: _runtimeCts.Token,
-                        operationLockHeld: true);
-                    retryDelay = TimeSpan.FromSeconds(2);
-                    retryCount = 0;
-                }
-                finally
-                {
-                    _operationLock.Release();
-                }
+                await RefreshFromApiAsync(
+                    _runtimeCts.Token,
+                    includeRulesAndProviders: false);
+                await ApplyProgramOverridesAsync(
+                    coreRunning: true,
+                    cancellationToken: _runtimeCts.Token,
+                    operationLockHeld: false);
+                retryDelay = TimeSpan.FromSeconds(2);
+                retryCount = 0;
             }
             catch (OperationCanceledException) when (_runtimeCts.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (RuntimeQuiescingException) when (_runtimeCts.IsCancellationRequested)
             {
                 break;
             }
@@ -3173,7 +3340,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     await StopLogStreamAsync();
                     await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
                     _confirmedTunState = TunState.Unavailable;
-                    _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                    _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
                     MarkCoreHealthUnconfirmed("服务重连", serviceException ?? exception, retryCount);
                     retryDelay = IncreaseRetryDelay(retryDelay);
                     continue;
@@ -3183,7 +3350,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 {
                     SetController(CreateApiClient());
                     await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
-                    _snapshot = _snapshot with { Tun = AdoptServiceTunState(serviceStatus.Tun) };
+                    _stateStore.Update(snapshot => snapshot with { Tun = AdoptServiceTunState(serviceStatus.Tun) });
                     MarkCoreHealthUnconfirmed("控制器重连", exception, retryCount);
                     retryDelay = IncreaseRetryDelay(retryDelay);
                     continue;
@@ -3192,7 +3359,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 SetController(null);
                 await StopLogStreamAsync();
                 await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
-                _snapshot = _snapshot with { Tun = AdoptServiceTunState(serviceStatus.Tun) };
+                _stateStore.Update(snapshot => snapshot with { Tun = AdoptServiceTunState(serviceStatus.Tun) });
                 if (serviceStatus.Core is CoreState.Stopped or CoreState.Failed)
                 {
                     UpdateCoreState(
@@ -3238,7 +3405,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             LogControllerFailure("后台数据刷新", "/metrics", exception, 0);
-            _snapshot = _snapshot with { Logs = _logBuffer.Snapshot() };
+            _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
             Publish();
         }
     }
@@ -3633,6 +3800,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    private bool IsCurrentCoreBinding(
+        MihomoApiClient api,
+        long controllerGeneration,
+        long lifecycleEpoch,
+        long processGeneration) =>
+        !_runtimeCts.IsCancellationRequested
+        && lifecycleEpoch == Volatile.Read(ref _coreLifecycleEpoch)
+        && processGeneration == _processManager.Generation
+        && _controllerSessions.IsCurrent(api, controllerGeneration);
+
     private void MarkRemoteControllerFailure(
         EndpointSession session,
         EndpointSessionStatusEventArgs status,
@@ -3945,11 +4122,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             LogControllerFailure("程序局域网/IPv6 设置覆盖", "/configs", exception, 0);
-            _snapshot = _snapshot with
+            _stateStore.Update(snapshot => snapshot with
             {
                 ErrorMessage = $"程序局域网/IPv6 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
                 Logs = _logBuffer.Snapshot()
-            };
+            });
             Publish();
         }
 
@@ -3964,11 +4141,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             LogControllerFailure("程序 TUN 设置覆盖", "/configs", exception, 0);
-            _snapshot = _snapshot with
+            _stateStore.Update(snapshot => snapshot with
             {
                 ErrorMessage = $"程序 TUN 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
                 Logs = _logBuffer.Snapshot()
-            };
+            });
             Publish();
         }
     }
@@ -3987,13 +4164,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _logBuffer.Add(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", $"程序系统代理设置应用失败：{ErrorSanitizer.Sanitize(exception)}"));
-            _snapshot = _snapshot with
+            AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", $"程序系统代理设置应用失败：{ErrorSanitizer.Sanitize(exception)}"));
+            _stateStore.Update(snapshot => snapshot with
             {
                 SystemProxy = _localDevice.SystemProxyState,
                 ErrorMessage = $"程序系统代理设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
                 Logs = _logBuffer.Snapshot()
-            };
+            });
             Publish();
         }
     }
@@ -4042,7 +4219,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             if (!await TryRestoreNetworkSettingsAsync(api, currentAllowLan, currentIpv6))
             {
-                _logBuffer.Add(new LogEntry(
+                AddApplicationLog(new LogEntry(
                     DateTimeOffset.UtcNow,
                     "ClashTray",
                     "error",
@@ -4058,9 +4235,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         if (!_usingServiceCore)
         {
             _confirmedTunState = TunState.Unavailable;
-            if (_snapshot.Tun != TunState.Unavailable)
+            if (Snapshot.Tun != TunState.Unavailable)
             {
-                _snapshot = _snapshot with { Tun = TunState.Unavailable };
+                _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
                 Publish();
             }
 
@@ -4091,9 +4268,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             && _confirmedTunState == expectedConfirmedState)
         {
             _confirmedTunState = currentValue ? TunState.On : TunState.Off;
-            if (!currentValue && ReferenceEquals(_api, api) && _snapshot.Tun is not (TunState.Enabling or TunState.Disabling))
+            if (!currentValue && ReferenceEquals(_api, api) && Snapshot.Tun is not (TunState.Enabling or TunState.Disabling))
             {
-                _snapshot = _snapshot with { Tun = TunState.Off };
+                _stateStore.Update(snapshot => snapshot with { Tun = TunState.Off });
                 Publish();
             }
 
@@ -4117,6 +4294,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (_localDevice.SystemProxyState is (SystemProxyState.Off or SystemProxyState.Failed))
             {
                 await _localDevice.EnableSystemProxyAsync(_settings.MixedPort, _settings.BypassList, cancellationToken);
+                Interlocked.Increment(ref _proxyOwnershipRevision);
             }
         }
         else
@@ -4127,13 +4305,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 or SystemProxyState.Enabling)
             {
                 await _localDevice.DisableSystemProxyAsync(cancellationToken);
+                Interlocked.Increment(ref _proxyOwnershipRevision);
             }
         }
 
         SystemProxyState state = _localDevice.SystemProxyState;
-        if (_snapshot.SystemProxy != state)
+        if (Snapshot.SystemProxy != state)
         {
-            _snapshot = _snapshot with { SystemProxy = state };
+            _stateStore.Update(snapshot => snapshot with { SystemProxy = state });
             Publish();
         }
     }
@@ -4165,7 +4344,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         if (systemProxyBindingChanged)
         {
             await ReconcileSystemProxyAsync(
-                coreRunning: _snapshot.Core.State == CoreState.Running && _coreHealthConfirmed,
+                coreRunning: Snapshot.Core.State == CoreState.Running && _coreHealthConfirmed,
                 CancellationToken.None);
         }
     }
@@ -4623,7 +4802,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             LogControllerFailure("代理数据刷新", "/proxies", exception, 0);
-            return new ProxyDataResult(false, _snapshot.ProxyGroups, _snapshot.ProxyNodes);
+            return new ProxyDataResult(false, Snapshot.ProxyGroups, Snapshot.ProxyNodes);
         }
     }
 
@@ -4665,7 +4844,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             LogControllerFailure("指标刷新", "/memory", exception, 0, stopwatch.Elapsed);
-            return new MemoryDataResult(false, _snapshot.Core.MemoryBytes);
+            return new MemoryDataResult(false, Snapshot.Core.MemoryBytes);
         }
     }
 
@@ -4685,7 +4864,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             LogControllerFailure("连接数据刷新", "/connections", exception, 0);
-            return new ConnectionDataResult(false, _snapshot.Connections);
+            return new ConnectionDataResult(false, Snapshot.Connections);
         }
     }
 
@@ -4705,7 +4884,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             LogControllerFailure("规则数据刷新", "/rules", exception, 0);
-            return _snapshot.Rules;
+            return Snapshot.Rules;
         }
     }
 
@@ -4726,7 +4905,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             LogControllerFailure("Provider 数据刷新", "/providers", exception, 0);
-            return (_snapshot.Providers, _snapshot.RuleProviders);
+            return (Snapshot.Providers, Snapshot.RuleProviders);
         }
     }
 
@@ -4749,8 +4928,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     }
 
     private ConfigurationProfile? GetActiveConfiguration() =>
-        _snapshot.Configurations.FirstOrDefault(configuration => configuration.IsActive)
-        ?? _snapshot.Configurations.FirstOrDefault(configuration => configuration.Id == _settings.ActiveConfigurationId);
+        Snapshot.Configurations.FirstOrDefault(configuration => configuration.IsActive)
+        ?? Snapshot.Configurations.FirstOrDefault(configuration => configuration.Id == _settings.ActiveConfigurationId);
 
     private NetworkSwitchPolicyInput CreateNetworkSwitchPolicyInput(
         NetworkContextSnapshot context,
@@ -4761,11 +4940,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             rules.Rules,
             rules.DefaultConfigurationId,
             GetActiveConfiguration()?.Id,
-            _snapshot.Configurations
+            Snapshot.Configurations
                 .Select(configuration => configuration.Id)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase));
 
-    private void OnNetworkSwitchStatusChanged(object? sender, NetworkSwitchStatus status) => Publish();
+    private void OnNetworkSwitchStatusChanged(object? sender, NetworkSwitchStatus status)
+    {
+        _stateStore.Update(snapshot => snapshot with { NetworkSwitch = status });
+        Publish();
+    }
 
     private string? FindCoreVersion()
     {
@@ -4777,9 +4960,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         _coreHealthConfirmed = false;
         TunState observedTun = AdoptServiceTunState(tunState);
-        _snapshot = _snapshot with
+        _stateStore.Update(snapshot => snapshot with
         {
-            Core = _snapshot.Core with
+            Core = snapshot.Core with
             {
                 State = CoreState.Running,
                 ErrorMessage = null,
@@ -4788,7 +4971,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             },
             Tun = observedTun,
             ErrorMessage = null
-        };
+        });
         Publish();
     }
 
@@ -4797,12 +4980,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _coreHealthConfirmed = false;
         string message = $"核心状态暂时无法确认（{phase}：{DescribeControllerError(exception)}）。";
         LogControllerFailure(phase, "/version 或 /configs", exception, retryCount);
-        _snapshot = _snapshot with
+        _stateStore.Update(snapshot => snapshot with
         {
-            Core = _snapshot.Core with { State = CoreState.Running, ErrorMessage = message },
+            Core = snapshot.Core with { State = CoreState.Running, ErrorMessage = message },
             ErrorMessage = message,
             Logs = _logBuffer.Snapshot()
-        };
+        });
         Publish();
     }
 
@@ -4819,7 +5002,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         string duration = elapsed is null ? "未测量" : $"{elapsed.Value.TotalMilliseconds:0}ms";
         string hosting = _usingServiceCore ? "service" : "local";
         string message = $"{phase}失败：托管方式={hosting}，路径={path}，{status}，耗时={duration}，重试={retryCount}，错误类型={DescribeControllerError(exception)}。";
-        _logBuffer.Add(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "warning", message));
+        AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "warning", message));
     }
 
     private static string DescribeControllerError(Exception exception) => exception switch
@@ -4831,11 +5014,31 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _ => exception.GetType().Name
     };
 
-    private void OnProcessStateChanged(object? sender, CoreState state) =>
-        UpdateCoreState(state, state == CoreState.Failed ? "Mihomo 进程已退出" : null);
-
-    private void QueueSystemProxyRecovery()
+    private void OnProcessStateChanged(object? sender, CoreState state)
     {
+        bool unexpectedCoreLost = state == CoreState.Failed
+            && Snapshot.Core.State is CoreState.Running or CoreState.Starting
+            && !_runtimeCts.IsCancellationRequested;
+        if (unexpectedCoreLost)
+        {
+            // Invalidate the controller binding before publishing CoreLost. Any
+            // health response already in flight now fails the generation check.
+            SetController(null);
+        }
+
+        UpdateCoreState(
+            state,
+            state == CoreState.Failed ? "Mihomo 进程已退出" : null,
+            unexpectedCoreLost);
+    }
+
+    private void QueueSystemProxyRecovery(CoreLossContext context)
+    {
+        if (_runtimeCts.IsCancellationRequested)
+        {
+            return;
+        }
+
         lock (_proxyRecoveryGate)
         {
             if (_proxyRecoveryTask is { IsCompleted: false })
@@ -4843,36 +5046,52 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 return;
             }
 
-            _proxyRecoveryTask = Task.Run(() => RevokeSystemProxyForCoreLossAsync(operationLockHeld: false));
+            _proxyRecoveryTask = Task.Run(() => RevokeSystemProxyForCoreLossAsync(
+                operationLockHeld: false,
+                context: context,
+                cancellationToken: CancellationToken.None));
         }
     }
 
-    private async Task RevokeSystemProxyForCoreLossAsync(bool operationLockHeld)
+    private async Task RevokeSystemProxyForCoreLossAsync(
+        bool operationLockHeld,
+        CoreLossContext? context = null,
+        CancellationToken cancellationToken = default)
     {
+        if (context is { } initialContext && !CanApplyCoreLossRecovery(initialContext))
+        {
+            return;
+        }
+
         if (!operationLockHeld)
         {
-            await _operationLock.WaitAsync(CancellationToken.None);
+            await _operationLock.WaitAsync(cancellationToken);
         }
 
         try
         {
+            if (context is { } committedContext && !CanApplyCoreLossRecovery(committedContext))
+            {
+                return;
+            }
+
             try
             {
-                await ReconcileSystemProxyAsync(coreRunning: false, CancellationToken.None);
+                await ReconcileSystemProxyAsync(coreRunning: false, cancellationToken);
             }
             catch (Exception exception)
             {
-                _logBuffer.Add(new LogEntry(
+                AddApplicationLog(new LogEntry(
                     DateTimeOffset.UtcNow,
                     "ClashTray",
                     "error",
                     $"核心不可用时撤销系统代理失败：{ErrorSanitizer.Sanitize(exception)}"));
-                _snapshot = _snapshot with
+                _stateStore.Update(snapshot => snapshot with
                 {
                     SystemProxy = _localDevice.SystemProxyState,
                     ErrorMessage = "核心不可用时撤销系统代理失败，系统代理状态需要恢复。",
                     Logs = _logBuffer.Snapshot()
-                };
+                });
                 Publish();
             }
         }
@@ -4884,6 +5103,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
         }
     }
+
+    private bool CanApplyCoreLossRecovery(CoreLossContext context) =>
+        context.LifecycleEpoch == Volatile.Read(ref _coreLifecycleEpoch)
+        && context.ProcessGeneration == _processManager.Generation
+        && context.ControllerGeneration == ControllerGeneration
+        && context.ProxyOwnershipRevision == Volatile.Read(ref _proxyOwnershipRevision)
+        && context.ProxyIntentRevision == Volatile.Read(ref _proxyIntentRevision)
+        && !context.CoreHealthConfirmed
+        && Snapshot.Core.State != CoreState.Running
+        && !_runtimeCts.IsCancellationRequested;
 
     private async Task AwaitQueuedProxyRecoveryAsync()
     {
@@ -4905,9 +5134,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (OperationCanceledException)
         {
         }
+        catch (Exception exception)
+        {
+            AddApplicationLog(new LogEntry(
+                DateTimeOffset.UtcNow,
+                "ClashTray",
+                "error",
+                $"等待系统代理恢复任务失败：{ErrorSanitizer.Sanitize(exception)}"));
+            Publish();
+        }
     }
 
-    private void UpdateCoreState(CoreState state, string? error)
+    private void UpdateCoreState(CoreState state, string? error, bool unexpectedCoreLost = false)
     {
         if (state != CoreState.Running)
         {
@@ -4916,19 +5154,25 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         if (!string.IsNullOrWhiteSpace(error))
         {
-            _logBuffer.Add(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", error));
+            AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", error));
         }
 
-        _snapshot = _snapshot with
+        _stateStore.Update(snapshot => snapshot with
         {
-            Core = _snapshot.Core with { State = state, ErrorMessage = error },
+            Core = snapshot.Core with { State = state, ErrorMessage = error },
             ErrorMessage = error,
             Logs = _logBuffer.Snapshot()
-        };
+        });
         Publish();
-        if (state is CoreState.Failed or CoreState.Stopped or CoreState.Missing)
+        if (unexpectedCoreLost)
         {
-            QueueSystemProxyRecovery();
+            QueueSystemProxyRecovery(new CoreLossContext(
+                Volatile.Read(ref _coreLifecycleEpoch),
+                _processManager.Generation,
+                ControllerGeneration,
+                Volatile.Read(ref _proxyOwnershipRevision),
+                Volatile.Read(ref _proxyIntentRevision),
+                _coreHealthConfirmed));
         }
     }
 
@@ -4936,10 +5180,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         if (!string.IsNullOrWhiteSpace(error))
         {
-            _logBuffer.Add(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", error));
+            AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", error));
         }
 
-        _snapshot = _snapshot with { Subscription = state, ErrorMessage = error, Logs = _logBuffer.Snapshot() };
+        _stateStore.Update(snapshot => snapshot with { Subscription = state, ErrorMessage = error, Logs = _logBuffer.Snapshot() });
         Publish();
     }
 
@@ -4955,20 +5199,29 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private void Publish()
     {
-        string? error = ErrorSanitizer.SanitizeNullable(_snapshot.ErrorMessage);
-        string? coreError = ErrorSanitizer.SanitizeNullable(_snapshot.Core.ErrorMessage);
-        _snapshot = _snapshot with
+        RuntimeSnapshot snapshot = Snapshot;
+        lock (_publishGate)
         {
-            Core = _snapshot.Core with { ErrorMessage = coreError },
-            ErrorMessage = error,
-            Logs = _logBuffer.Snapshot(),
-            NetworkSwitch = _networkSwitchRuntimeController.Status
-        };
-        SnapshotChanged?.Invoke(this, _snapshot);
-        PublishAppSnapshot();
+            SnapshotChanged?.Invoke(this, snapshot);
+            AppSnapshotChanged?.Invoke(this, ComposeAppSnapshot(snapshot));
+        }
     }
 
-    private void PublishAppSnapshot() => AppSnapshotChanged?.Invoke(this, AppSnapshot);
+    private void PublishAppSnapshot()
+    {
+        RuntimeSnapshot snapshot = Snapshot;
+        lock (_publishGate)
+        {
+            AppSnapshotChanged?.Invoke(this, ComposeAppSnapshot(snapshot));
+        }
+    }
+
+    private AppSnapshot ComposeAppSnapshot(RuntimeSnapshot snapshot) => AppSnapshotComposer.Compose(
+        snapshot,
+        _settings,
+        Endpoints,
+        activeController: BuildActiveControllerSnapshot(),
+        controllerGeneration: ControllerGeneration);
 
     private void OnProcessLogLine(string line, bool isError)
     {
@@ -4978,11 +5231,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private void AddMihomoLog(LogEntry entry)
     {
         _logBuffer.Add(entry);
+        _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
         _throttledPublisher.Queue();
     }
 
+    private void AddApplicationLog(LogEntry entry)
+    {
+        _logBuffer.Add(entry);
+        _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
+    }
+
     private bool IsCoreRunningForSettings() =>
-        _snapshot.Core.State == CoreState.Running
+        Snapshot.Core.State == CoreState.Running
         || _api is not null
         || _usingServiceCore;
 
@@ -5054,11 +5314,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(new ConfigurationSwitchRuntimeState(
                 _runtime._settings.ActiveConfigurationId,
-                _runtime._snapshot.Core.State == CoreState.Running,
+                _runtime.Snapshot.Core.State == CoreState.Running,
                 _runtime._settings.SystemProxyEnabled,
-                _runtime._snapshot.SystemProxy,
+                _runtime.Snapshot.SystemProxy,
                 _runtime._settings.TunEnabled,
-                _runtime._snapshot.Tun,
+                _runtime.Snapshot.Tun,
                 _runtime.ControllerGeneration,
                 _runtime._settings));
         }
