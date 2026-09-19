@@ -66,7 +66,7 @@ public static class RuntimeConfigBuilder
         ArgumentNullException.ThrowIfNull(settings);
         SettingsValidator.Validate(settings);
         string[] source = await File.ReadAllLinesAsync(sourcePath, cancellationToken);
-        List<string> withTunOverride = ApplyTunOverride(source, tunEnabled);
+        List<string> withTunOverride = ApplyTunOverride(source, tunEnabled, settings.TunStack);
         List<string> filtered = withTunOverride.Where(line => !IsManagedLine(line)).ToList();
         filtered.Add(string.Empty);
         filtered.Add($"external-controller: 127.0.0.1:{settings.ControllerPort}");
@@ -103,71 +103,131 @@ public static class RuntimeConfigBuilder
         return destinationPath;
     }
 
-    private static List<string> ApplyTunOverride(string[] source, bool enabled)
+    private static List<string> ApplyTunOverride(string[] source, bool enabled, string stack)
     {
-        List<string> result = new List<string>(source.Length + 3);
+        string? managedStack = string.Equals(stack, "configuration", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : stack.Trim().ToLowerInvariant();
+        List<string> result = new List<string>(source.Length + 4);
         bool inTunBlock = false;
         int tunIndent = -1;
         bool tunHasEnable = false;
+        bool tunHasStack = false;
         bool foundTunBlock = false;
 
         foreach (string line in source)
         {
             if (TryGetRootKey(line, out string? key) && key.Equals("tun", StringComparison.OrdinalIgnoreCase))
             {
-                if (inTunBlock && !tunHasEnable)
+                if (inTunBlock)
                 {
-                    result.Add(CreateTunEnableLine(tunIndent + 2, enabled));
+                    AppendMissingTunProperties(
+                        result,
+                        tunIndent + 2,
+                        enabled,
+                        tunHasEnable,
+                        managedStack,
+                        tunHasStack);
                 }
 
                 foundTunBlock = true;
                 tunIndent = GetIndent(line);
                 tunHasEnable = false;
-                inTunBlock = !TryOverrideInlineTun(line, enabled, out string? inlineLine, out tunHasEnable);
+                tunHasStack = false;
+                inTunBlock = !TryOverrideInlineTun(
+                    line,
+                    enabled,
+                    managedStack,
+                    out string? inlineLine,
+                    out tunHasEnable,
+                    out tunHasStack);
                 result.Add(inlineLine);
                 continue;
             }
 
             if (inTunBlock && IsRootBoundary(line, tunIndent))
             {
-                if (!tunHasEnable)
-                {
-                    result.Add(CreateTunEnableLine(tunIndent + 2, enabled));
-                }
+                AppendMissingTunProperties(
+                    result,
+                    tunIndent + 2,
+                    enabled,
+                    tunHasEnable,
+                    managedStack,
+                    tunHasStack);
 
                 inTunBlock = false;
             }
 
-            if (inTunBlock && IsTunEnableLine(line, tunIndent))
+            if (inTunBlock && IsTunPropertyLine(line, tunIndent, "enable"))
             {
-                result.Add(CreateTunEnableLine(GetIndent(line), enabled));
+                result.Add(CreateTunPropertyLine(GetIndent(line), "enable", enabled ? "true" : "false"));
                 tunHasEnable = true;
+                continue;
+            }
+
+            if (inTunBlock
+                && managedStack is not null
+                && IsTunPropertyLine(line, tunIndent, "stack"))
+            {
+                result.Add(CreateTunPropertyLine(GetIndent(line), "stack", managedStack));
+                tunHasStack = true;
                 continue;
             }
 
             result.Add(line);
         }
 
-        if (inTunBlock && !tunHasEnable)
+        if (inTunBlock)
         {
-            result.Add(CreateTunEnableLine(tunIndent + 2, enabled));
+            AppendMissingTunProperties(
+                result,
+                tunIndent + 2,
+                enabled,
+                tunHasEnable,
+                managedStack,
+                tunHasStack);
         }
 
         if (!foundTunBlock)
         {
             result.Add(string.Empty);
             result.Add("tun:");
-            result.Add(CreateTunEnableLine(2, enabled));
+            result.Add(CreateTunPropertyLine(2, "enable", enabled ? "true" : "false"));
+            if (managedStack is not null)
+            {
+                result.Add(CreateTunPropertyLine(2, "stack", managedStack));
+            }
         }
 
         return result;
     }
 
+    private static void AppendMissingTunProperties(
+        List<string> result,
+        int indent,
+        bool enabled,
+        bool hasEnable,
+        string? managedStack,
+        bool hasStack)
+    {
+        if (!hasEnable)
+        {
+            result.Add(CreateTunPropertyLine(indent, "enable", enabled ? "true" : "false"));
+        }
+
+        if (managedStack is not null && !hasStack)
+        {
+            result.Add(CreateTunPropertyLine(indent, "stack", managedStack));
+        }
+    }
+
     private static bool TryOverrideInlineTun(
         string line,
         bool enabled,
+        string? managedStack,
         out string result,
-        out bool hasEnable)
+        out bool hasEnable,
+        out bool hasStack)
     {
         int keySeparator = line.IndexOf(':', StringComparison.Ordinal);
         int valueStart = keySeparator < 0 ? -1 : line.IndexOf('{', keySeparator + 1);
@@ -176,14 +236,39 @@ public static class RuntimeConfigBuilder
         {
             result = line;
             hasEnable = false;
+            hasStack = false;
             return false;
         }
 
         string inlineValue = line[valueStart..(valueEnd + 1)];
-        int enableSeparator = FindInlineKeySeparator(inlineValue, "enable");
-        if (enableSeparator >= 0)
+        inlineValue = SetInlineScalar(
+            inlineValue,
+            "enable",
+            enabled ? "true" : "false",
+            out hasEnable);
+        if (managedStack is not null)
         {
-            int valueIndex = enableSeparator + 1;
+            inlineValue = SetInlineScalar(inlineValue, "stack", managedStack, out hasStack);
+        }
+        else
+        {
+            hasStack = FindInlineKeySeparator(inlineValue, "stack") >= 0;
+        }
+
+        result = line[..valueStart] + inlineValue + line[(valueEnd + 1)..];
+        return true;
+    }
+
+    private static string SetInlineScalar(
+        string inlineValue,
+        string property,
+        string value,
+        out bool hasProperty)
+    {
+        int separator = FindInlineKeySeparator(inlineValue, property);
+        if (separator >= 0)
+        {
+            int valueIndex = separator + 1;
             while (valueIndex < inlineValue.Length && char.IsWhiteSpace(inlineValue[valueIndex]))
             {
                 valueIndex++;
@@ -196,19 +281,12 @@ public static class RuntimeConfigBuilder
                 valueEndIndex++;
             }
 
-            inlineValue = inlineValue[..valueIndex]
-                + (enabled ? "true" : "false")
-                + inlineValue[valueEndIndex..];
-            hasEnable = true;
-        }
-        else
-        {
-            inlineValue = inlineValue.Insert(1, $" enable: {(enabled ? "true" : "false")},");
-            hasEnable = true;
+            hasProperty = true;
+            return inlineValue[..valueIndex] + value + inlineValue[valueEndIndex..];
         }
 
-        result = line[..valueStart] + inlineValue + line[(valueEnd + 1)..];
-        return true;
+        hasProperty = true;
+        return inlineValue.Insert(1, $" {property}: {value},");
     }
 
     private static int FindInlineKeySeparator(string value, string expectedKey)
@@ -248,7 +326,7 @@ public static class RuntimeConfigBuilder
         return -1;
     }
 
-    private static bool IsTunEnableLine(string line, int tunIndent)
+    private static bool IsTunPropertyLine(string line, int tunIndent, string property)
     {
         int indent = GetIndent(line);
         if (indent <= tunIndent)
@@ -264,7 +342,7 @@ public static class RuntimeConfigBuilder
 
         int separator = trimmed.IndexOf(':', StringComparison.Ordinal);
         return separator > 0
-            && trimmed[..separator].Trim().Equals("enable", StringComparison.OrdinalIgnoreCase);
+            && trimmed[..separator].Trim().Trim('\'', '"').Equals(property, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsRootBoundary(string line, int tunIndent)
@@ -296,8 +374,8 @@ public static class RuntimeConfigBuilder
 
     private static int GetIndent(string line) => line.Length - line.TrimStart().Length;
 
-    private static string CreateTunEnableLine(int indent, bool enabled) =>
-        new string(' ', Math.Max(0, indent)) + $"enable: {(enabled ? "true" : "false")}";
+    private static string CreateTunPropertyLine(int indent, string property, string value) =>
+        new string(' ', Math.Max(0, indent)) + $"{property}: {value}";
 
     private static bool IsManagedLine(string line)
     {

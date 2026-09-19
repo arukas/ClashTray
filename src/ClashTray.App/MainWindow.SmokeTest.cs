@@ -341,8 +341,6 @@ public sealed partial class MainWindow
                 LocalizationService.Format("ControllerRemoteFormat", remote.DisplayName),
                 StringComparison.Ordinal)
             || CoreActionButton.IsEnabled
-            || SystemProxySwitch.IsEnabled
-            || TunSwitch.IsEnabled
             || RuleModeButton.IsEnabled
             || GlobalModeButton.IsEnabled
             || DirectModeButton.IsEnabled

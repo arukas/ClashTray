@@ -40,7 +40,6 @@ public sealed partial class MainWindow : Window
     private bool _allowClose;
     private string? _selectedConfigurationId;
     private AppWindow? _appWindow;
-    private bool _updatingSnapshot;
     private bool _updatingThemeControls;
     private bool _pageRefreshInProgress;
     private bool _configurationSelectionInProgress;
@@ -175,7 +174,6 @@ public sealed partial class MainWindow : Window
         _latestDisplayedSnapshot = snapshot;
         ApplyTheme(_runtime?.Settings.Theme ?? "system");
         CoreStatus core = snapshot.Core;
-        _updatingSnapshot = true;
         bool localController = _activeEndpointKind == EndpointKind.Local;
         bool controllerWritable = localController
             || _activeEndpointState == EndpointSessionState.Connected;
@@ -186,21 +184,6 @@ public sealed partial class MainWindow : Window
             or CoreState.Stopping
             or CoreState.Restarting;
         CoreActionButton.IsEnabled = localController && !coreBusy;
-        SystemProxySwitch.IsEnabled = localController
-            && snapshot.SystemProxy is not (SystemProxyState.Enabling or SystemProxyState.Disabling);
-        TunSwitch.IsEnabled = localController
-            && core.State == CoreState.Running
-            && (snapshot.Tun is TunState.Off or TunState.On);
-        ToolTipService.SetToolTip(
-            SystemProxySwitch,
-            localController
-                ? null
-                : LocalizationService.Get("RemoteLocalNetworkActionUnavailable"));
-        ToolTipService.SetToolTip(
-            TunSwitch,
-            localController
-                ? null
-                : LocalizationService.Get("RemoteLocalNetworkActionUnavailable"));
         bool coreRunning = core.State == CoreState.Running;
         RuleModeButton.IsEnabled = coreRunning && canSwitchMode;
         GlobalModeButton.IsEnabled = coreRunning && canSwitchMode;
@@ -301,28 +284,6 @@ public sealed partial class MainWindow : Window
             ? $"↑ {FormatRate(core.UploadBytesPerSecond)}  ↓ {FormatRate(core.DownloadBytesPerSecond)}"
             : LocalizationService.Get("TrafficUnavailable");
         MemoryText.Text = core.MemoryAvailable ? FormatBytes(core.MemoryBytes) : LocalizationService.Get("MemoryUnavailable");
-        SystemProxyStateText.Text = snapshot.SystemProxy switch
-        {
-            SystemProxyState.On => LocalizationService.Get("SwitchStateOn"),
-            SystemProxyState.Enabling => LocalizationService.Get("SwitchStateEnabling"),
-            SystemProxyState.Disabling => LocalizationService.Get("SwitchStateDisabling"),
-            SystemProxyState.RestoreRequired => LocalizationService.Get("SwitchStateRestoreRequired"),
-            SystemProxyState.Failed => LocalizationService.Get("SwitchStateFailed"),
-            _ => LocalizationService.Get("SwitchStateOff")
-        };
-        SystemProxySwitch.IsOn = snapshot.SystemProxy == SystemProxyState.On;
-        TunStateText.Text = snapshot.Tun switch
-        {
-            TunState.On => LocalizationService.Get("SwitchStateOn"),
-            TunState.Enabling => LocalizationService.Get("SwitchStateEnabling"),
-            TunState.Disabling => LocalizationService.Get("SwitchStateDisabling"),
-            TunState.Unavailable => LocalizationService.Get("TunStateUnavailable"),
-            TunState.Unknown => LocalizationService.Get("TunStateUnknown"),
-            TunState.Failed => LocalizationService.Get("SwitchStateFailed"),
-            _ => LocalizationService.Get("SwitchStateOff")
-        };
-        TunSwitch.IsOn = snapshot.Tun == TunState.On;
-        _updatingSnapshot = false;
         ConfigurationText.Text = core.ConfigurationName ?? snapshot.Configurations.FirstOrDefault(c => c.IsActive)?.Name ?? LocalizationService.Get("ConfigImportPrompt");
         ErrorBanner.Message = FormatDisplayedError(
             localController ? ErrorCode.None : _activeControllerErrorCode,
@@ -599,58 +560,6 @@ public sealed partial class MainWindow : Window
     }
 
     private async void CoreActionButton_Click(object sender, RoutedEventArgs e) => await _app.ToggleCoreAsync();
-
-    private async void SystemProxySwitch_Toggled(object sender, RoutedEventArgs e)
-    {
-        if (_updatingSnapshot || _runtime is null)
-        {
-            return;
-        }
-
-        if (_activeEndpointKind != EndpointKind.Local)
-        {
-            _updatingSnapshot = true;
-            SystemProxySwitch.IsOn = _runtime.Snapshot.SystemProxy == SystemProxyState.On;
-            _updatingSnapshot = false;
-            return;
-        }
-
-        if (SystemProxySwitch.IsOn == (_runtime.Snapshot.SystemProxy == SystemProxyState.On))
-        {
-            return;
-        }
-
-        _updatingSnapshot = true;
-        SystemProxySwitch.IsOn = _runtime.Snapshot.SystemProxy == SystemProxyState.On;
-        _updatingSnapshot = false;
-        await _app.ToggleSystemProxyAsync();
-    }
-
-    private async void TunSwitch_Toggled(object sender, RoutedEventArgs e)
-    {
-        if (_updatingSnapshot || _runtime is null)
-        {
-            return;
-        }
-
-        if (_activeEndpointKind != EndpointKind.Local)
-        {
-            _updatingSnapshot = true;
-            TunSwitch.IsOn = _runtime.Snapshot.Tun == TunState.On;
-            _updatingSnapshot = false;
-            return;
-        }
-
-        if (TunSwitch.IsOn == (_runtime.Snapshot.Tun == TunState.On))
-        {
-            return;
-        }
-
-        _updatingSnapshot = true;
-        TunSwitch.IsOn = _runtime.Snapshot.Tun == TunState.On;
-        _updatingSnapshot = false;
-        await _app.ToggleTunAsync();
-    }
 
     private async void RuleModeButton_Click(object sender, RoutedEventArgs e)
     {

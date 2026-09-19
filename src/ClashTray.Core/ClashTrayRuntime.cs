@@ -5375,6 +5375,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         || previous.MixedPort != next.MixedPort
         || previous.ControllerPort != next.ControllerPort
         || previous.TcpConcurrent != next.TcpConcurrent
+        || !string.Equals(previous.TunStack, next.TunStack, StringComparison.OrdinalIgnoreCase)
         || !string.Equals(previous.LogLevel, next.LogLevel, StringComparison.OrdinalIgnoreCase);
 
     private static bool HasSystemProxyBindingChanged(AppSettings previous, AppSettings next) =>

@@ -21,15 +21,71 @@
                 <TextBlock x:Uid="RunModeHeader" FontWeight="SemiBold" Margin="0,0,0,4" />
                 <ToggleSwitch x:Name="StartWithWindowsSwitch" x:Uid="StartWithWindowsSwitch" />
                 <ToggleSwitch x:Name="StartCoreSwitch" x:Uid="StartCoreSwitch" />
+                <ToggleSwitch x:Name="DisconnectAfterProxySwitch" x:Uid="DisconnectAfterProxySwitch" />
+                <TextBlock x:Uid="DisconnectAfterProxySwitchHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
+                <TextBlock x:Uid="SubscriptionRefreshHeader" FontWeight="SemiBold" Margin="0,6,0,0" />
+                <NumberBox x:Name="SubscriptionRefreshHoursBox" x:Uid="SubscriptionRefreshHoursBox" Minimum="1" Maximum="168" SmallChange="1" Value="24" />
+                <TextBlock x:Name="StartupStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <Button x:Name="SaveSettingsButton" x:Uid="SaveSettingsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" HorizontalAlignment="Left" />
+            </StackPanel>
+        </Border>
+
+        <TextBlock x:Uid="NetworkConfigurationHeader" FontSize="16" FontWeight="SemiBold" Margin="4,8,0,0" />
+
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <StackPanel Spacing="8">
+                <Grid MinHeight="36" ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="46" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Uid="SystemProxyLabel" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" x:Name="SystemProxyStateText" x:Uid="SystemProxyStateText" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                    <ToggleSwitch Grid.Column="2" x:Name="SystemProxySwitch" x:Uid="SystemProxySwitch" Width="46" MinWidth="0" MinHeight="0" Height="36" OnContent="" OffContent="" Toggled="SystemProxySwitch_Toggled" HorizontalAlignment="Right" />
+                </Grid>
+                <Grid MinHeight="36" ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="46" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Uid="TunLabel" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" x:Name="TunStateText" x:Uid="TunStateText" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                    <ToggleSwitch Grid.Column="2" x:Name="TunSwitch" x:Uid="TunSwitch" Width="46" MinWidth="0" MinHeight="0" Height="36" OnContent="" OffContent="" Toggled="TunSwitch_Toggled" HorizontalAlignment="Right" />
+                </Grid>
+                <ComboBox x:Name="TunStackBox" x:Uid="TunStackBox" SelectedIndex="0">
+                    <ComboBoxItem x:Uid="TunStackConfigurationItem" Tag="configuration" />
+                    <ComboBoxItem x:Uid="TunStackSystemItem" Tag="system" />
+                    <ComboBoxItem x:Uid="TunStackGvisorItem" Tag="gvisor" />
+                    <ComboBoxItem x:Uid="TunStackMixedItem" Tag="mixed" />
+                    <ComboBoxItem x:Uid="TunStackMipsItem" Tag="mips" />
+                </ComboBox>
+                <TextBlock x:Uid="NetworkConfigurationRestartHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <TextBlock x:Uid="NetworkConfigurationImmediateHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
                 <ToggleSwitch x:Name="AllowLanSwitch" x:Uid="AllowLanSwitch" />
                 <ToggleSwitch x:Name="Ipv6Switch" x:Uid="Ipv6Switch" />
                 <ToggleSwitch x:Name="TcpConcurrentSwitch" x:Uid="TcpConcurrentSwitch" />
-                <ToggleSwitch x:Name="DisconnectAfterProxySwitch" x:Uid="DisconnectAfterProxySwitch" />
-                <TextBlock x:Uid="DisconnectAfterProxySwitchHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
-                <TextBlock x:Uid="RestartOnChangeHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
-                <TextBlock x:Uid="ProgramOverridesHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,4,0,0" />
-                <TextBlock x:Name="StartupStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
-                <Button x:Name="SaveSettingsButton" x:Uid="SaveSettingsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" HorizontalAlignment="Left" />
+                <TextBlock x:Uid="ProgramOverridesHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
+                <TextBlock x:Uid="PortsHeader" FontWeight="SemiBold" Margin="0,4,0,0" />
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <NumberBox x:Name="HttpPortBox" x:Uid="HttpPortBox" Minimum="1" Maximum="65535" />
+                    <NumberBox x:Name="SocksPortBox" x:Uid="SocksPortBox" Grid.Column="1" Minimum="1" Maximum="65535" />
+                </Grid>
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <NumberBox x:Name="MixedPortBox" x:Uid="MixedPortBox" Minimum="1" Maximum="65535" />
+                    <NumberBox x:Name="ControllerPortBox" Grid.Column="1" x:Uid="ControllerPortBox" Minimum="1" Maximum="65535" />
+                </Grid>
+                <TextBox x:Name="BypassListBox" x:Uid="BypassListBox" />
+                <Button x:Name="SaveNetworkSettingsButton" x:Uid="SaveNetworkSettingsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" HorizontalAlignment="Left" />
             </StackPanel>
         </Border>
 
@@ -85,31 +141,6 @@
                     <Button x:Name="SaveEndpointButton" x:Uid="SaveEndpointButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveEndpointButton_Click" />
                     <Button x:Name="RemoveEndpointButton" x:Uid="RemoveEndpointButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="RemoveEndpointButton_Click" IsEnabled="False" />
                 </StackPanel>
-            </StackPanel>
-        </Border>
-
-        <Border Style="{StaticResource ClashTrayCardStyle}">
-            <StackPanel Spacing="8">
-                <TextBlock x:Uid="PortsHeader" FontWeight="SemiBold" />
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <NumberBox x:Name="HttpPortBox" x:Uid="HttpPortBox" Minimum="1" Maximum="65535" />
-                    <NumberBox x:Name="SocksPortBox" x:Uid="SocksPortBox" Grid.Column="1" Minimum="1" Maximum="65535" />
-                </Grid>
-                <Grid ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <NumberBox x:Name="MixedPortBox" x:Uid="MixedPortBox" Minimum="1" Maximum="65535" />
-                    <NumberBox x:Name="ControllerPortBox" Grid.Column="1" x:Uid="ControllerPortBox" Minimum="1" Maximum="65535" />
-                </Grid>
-                <TextBox x:Name="BypassListBox" x:Uid="BypassListBox" />
-                <TextBlock x:Uid="SubscriptionRefreshHeader" FontWeight="SemiBold" Margin="0,2,0,0" />
-                <NumberBox x:Name="SubscriptionRefreshHoursBox" x:Uid="SubscriptionRefreshHoursBox" Minimum="1" Maximum="168" SmallChange="1" Value="24" />
             </StackPanel>
         </Border>
 

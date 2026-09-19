@@ -14,7 +14,7 @@ namespace ClashTray.Core;
 /// </summary>
 internal sealed class SettingsFileDto
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -50,6 +50,8 @@ internal sealed class SettingsFileDto
 
     public bool TunEnabled { get; set; }
 
+    public string TunStack { get; set; } = "configuration";
+
     public bool DisconnectConnectionsAfterProxySwitch { get; set; }
 
     public bool NakhimovUnlocked { get; set; }
@@ -83,6 +85,7 @@ internal sealed class SettingsFileDto
             Theme = settings.Theme,
             SystemProxyEnabled = settings.SystemProxyEnabled,
             TunEnabled = settings.TunEnabled,
+            TunStack = settings.TunStack,
             DisconnectConnectionsAfterProxySwitch = settings.DisconnectConnectionsAfterProxySwitch,
             NakhimovUnlocked = settings.NakhimovUnlocked,
             Language = settings.Language,
@@ -111,5 +114,6 @@ internal sealed class SettingsFileDto
         TunEnabled: TunEnabled,
         DisconnectConnectionsAfterProxySwitch: DisconnectConnectionsAfterProxySwitch,
         NakhimovUnlocked: NakhimovUnlocked,
-        Language: Language);
+        Language: Language,
+        TunStack: TunStack);
 }

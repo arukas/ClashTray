@@ -169,7 +169,8 @@ public sealed record AppSettings(
     bool TunEnabled = false,
     bool DisconnectConnectionsAfterProxySwitch = false,
     bool NakhimovUnlocked = false,
-    string Language = "system");
+    string Language = "system",
+    string TunStack = "configuration");
 
 public enum ServiceCommand
 {

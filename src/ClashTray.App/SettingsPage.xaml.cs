@@ -20,6 +20,8 @@ public sealed partial class SettingsPage : UserControl
     private string _configurationIdsSignature = string.Empty;
     private string _endpointSignature = string.Empty;
     private bool _updatingEndpointControls;
+    private bool _updatingNetworkControls;
+    private bool _applyingNetworkControl;
     private EndpointId? _editingEndpointId;
     private EndpointId? _testingEndpointId;
     private readonly List<NetworkRuleEditorRow> _networkRuleRows = [];
@@ -33,6 +35,7 @@ public sealed partial class SettingsPage : UserControl
         InitializeComponent();
         LoadSettings(runtime.Settings);
         UpdateEndpointList(runtime.Endpoints);
+        UpdateNetworkConfigurationState(runtime.Snapshot);
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
@@ -59,6 +62,7 @@ public sealed partial class SettingsPage : UserControl
         UpdateControllerActionButtons();
         _lastSnapshot = snapshot;
         LoadSettings(_runtime.Settings);
+        UpdateNetworkConfigurationState(snapshot);
         UpdateProviders(snapshot);
         UpdateNetworkSwitch(snapshot);
         UpdateEndpointList(_runtime.Endpoints);
@@ -572,8 +576,10 @@ public sealed partial class SettingsPage : UserControl
         string logLevel = (LogLevelBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.LogLevel;
         string theme = (ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Theme;
         string language = (LanguageBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Language;
+        string tunStack = (TunStackBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.TunStack;
         _saving = true;
         SaveSettingsButton.IsEnabled = false;
+        SaveNetworkSettingsButton.IsEnabled = false;
         try
         {
             await _runtime.UpdateSettingsAsync(current with
@@ -591,6 +597,7 @@ public sealed partial class SettingsPage : UserControl
                 LogLevel = logLevel,
                 Theme = theme,
                 Language = language,
+                TunStack = tunStack,
                 BypassList = BypassListBox.Text.Trim(),
                 SubscriptionRefreshHours = subscriptionRefreshHours
             }, reconcileStartup: true);
@@ -613,6 +620,75 @@ public sealed partial class SettingsPage : UserControl
         {
             _saving = false;
             SaveSettingsButton.IsEnabled = true;
+            SaveNetworkSettingsButton.IsEnabled = true;
+        }
+    }
+
+    private async void SystemProxySwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_updatingNetworkControls || _applyingNetworkControl)
+        {
+            return;
+        }
+
+        bool enabled = SystemProxySwitch.IsOn;
+        if (enabled == (_runtime.Snapshot.SystemProxy == SystemProxyState.On))
+        {
+            return;
+        }
+
+        UpdateNetworkConfigurationState(_runtime.Snapshot);
+        _applyingNetworkControl = true;
+        UpdateNetworkConfigurationState(_runtime.Snapshot);
+        try
+        {
+            await _runtime.SetSystemProxyAsync(enabled);
+            StatusText.Text = LocalizationService.Get("SystemProxyChangeApplied");
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = LocalizationService.Format(
+                "NetworkControlChangeFailedFormat",
+                ErrorSanitizer.Sanitize(exception));
+        }
+        finally
+        {
+            _applyingNetworkControl = false;
+            UpdateNetworkConfigurationState(_runtime.Snapshot);
+        }
+    }
+
+    private async void TunSwitch_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_updatingNetworkControls || _applyingNetworkControl)
+        {
+            return;
+        }
+
+        bool enabled = TunSwitch.IsOn;
+        if (enabled == (_runtime.Snapshot.Tun == TunState.On))
+        {
+            return;
+        }
+
+        UpdateNetworkConfigurationState(_runtime.Snapshot);
+        _applyingNetworkControl = true;
+        UpdateNetworkConfigurationState(_runtime.Snapshot);
+        try
+        {
+            await _runtime.SetTunAsync(enabled);
+            StatusText.Text = LocalizationService.Get("TunChangeApplied");
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = LocalizationService.Format(
+                "NetworkControlChangeFailedFormat",
+                ErrorSanitizer.Sanitize(exception));
+        }
+        finally
+        {
+            _applyingNetworkControl = false;
+            UpdateNetworkConfigurationState(_runtime.Snapshot);
         }
     }
 
@@ -850,6 +926,17 @@ public sealed partial class SettingsPage : UserControl
             BypassListBox.Text = settings.BypassList;
         }
 
+        if (ShouldRefresh((TunStackBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.TunStack))
+        {
+            TunStackBox.SelectedItem = TunStackBox.Items
+                .OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(
+                    item.Tag?.ToString(),
+                    settings.TunStack,
+                    StringComparison.OrdinalIgnoreCase))
+                ?? TunStackBox.Items.FirstOrDefault();
+        }
+
         if (ShouldRefresh((LogLevelBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.LogLevel))
         {
             LogLevelBox.SelectedItem = LogLevelBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.LogLevel)
@@ -880,6 +967,75 @@ public sealed partial class SettingsPage : UserControl
         }
 
         _loadedSettings = settings;
+    }
+
+    private void UpdateNetworkConfigurationState(RuntimeSnapshot snapshot)
+    {
+        if (SystemProxySwitch is null || TunSwitch is null)
+        {
+            return;
+        }
+
+        bool coreRunning = snapshot.Core.State == CoreState.Running;
+        bool canControlSystemProxy = HasControllerCapability(EndpointCapability.ControlSystemProxy);
+        bool canControlTun = HasControllerCapability(EndpointCapability.ControlTun);
+        _updatingNetworkControls = true;
+        try
+        {
+            SystemProxyStateText.Text = snapshot.SystemProxy switch
+            {
+                SystemProxyState.On => LocalizationService.Get("SwitchStateOn"),
+                SystemProxyState.Enabling => LocalizationService.Get("SwitchStateEnabling"),
+                SystemProxyState.Disabling => LocalizationService.Get("SwitchStateDisabling"),
+                SystemProxyState.RestoreRequired => LocalizationService.Get("SwitchStateRestoreRequired"),
+                SystemProxyState.Failed => LocalizationService.Get("SwitchStateFailed"),
+                _ => LocalizationService.Get("SwitchStateOff")
+            };
+            SystemProxySwitch.IsOn = snapshot.SystemProxy == SystemProxyState.On;
+            SystemProxySwitch.IsEnabled = !_applyingNetworkControl
+                && coreRunning
+                && canControlSystemProxy
+                && snapshot.SystemProxy is not (SystemProxyState.Enabling or SystemProxyState.Disabling);
+
+            TunStateText.Text = snapshot.Tun switch
+            {
+                TunState.On => LocalizationService.Get("SwitchStateOn"),
+                TunState.Enabling => LocalizationService.Get("SwitchStateEnabling"),
+                TunState.Disabling => LocalizationService.Get("SwitchStateDisabling"),
+                TunState.Unavailable => LocalizationService.Get("TunStateUnavailable"),
+                TunState.Unknown => LocalizationService.Get("TunStateUnknown"),
+                TunState.Failed => LocalizationService.Get("SwitchStateFailed"),
+                _ => LocalizationService.Get("SwitchStateOff")
+            };
+            TunSwitch.IsOn = snapshot.Tun == TunState.On;
+            TunSwitch.IsEnabled = !_applyingNetworkControl
+                && coreRunning
+                && canControlTun
+                && (snapshot.Tun is TunState.Off or TunState.On);
+        }
+        finally
+        {
+            _updatingNetworkControls = false;
+        }
+
+        ToolTipService.SetToolTip(
+            SystemProxySwitch,
+            GetNetworkControlUnavailableReason(coreRunning, canControlSystemProxy));
+        ToolTipService.SetToolTip(
+            TunSwitch,
+            GetNetworkControlUnavailableReason(coreRunning, canControlTun));
+    }
+
+    private static string? GetNetworkControlUnavailableReason(bool coreRunning, bool hasCapability)
+    {
+        if (!hasCapability)
+        {
+            return LocalizationService.Get("RemoteLocalNetworkActionUnavailable");
+        }
+
+        return coreRunning
+            ? null
+            : LocalizationService.Get("NetworkControlNeedsCore");
     }
 
     private void UpdateNetworkSwitch(RuntimeSnapshot snapshot)

@@ -126,6 +126,7 @@
   <data name="SettingsSubtitle.Text" xml:space="preserve"><value>调整启动、代理端口和 Mihomo 运行参数</value></data>
   <data name="SettingsSaveHint.Text" xml:space="preserve"><value>修改后请点击下方“保存设置”生效。</value></data>
   <data name="RunModeHeader.Text" xml:space="preserve"><value>运行方式</value></data>
+  <data name="NetworkConfigurationHeader.Text" xml:space="preserve"><value>网络配置</value></data>
   <data name="StartWithWindowsSwitch.Header" xml:space="preserve"><value>随 Windows 启动</value></data>
   <data name="StartCoreSwitch.Header" xml:space="preserve"><value>启动后自动启动核心</value></data>
   <data name="AllowLanSwitch.Header" xml:space="preserve"><value>允许局域网连接</value></data>
@@ -133,9 +134,12 @@
   <data name="TcpConcurrentSwitch.Header" xml:space="preserve"><value>启用 TCP 并发</value></data>
   <data name="DisconnectAfterProxySwitch.Header" xml:space="preserve"><value>切换节点后断开现有连接</value></data>
   <data name="DisconnectAfterProxySwitchHint.Text" xml:space="preserve"><value>开启后，节点切换成功会中断现有连接，让新连接立即使用所选节点。</value></data>
-  <data name="RestartOnChangeHint.Text" xml:space="preserve"><value>核心运行时修改端口、控制器端口、TCP 并发或日志级别会自动受控重启；修改 Mixed 端口会先恢复再重新应用系统代理。</value></data>
-  <data name="ProgramOverridesHint.Text" xml:space="preserve"><value>面板中的系统代理、TUN、允许局域网连接和 IPv6 设置由 ClashTray 保存并优先控制；配置文件中的对应选项不会覆盖程序选择。</value></data>
+  <data name="RestartOnChangeHint.Text" xml:space="preserve"><value>核心运行时修改端口、控制器端口、TUN 协议栈、TCP 并发或日志级别会自动受控重启；修改 Mixed 端口会先恢复再重新应用系统代理。</value></data>
+  <data name="NetworkConfigurationRestartHint.Text" xml:space="preserve"><value>核心运行时修改 TUN 协议栈、HTTP、SOCKS5、Mixed、控制器端口或 TCP 并发会自动受控重启；核心未运行时将在下次启动生效。</value></data>
+  <data name="NetworkConfigurationImmediateHint.Text" xml:space="preserve"><value>系统代理和 TUN 开关是即时操作，需要本机 Mihomo 核心已运行；界面只显示 Windows、服务和核心确认后的实际状态。</value></data>
+  <data name="ProgramOverridesHint.Text" xml:space="preserve"><value>此处的 TUN 协议栈、允许局域网连接和 IPv6 设置由 ClashTray 保存并优先控制；“跟随配置文件”不会覆盖配置文件中的 stack。</value></data>
   <data name="SaveSettingsButton.Content" xml:space="preserve"><value>保存设置</value></data>
+  <data name="SaveNetworkSettingsButton.Content" xml:space="preserve"><value>保存网络配置</value></data>
   <data name="NetworkSwitchHeader.Text" xml:space="preserve"><value>按网络自动切换配置</value></data>
   <data name="NetworkSwitchRulesHeader.Text" xml:space="preserve"><value>SSID 规则</value></data>
   <data name="NetworkSwitchRulesHint.Text" xml:space="preserve"><value>匹配精确的 Wi-Fi 名称。关闭的规则会保留但不会参与选择；不可用的目标会保留并提示，不会被自动应用。</value></data>
@@ -147,6 +151,12 @@
   <data name="SaveNetworkSwitchButton.Content" xml:space="preserve"><value>保存网络切换</value></data>
   <data name="ResumeNetworkSwitchButton.Content" xml:space="preserve"><value>恢复自动切换</value></data>
   <data name="PortsHeader.Text" xml:space="preserve"><value>端口与代理</value></data>
+  <data name="TunStackBox.Header" xml:space="preserve"><value>TUN 协议栈</value></data>
+  <data name="TunStackConfigurationItem.Content" xml:space="preserve"><value>跟随配置文件</value></data>
+  <data name="TunStackSystemItem.Content" xml:space="preserve"><value>System（系统协议栈）</value></data>
+  <data name="TunStackGvisorItem.Content" xml:space="preserve"><value>gVisor（用户态协议栈）</value></data>
+  <data name="TunStackMixedItem.Content" xml:space="preserve"><value>Mixed（推荐）</value></data>
+  <data name="TunStackMipsItem.Content" xml:space="preserve"><value>MIPS（Mihomo 协议栈）</value></data>
   <data name="HttpPortBox.Header" xml:space="preserve"><value>HTTP</value></data>
   <data name="SocksPortBox.Header" xml:space="preserve"><value>SOCKS</value></data>
   <data name="MixedPortBox.Header" xml:space="preserve"><value>Mixed</value></data>
@@ -319,6 +329,10 @@
   <!-- Settings page runtime text -->
   <data name="ErrorInvalidRefreshHours" xml:space="preserve"><value>订阅刷新间隔必须是 1 到 168 之间的整数小时。</value></data>
   <data name="SettingsSaved" xml:space="preserve"><value>设置已保存；需要重启的核心参数会自动受控重启，系统代理会在核心健康后使用新端口。</value></data>
+  <data name="SystemProxyChangeApplied" xml:space="preserve"><value>系统代理状态已更新。</value></data>
+  <data name="TunChangeApplied" xml:space="preserve"><value>TUN 状态已更新。</value></data>
+  <data name="NetworkControlChangeFailedFormat" xml:space="preserve"><value>网络开关操作失败：{0}</value></data>
+  <data name="NetworkControlNeedsCore" xml:space="preserve"><value>请先启动本机 Mihomo 核心。</value></data>
   <data name="SettingsSaveFailedFormat" xml:space="preserve"><value>设置保存失败：{0}</value></data>
   <data name="FakeIpCleared" xml:space="preserve"><value>FakeIP 缓存已清理。</value></data>
   <data name="DnsCleared" xml:space="preserve"><value>DNS 缓存已清理。</value></data>

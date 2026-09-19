@@ -7,6 +7,7 @@ internal static class SettingsValidator
     private static readonly string[] AllowedLogLevels = ["info", "warning", "error", "debug"];
     private static readonly string[] AllowedThemes = ["system", "light", "dark", "nakhimov"];
     private static readonly string[] AllowedLanguages = ["system", "zh-CN", "en-US"];
+    private static readonly string[] AllowedTunStacks = ["configuration", "system", "gvisor", "mixed", "mips"];
 
     public static void Validate(AppSettings settings)
     {
@@ -53,6 +54,11 @@ internal static class SettingsValidator
         if (!AllowedLanguages.Contains(settings.Language?.Trim(), StringComparer.OrdinalIgnoreCase))
         {
             throw new ArgumentException("语言必须是 system、zh-CN 或 en-US。", nameof(settings));
+        }
+
+        if (!AllowedTunStacks.Contains(settings.TunStack?.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("TUN 协议栈必须是 configuration、system、gvisor、mixed 或 mips。", nameof(settings));
         }
     }
 }

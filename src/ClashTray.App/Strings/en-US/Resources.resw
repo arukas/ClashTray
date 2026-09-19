@@ -126,6 +126,7 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="SettingsSubtitle.Text" xml:space="preserve"><value>Adjust startup, proxy ports and Mihomo runtime options</value></data>
   <data name="SettingsSaveHint.Text" xml:space="preserve"><value>Select “Save settings” below to apply your changes.</value></data>
   <data name="RunModeHeader.Text" xml:space="preserve"><value>Behavior</value></data>
+  <data name="NetworkConfigurationHeader.Text" xml:space="preserve"><value>Network configuration</value></data>
   <data name="StartWithWindowsSwitch.Header" xml:space="preserve"><value>Start with Windows</value></data>
   <data name="StartCoreSwitch.Header" xml:space="preserve"><value>Start the core automatically</value></data>
   <data name="AllowLanSwitch.Header" xml:space="preserve"><value>Allow LAN connections</value></data>
@@ -133,9 +134,12 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="TcpConcurrentSwitch.Header" xml:space="preserve"><value>Enable TCP concurrency</value></data>
   <data name="DisconnectAfterProxySwitch.Header" xml:space="preserve"><value>Close existing connections after switching nodes</value></data>
   <data name="DisconnectAfterProxySwitchHint.Text" xml:space="preserve"><value>When enabled, a successful node switch closes existing connections so new connections use the selected node immediately.</value></data>
-  <data name="RestartOnChangeHint.Text" xml:space="preserve"><value>Changing ports, the controller port, TCP concurrency or the log level restarts the core in a controlled way while it is running; changing the Mixed port restores and then reapplies the system proxy.</value></data>
-  <data name="ProgramOverridesHint.Text" xml:space="preserve"><value>System proxy, TUN, allow-LAN and IPv6 options in this panel are saved and controlled by ClashTray; matching options in configuration files do not override these choices.</value></data>
+  <data name="RestartOnChangeHint.Text" xml:space="preserve"><value>Changing ports, the controller port, TUN stack, TCP concurrency or the log level restarts the core in a controlled way while it is running; changing the Mixed port restores and then reapplies the system proxy.</value></data>
+  <data name="NetworkConfigurationRestartHint.Text" xml:space="preserve"><value>Changing the TUN stack, HTTP, SOCKS5, Mixed or controller port, or TCP concurrency restarts a running core in a controlled way. If the core is stopped, changes apply on its next start.</value></data>
+  <data name="NetworkConfigurationImmediateHint.Text" xml:space="preserve"><value>System proxy and TUN are immediate actions and require the local Mihomo core to be running. Switches show only the state confirmed by Windows, the service and the core.</value></data>
+  <data name="ProgramOverridesHint.Text" xml:space="preserve"><value>The TUN stack, allow-LAN and IPv6 options here are saved and controlled by ClashTray. “Follow configuration file” leaves the file's stack value unchanged.</value></data>
   <data name="SaveSettingsButton.Content" xml:space="preserve"><value>Save settings</value></data>
+  <data name="SaveNetworkSettingsButton.Content" xml:space="preserve"><value>Save network configuration</value></data>
   <data name="NetworkSwitchHeader.Text" xml:space="preserve"><value>Network-based configuration switching</value></data>
   <data name="NetworkSwitchRulesHeader.Text" xml:space="preserve"><value>SSID rules</value></data>
   <data name="NetworkSwitchRulesHint.Text" xml:space="preserve"><value>Match the exact Wi-Fi name. Disabled rules are retained but never selected; an unavailable target is kept visible and will be reported instead of being applied.</value></data>
@@ -147,6 +151,12 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="SaveNetworkSwitchButton.Content" xml:space="preserve"><value>Save network switching</value></data>
   <data name="ResumeNetworkSwitchButton.Content" xml:space="preserve"><value>Resume automatic switching</value></data>
   <data name="PortsHeader.Text" xml:space="preserve"><value>Ports and proxy</value></data>
+  <data name="TunStackBox.Header" xml:space="preserve"><value>TUN stack</value></data>
+  <data name="TunStackConfigurationItem.Content" xml:space="preserve"><value>Follow configuration file</value></data>
+  <data name="TunStackSystemItem.Content" xml:space="preserve"><value>System (OS stack)</value></data>
+  <data name="TunStackGvisorItem.Content" xml:space="preserve"><value>gVisor (user-space stack)</value></data>
+  <data name="TunStackMixedItem.Content" xml:space="preserve"><value>Mixed (recommended)</value></data>
+  <data name="TunStackMipsItem.Content" xml:space="preserve"><value>MIPS (Mihomo stack)</value></data>
   <data name="HttpPortBox.Header" xml:space="preserve"><value>HTTP</value></data>
   <data name="SocksPortBox.Header" xml:space="preserve"><value>SOCKS</value></data>
   <data name="MixedPortBox.Header" xml:space="preserve"><value>Mixed</value></data>
@@ -319,6 +329,10 @@ Upload {4} B · Download {5} B</value></data>
   <!-- Settings page runtime text -->
   <data name="ErrorInvalidRefreshHours" xml:space="preserve"><value>The subscription refresh interval must be a whole number of hours between 1 and 168.</value></data>
   <data name="SettingsSaved" xml:space="preserve"><value>Settings saved. Core options that require it restart the core in a controlled way, and the system proxy picks up the new port once the core is healthy.</value></data>
+  <data name="SystemProxyChangeApplied" xml:space="preserve"><value>System proxy state updated.</value></data>
+  <data name="TunChangeApplied" xml:space="preserve"><value>TUN state updated.</value></data>
+  <data name="NetworkControlChangeFailedFormat" xml:space="preserve"><value>Network switch operation failed: {0}</value></data>
+  <data name="NetworkControlNeedsCore" xml:space="preserve"><value>Start the local Mihomo core first.</value></data>
   <data name="SettingsSaveFailedFormat" xml:space="preserve"><value>Failed to save settings: {0}</value></data>
   <data name="FakeIpCleared" xml:space="preserve"><value>FakeIP cache cleared.</value></data>
   <data name="DnsCleared" xml:space="preserve"><value>DNS cache cleared.</value></data>

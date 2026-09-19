@@ -118,20 +118,6 @@
                             <FontIcon Grid.Column="3" Glyph="&#xE76C;" FontSize="12"/>
                         </Grid>
                     </Button>
-                    <Grid MinHeight="36" ColumnSpacing="10" Padding="6,0">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="20"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
-                        <FontIcon Glyph="&#xE774;" FontSize="18"/>
-                        <TextBlock Grid.Column="1" x:Uid="SystemProxyLabel" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                        <TextBlock Grid.Column="2" x:Name="SystemProxyStateText" x:Uid="SystemProxyStateText" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center"/>
-                        <ToggleSwitch Grid.Column="3" x:Name="SystemProxySwitch" x:Uid="SystemProxySwitch" Width="46" MinWidth="0" MinHeight="0" Height="36" OnContent="" OffContent="" Toggled="SystemProxySwitch_Toggled" HorizontalAlignment="Right"/>
-                    </Grid>
-                    <Grid MinHeight="36" ColumnSpacing="10" Padding="6,0">
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="20"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="46"/></Grid.ColumnDefinitions>
-                        <FontIcon Glyph="&#xEA18;" FontSize="18" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
-                        <TextBlock Grid.Column="1" x:Uid="TunLabel" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                        <TextBlock Grid.Column="2" x:Name="TunStateText" x:Uid="TunStateText" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center"/>
-                        <ToggleSwitch Grid.Column="3" x:Name="TunSwitch" x:Uid="TunSwitch" Width="46" MinWidth="0" MinHeight="0" Height="36" OnContent="" OffContent="" Toggled="TunSwitch_Toggled" HorizontalAlignment="Right"/>
-                    </Grid>
                     <Grid MinHeight="40" ColumnSpacing="6" Padding="6,0">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="20"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <FontIcon Glyph="&#xE756;" FontSize="17"/>
