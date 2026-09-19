@@ -33,6 +33,8 @@ $packageFileVersion = if (($packageCoreVersion -split '\.').Count -eq 3) {
 $includeCore = $Variant -in @('Full', 'NoCET')
 $selfContained = $Variant -ne 'Mini'
 $disableCet = $Variant -eq 'NoCET'
+$miniDotNetMajorVersion = '10'
+$miniRollForwardPolicy = 'LatestMinor'
 $mihomoRelease = $null
 $mihomoVersion = $null
 if ($includeCore) {
@@ -398,6 +400,9 @@ $appPublishArguments = @(
     "--property:WindowsAppSDKSelfContained=$($selfContained.ToString().ToLowerInvariant())",
     '--property:PublishReadyToRun=false'
 )
+if (-not $selfContained) {
+    $appPublishArguments += "--property:RollForward=$miniRollForwardPolicy"
+}
 if ($disableCet) {
     $appPublishArguments += '--property:CETCompat=false'
 }
@@ -418,6 +423,9 @@ $servicePublishArguments = @(
     '--property:Platform=x64',
     "--property:Version=$PackageVersion"
 )
+if (-not $selfContained) {
+    $servicePublishArguments += "--property:RollForward=$miniRollForwardPolicy"
+}
 if ($disableCet) {
     $servicePublishArguments += '--property:CETCompat=false'
 }
@@ -467,6 +475,7 @@ $innoArguments = @(
     "/DPackageVersion=$PackageVersion",
     "/DPackageFileVersion=$packageFileVersion",
     "/DVariant=$Variant",
+    "/DMiniDotNetMajorVersion=$miniDotNetMajorVersion",
     "/DPayloadRoot=$payloadRoot",
     "/DOutputDirectory=$outputRoot",
     "/DRepoRoot=$repoRoot",

@@ -19,7 +19,7 @@ From the repository root:
 & 'C:\Program Files\dotnet\dotnet.exe' test ClashTray.sln --configuration Debug --property:Platform=x64 --no-build
 ```
 
-The first launch creates user data in `%LOCALAPPDATA%\ClashTray` and runtime data in `%PROGRAMDATA%\ClashTray`. A Release EXE installation includes the pinned official Mihomo v1.19.30 x64 core and its trusted manifest under `%PROGRAMDATA%\ClashTray\core`; a plain developer launch must use that same managed location because `LocalAppData\core` is ignored. Core installation and updates are submitted through the restricted service, which revalidates the official source, archive checksum, executable checksum, and x64 PE format before replacement.
+The first launch creates user data in `%LOCALAPPDATA%\ClashTray` and runtime data in `%PROGRAMDATA%\ClashTray`. A Release EXE installation includes the pinned official Mihomo v1.19.31 x64 core and its trusted manifest under `%PROGRAMDATA%\ClashTray\core`; a plain developer launch must use that same managed location because `LocalAppData\core` is ignored. Core installation and updates are submitted through the restricted service, which revalidates the official source, archive checksum, executable checksum, and x64 PE format before replacement.
 
 The Windows Service is optional during ordinary development. If it is installed, the app sends core lifecycle and TUN requests through its restricted pipe; otherwise core lifecycle falls back to the desktop process and TUN reports that the service is unavailable.
 
@@ -43,7 +43,7 @@ The Settings page keeps changes as an editable draft until **保存设置** is p
 The isolated WinUI smoke flow verifies both startup switches, port/text drafts, repeated snapshots, external theme changes, validation failure and saved-core-startup reload without modifying the real Windows startup registry. Actual sign-in startup still requires manual Windows verification.
 ## EXE installer (current distribution path)
 
-The current release path is a set of Windows x64 EXE installers built by Inno Setup 7; Full is the recommended self-contained variant, NoCET is the compatibility variant for older-patched Windows 10 22H2 systems, and Mini is the smaller framework-dependent variant. x86 and ARM64 packages are not provided. App, Service, and Setup all target x64; App and Service are staged into one shared self-contained directory for self-contained builds. Mini requires the x64 .NET 10 Desktop Runtime and Windows App Runtime 2.4+; its installer checks both before copying files and exits with a clear message if either is missing. It does not use MSIX, AppX signing, or the Windows Store. Build it from the repository root:
+The current release path is a set of Windows x64 EXE installers built by Inno Setup 7; Full is the recommended self-contained variant, NoCET is the compatibility variant for older-patched Windows 10 22H2 systems, and Mini is the smaller framework-dependent variant. x86 and ARM64 packages are not provided. App, Service, and Setup all target x64; App and Service are staged into one shared self-contained directory for self-contained builds. Mini requires x64 .NET Runtime 10.x and Windows App Runtime 2.4+; its installer checks both before copying files and exits with a clear message if either is missing. Mini explicitly rolls forward within .NET major version 10. It does not use MSIX, AppX signing, or the Windows Store. Build it from the repository root:
 
 ```powershell
 & .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.1 -Variant Full
@@ -53,11 +53,11 @@ The current release path is a set of Windows x64 EXE installers built by Inno Se
 
 The output is:
 
-- `packaging\out\ClashTray-0.3.1-win-x64-Full.exe`: one Inno Setup installer containing the shared self-contained App/Service payload, official Mihomo v1.19.30 x64 core, and its license notice.
+- `packaging\out\ClashTray-0.3.1-win-x64-Full.exe`: one Inno Setup installer containing the shared self-contained App/Service payload, official Mihomo v1.19.31 x64 core, and its license notice.
 - `packaging\out\ClashTray-0.3.1-win-x64-Full.sha256`: SHA-256 sidecar file.
 - `packaging\out\ClashTray-0.3.1-win-x64-NoCET.exe`: a self-contained Full-equivalent installer built with `CETCompat=false` for older-patched Windows 10 22H2.
 - `packaging\out\ClashTray-0.3.1-win-x64-NoCET.sha256`: SHA-256 sidecar file for the compatibility installer.
-- `packaging\out\ClashTray-0.3.1-win-x64-Mini.exe`: a framework-dependent installer without the Mihomo core; the installer checks for the x64 .NET 10 Desktop Runtime and Windows App Runtime 2.4+.
+- `packaging\out\ClashTray-0.3.1-win-x64-Mini.exe`: a framework-dependent installer without the Mihomo core; the installer checks for x64 .NET Runtime 10.x and Windows App Runtime 2.4+.
 - `packaging\out\ClashTray-0.3.1-win-x64-Mini.sha256`: SHA-256 sidecar file for the Mini installer.
 
 The Inno Setup installer requests administrator approval. Double-clicking it should show the UAC prompt; the installed desktop app subsequently runs with ordinary user permissions. If Explorer does not show a “Run as administrator” context-menu item, launch it from any PowerShell window with:
@@ -74,7 +74,7 @@ For a first manual verification:
 2. Run `ClashTray-0.3.1-win-x64-Full.exe` and approve the UAC prompt.
 3. Start **ClashTray** from the Start Menu.
 4. Confirm the tray icon appears, open the panel, and verify that TUN no longer reports “service unavailable”.
-5. The installer already provides Mihomo v1.19.30; import a YAML configuration and test start/stop, mode switching, System Proxy, and TUN. Use NoCET only when the normal Full installer cannot start on an older-patched Windows 10 22H2 system.
+5. The installer already provides Mihomo v1.19.31; import a YAML configuration and test start/stop, mode switching, System Proxy, and TUN. Use NoCET only when the normal Full installer cannot start on an older-patched Windows 10 22H2 system.
 6. Confirm the service state from an elevated PowerShell window:
 
 ```powershell
@@ -103,4 +103,4 @@ The recommended release path is `packaging/Build-EXE.ps1`. It publishes App and 
 .\packaging\Build-EXE.ps1 -Variant Mini -PackageVersion 0.3.1
 ```
 
-`Full` is self-contained and includes the pinned, SHA-256 verified Mihomo core. `NoCET` is the same bundled-core shape with `CETCompat=false` for older-patched Windows 10 22H2. `Mini` omits the core and uses framework-dependent App and Service payloads; its installer requires the x64 .NET 10 Desktop Runtime and Windows App Runtime 2.4+ and aborts before installation when either is missing. Outputs are named `ClashTray-<version>-win-x64-Full.exe`, `ClashTray-<version>-win-x64-NoCET.exe`, and `ClashTray-<version>-win-x64-Mini.exe`, with a matching `.sha256` sidecar; pre-release suffixes remain in the file name. See [release.md](release.md) for the release matrix and checks.
+`Full` is self-contained and includes the pinned, SHA-256 verified Mihomo core. `NoCET` is the same bundled-core shape with `CETCompat=false` for older-patched Windows 10 22H2. `Mini` omits the core and uses framework-dependent App and Service payloads; its installer requires x64 .NET Runtime 10.x and Windows App Runtime 2.4+, explicitly rolls forward within .NET major version 10, and aborts before installation when either dependency is missing. Outputs are named `ClashTray-<version>-win-x64-Full.exe`, `ClashTray-<version>-win-x64-NoCET.exe`, and `ClashTray-<version>-win-x64-Mini.exe`, with a matching `.sha256` sidecar; pre-release suffixes remain in the file name. See [release.md](release.md) for the release matrix and checks.

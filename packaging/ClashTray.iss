@@ -1,7 +1,7 @@
 ; ClashTray x64 installer (Inno Setup 7.1+).
-; The build script stages the App and Service into one shared self-contained
-; directory. Inno Setup then compresses that directory and the optional Mihomo
-; payload into a single LZMA2 solid installer.
+; The build script stages the App and Service into one shared directory. Full
+; variants are self-contained while Mini is framework-dependent. Inno Setup
+; compresses that directory and the optional Mihomo payload into one installer.
 
 ; The product version is owned by Directory.Build.props and must be passed in
 ; by Build-EXE.ps1 (resolved through Get-ProductVersion.ps1). There is no
@@ -26,6 +26,9 @@
 #endif
 #ifndef IncludeCore
   #define IncludeCore "1"
+#endif
+#ifndef MiniDotNetMajorVersion
+  #define MiniDotNetMajorVersion "10"
 #endif
 
 [Setup]
@@ -89,6 +92,7 @@ Filename: "{app}\App\ClashTray.App.exe"; WorkingDir: "{app}\App"; Description: "
 [Code]
 const
   InstallerVariant = '{#Variant}';
+  RequiredDotNetMajorVersion = '{#MiniDotNetMajorVersion}';
   ServiceName = 'ClashTrayService';
   ServiceKey = 'SYSTEM\CurrentControlSet\Services\ClashTrayService';
   ServiceExecutableName = 'ClashTray.Service.exe';
@@ -283,7 +287,7 @@ begin
   if ResultCode <> 0 then
     exit;
 
-  Prefix := Uppercase(RuntimeName + ' 10.');
+  Prefix := Uppercase(RuntimeName + ' ' + RequiredDotNetMajorVersion + '.');
   for I := 0 to GetArrayLength(Output.StdOut) - 1 do
   begin
     Line := Trim(Output.StdOut[I]);
@@ -350,7 +354,6 @@ var
   Missing: string;
   DotNetPath: string;
   CoreRuntimeLine: string;
-  DesktopRuntimeLine: string;
   WindowsAppRuntimeVersion: string;
 begin
   Missing := '';
@@ -358,9 +361,7 @@ begin
   if DotNetPath = '' then
     Missing := Missing + #13#10 + '- x64 .NET host（C:\Program Files\dotnet\dotnet.exe）';
   if not HasDotNetRuntime('Microsoft.NETCore.App', CoreRuntimeLine) then
-    Missing := Missing + #13#10 + '- Microsoft.NETCore.App 10.x（x64）';
-  if not HasDotNetRuntime('Microsoft.WindowsDesktop.App', DesktopRuntimeLine) then
-    Missing := Missing + #13#10 + '- Microsoft.WindowsDesktop.App 10.x（x64）';
+    Missing := Missing + #13#10 + '- Microsoft.NETCore.App ' + RequiredDotNetMajorVersion + '.x（x64）';
   if not HasWindowsAppRuntime(WindowsAppRuntimeVersion) then
     Missing := Missing + #13#10 + '- 当前用户已注册且可访问的 Windows App Runtime 2.4+ framework（x64）';
 

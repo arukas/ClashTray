@@ -14,7 +14,7 @@
 
 - 用 Windows 原生 README 说明日常路径、体积、运行时和故障边界。
 - 保持 ClashTray MIT，补齐 Mihomo、WinUI 和 ClashBar 的致谢与第三方说明。
-- 把发布拆成 Full、NoCET、Mini 三种 x64 变体，所有安装器生成 SHA-256 sidecar，并随 Full/NoCET 提供 Mihomo GPLv3 来源元数据；Mini 安装前检查 .NET 10 Desktop Runtime 和 Windows App Runtime 2.4+。
+- 把发布拆成 Full、NoCET、Mini 三种 x64 变体，所有安装器生成 SHA-256 sidecar，并随 Full/NoCET 提供 Mihomo GPLv3 来源元数据；Mini 安装前检查 x64 .NET Runtime 10.x 和 Windows App Runtime 2.4+。
 - 增加 CI 与 tag / 手动发布 workflow，发布前自动运行完整构建和测试。
 - 收紧 `.gitignore`，忽略核心二进制、构建输出、订阅/日志、压缩包、签名材料和运行数据。
 
