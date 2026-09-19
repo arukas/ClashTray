@@ -186,7 +186,7 @@
   <data name="RefreshProviderButton.Content" xml:space="preserve"><value>刷新选中的 Provider</value></data>
   <data name="CoreUpdateExpander.Header" xml:space="preserve"><value>核心更新</value></data>
   <data name="CoreVersionBox.Header" xml:space="preserve"><value>版本</value></data>
-  <data name="CoreVersionBox.PlaceholderText" xml:space="preserve"><value>例如 v1.19.30</value></data>
+  <data name="CoreVersionBox.PlaceholderText" xml:space="preserve"><value>例如 v1.19.31</value></data>
   <data name="CoreDownloadUriBox.Header" xml:space="preserve"><value>官方 GitHub 下载地址</value></data>
   <data name="CoreSha256Box.Header" xml:space="preserve"><value>ZIP SHA-256</value></data>
   <data name="CoreSha256Box.PlaceholderText" xml:space="preserve"><value>64 位十六进制校验值</value></data>

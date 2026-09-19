@@ -6,7 +6,7 @@ public static class BundledMihomo
 {
     public static string Version { get; } = ReadVersion();
 
-    // Matches DefaultRawConfig.GlobalUA in Mihomo v1.19.30 config/config.go.
+    // Matches DefaultRawConfig.GlobalUA in Mihomo v1.19.31 config/config.go.
     public static string UserAgent { get; } = $"clash.meta/{Version}";
 
     private static string ReadVersion()

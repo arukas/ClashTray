@@ -101,9 +101,9 @@ public sealed class ConfigurationStoreTests
                 Assert.AreEqual("mixed-port: 7890\n", await File.ReadAllTextAsync(update.Profile.Path));
             }
 
-            Assert.AreEqual("v1.19.30", BundledMihomo.Version);
+            Assert.AreEqual("v1.19.31", BundledMihomo.Version);
             Assert.AreEqual(downloads, handler.UserAgents.Count);
-            Assert.IsTrue(handler.UserAgents.All(ua => ua == "clash.meta/v1.19.30"));
+            Assert.IsTrue(handler.UserAgents.All(ua => ua == BundledMihomo.UserAgent));
             Assert.AreEqual(1, (await store.ListAsync()).Count);
         }
         finally
@@ -155,7 +155,7 @@ public sealed class ConfigurationStoreTests
             ConfigurationStore store = new ConfigurationStore(paths, handler);
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
                 store.ImportSubscriptionAsync(new Uri("https://subscription.invalid/config")));
-            Assert.AreEqual("clash.meta/v1.19.30", handler.UserAgents.Single());
+            Assert.AreEqual(BundledMihomo.UserAgent, handler.UserAgents.Single());
             Assert.AreEqual(0, (await store.ListAsync()).Count);
         }
         finally
@@ -260,7 +260,7 @@ public sealed class ConfigurationStoreTests
             UserAgents.Add(userAgent);
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
-                Content = new StringContent(userAgent == "clash.meta/v1.19.30" ? ResponseBody : "unsupported client"),
+                Content = new StringContent(userAgent == BundledMihomo.UserAgent ? ResponseBody : "unsupported client"),
             });
         }
     }

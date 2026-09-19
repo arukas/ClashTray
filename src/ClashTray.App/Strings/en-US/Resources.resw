@@ -186,7 +186,7 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="RefreshProviderButton.Content" xml:space="preserve"><value>Refresh selected provider</value></data>
   <data name="CoreUpdateExpander.Header" xml:space="preserve"><value>Core update</value></data>
   <data name="CoreVersionBox.Header" xml:space="preserve"><value>Version</value></data>
-  <data name="CoreVersionBox.PlaceholderText" xml:space="preserve"><value>For example v1.19.30</value></data>
+  <data name="CoreVersionBox.PlaceholderText" xml:space="preserve"><value>For example v1.19.31</value></data>
   <data name="CoreDownloadUriBox.Header" xml:space="preserve"><value>Official GitHub download URL</value></data>
   <data name="CoreSha256Box.Header" xml:space="preserve"><value>ZIP SHA-256</value></data>
   <data name="CoreSha256Box.PlaceholderText" xml:space="preserve"><value>64-digit hexadecimal checksum</value></data>
