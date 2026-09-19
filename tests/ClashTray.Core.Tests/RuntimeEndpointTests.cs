@@ -518,7 +518,7 @@ public sealed class RuntimeEndpointTests
     }
 
     [TestMethod]
-    public async Task EndpointSelectionWaitsForControllerMutationToFinish()
+    public async Task EndpointSelectionDoesNotWaitForLocalControllerMutation()
     {
         string root = CreateRoot();
         AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
@@ -556,9 +556,8 @@ public sealed class RuntimeEndpointTests
             await handler.MutationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             endpointSelection = runtime.SelectEndpointAsync(remote.Id);
-            await Task.Delay(TimeSpan.FromMilliseconds(50));
-
-            Assert.IsFalse(connector.ConnectEntered.Task.IsCompleted);
+            await connector.ConnectEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.IsFalse(modeChange.IsCompleted);
 
             handler.ReleaseMutation();
             await Task.WhenAll(modeChange, endpointSelection);
@@ -579,6 +578,48 @@ public sealed class RuntimeEndpointTests
                 await endpointSelection.WaitAsync(TimeSpan.FromSeconds(2));
             }
 
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task DisconnectEndpointCancelsAnInFlightRemoteSelection()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        BlockingConnector connector = new();
+        await using ClashTrayRuntime runtime = new(
+            paths,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            connector,
+            (_, cancellationToken) => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken),
+            remoteLogStreamRunner: (_, _, _) => Task.CompletedTask);
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("offline"),
+            "Offline",
+            new Uri("https://offline.example.test"));
+
+        try
+        {
+            await runtime.SaveRemoteEndpointAsync(new EndpointRecord(remote));
+            Task<EndpointSession?> selection = runtime.SelectEndpointAsync(remote.Id);
+            await connector.ConnectEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            await runtime.DisconnectEndpointAsync().WaitAsync(TimeSpan.FromSeconds(2));
+            EndpointSession? result = await selection.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.IsNull(result);
+            Assert.AreEqual(EndpointId.Local, runtime.EndpointSessionStatus.Endpoint.Id);
+            Assert.AreEqual(EndpointSessionState.Disconnected, runtime.EndpointSessionStatus.State);
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
             DeleteRoot(root);
         }
     }
@@ -864,6 +905,23 @@ public sealed class RuntimeEndpointTests
                     Content = new StringContent(body, Encoding.UTF8, "application/json")
                 };
             }
+        }
+    }
+
+    private sealed class BlockingConnector : IEndpointSessionConnector
+    {
+        public TaskCompletionSource<bool> ConnectEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<EndpointSession> ConnectAsync(
+            EndpointDescriptor endpoint,
+            long generation,
+            long selectionRevision,
+            CancellationToken cancellationToken)
+        {
+            ConnectEntered.TrySetResult(true);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("The blocking connector unexpectedly completed.");
         }
     }
 

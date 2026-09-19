@@ -201,6 +201,65 @@ public sealed class OperationAdmissionTests
     }
 
     [TestMethod]
+    public async Task LatestWinsDrainsNewIntentAfterCanceledPendingPromotion()
+    {
+        for (int iteration = 0; iteration < 100; iteration++)
+        {
+            LatestWinsOperation<int> latest = new("intent");
+            TaskCompletionSource<bool> entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            Task<int> first = latest.RequestAsync(
+                1,
+                async (value, _) =>
+                {
+                    entered.TrySetResult(true);
+                    await release.Task;
+                    return value;
+                });
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            using CancellationTokenSource pendingCancellation = new();
+            Task<int> canceledPending = latest.RequestAsync(
+                2,
+                static (value, _) => Task.FromResult(value),
+                pendingCancellation.Token);
+            await pendingCancellation.CancelAsync();
+            release.TrySetResult(true);
+
+            Task<int> newest = Task.Run(async () =>
+            {
+                await Task.Yield();
+                return await latest.RequestAsync(
+                    3,
+                    static (value, _) => Task.FromResult(value));
+            });
+
+            Assert.AreEqual(1, await first.WaitAsync(TimeSpan.FromSeconds(2)));
+            await Assert.ThrowsAsync<OperationCanceledException>(() => canceledPending);
+            Assert.AreEqual(3, await newest.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.IsFalse(latest.IsBusy);
+        }
+    }
+
+    [TestMethod]
+    public async Task CleanupOwnershipWaitsForAdmittedOperationAndRejectsNewWork()
+    {
+        using OperationGate gate = new();
+        await gate.WaitAsync();
+        gate.BeginQuiescing();
+
+        Task cleanupOwnership = gate.WaitForCleanupOwnershipAsync();
+        await Task.Delay(TimeSpan.FromMilliseconds(20));
+        Assert.IsFalse(cleanupOwnership.IsCompleted);
+
+        gate.Exit();
+        await cleanupOwnership.WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.ThrowsExactlyAsync<RuntimeQuiescingException>(() => gate.WaitAsync());
+        gate.Exit();
+    }
+
+    [TestMethod]
     public async Task SingleFlightSharesDuplicateDelayProbe()
     {
         SingleFlightOperation<int> singleFlight = new("delay");

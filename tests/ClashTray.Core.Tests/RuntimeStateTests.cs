@@ -491,6 +491,40 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task ProxyDelayDoesNotHoldLocalMutationLane()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        using DelayControllerHandler handler = new(holdFirstRequest: true);
+        using HttpClient httpClient = new(handler);
+        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new(paths);
+
+        try
+        {
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            Task<int?> delay = runtime.TestProxyDelayAsync("node");
+            await handler.FirstRequestEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Task modeChange = runtime.SetModeAsync(ProxyMode.Direct);
+            await handler.ModePatchEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.IsFalse(delay.IsCompleted);
+
+            handler.ReleaseFirstRequest();
+            Assert.AreEqual(10, await delay.WaitAsync(TimeSpan.FromSeconds(2)));
+            await modeChange.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            handler.ReleaseFirstRequest();
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task ControllerOperationRejectsResultFromReplacedSession()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
@@ -1862,6 +1896,9 @@ public sealed class RuntimeStateTests
         public TaskCompletionSource<bool> FirstRequestEntered { get; } =
             new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public TaskCompletionSource<bool> ModePatchEntered { get; } =
+            new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Action? BeforeFirstRequest
         {
             get => _beforeFirstRequest;
@@ -1876,9 +1913,27 @@ public sealed class RuntimeStateTests
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            if (request.RequestUri?.AbsolutePath.StartsWith("/proxies/", StringComparison.Ordinal) != true)
+            string path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (request.Method == HttpMethod.Patch && path == "/configs")
             {
-                return new HttpResponseMessage(HttpStatusCode.NotFound);
+                ModePatchEntered.TrySetResult(true);
+                return new HttpResponseMessage(HttpStatusCode.NoContent)
+                {
+                    Content = new StringContent(string.Empty)
+                };
+            }
+
+            if (!path.StartsWith("/proxies/", StringComparison.Ordinal))
+            {
+                string body = path switch
+                {
+                    "/configs" => "{\"mode\":\"direct\",\"tun\":{\"enable\":false}}",
+                    _ => "{}"
+                };
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body)
+                };
             }
 
             int requestNumber = Interlocked.Increment(ref _requestCount);

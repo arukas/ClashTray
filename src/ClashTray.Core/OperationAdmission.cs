@@ -127,6 +127,43 @@ internal sealed class OperationGate : IDisposable
         return idleTask.WaitAsync(timeout, cancellationToken);
     }
 
+    /// <summary>
+    /// Acquires the mutation lane for shutdown cleanup after quiescing has
+    /// started. Unlike <see cref="WaitAsync"/>, this admission is reserved for
+    /// the cleanup owner and therefore deliberately ignores the quiescing flag.
+    /// The caller must release the ownership with <see cref="Exit"/>.
+    /// </summary>
+    public async Task WaitForCleanupOwnershipAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        ThrowIfDisposed();
+        if (!IsQuiescing)
+        {
+            throw new InvalidOperationException("Cleanup ownership is available only after quiescing begins.");
+        }
+
+        if (!await _semaphore.WaitAsync(timeout, cancellationToken).ConfigureAwait(false))
+        {
+            throw new TimeoutException("Timed out waiting for runtime cleanup ownership.");
+        }
+
+        Interlocked.Increment(ref _activeCount);
+    }
+
+    public async Task WaitForCleanupOwnershipAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        if (!IsQuiescing)
+        {
+            throw new InvalidOperationException("Cleanup ownership is available only after quiescing begins.");
+        }
+
+        await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Interlocked.Increment(ref _activeCount);
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
@@ -652,7 +689,7 @@ public sealed class LatestWinsOperation<T>
 
         if (superseded is not null)
         {
-            superseded.Completion.TrySetException(new OperationSupersededException(_operationName));
+            CompleteDiscardedIntent(superseded);
         }
 
         if (operationToStart is not null)
@@ -669,62 +706,78 @@ public sealed class LatestWinsOperation<T>
         Justification = "The operation task captures arbitrary external failures and completes its own waiter.")]
     private async Task RunAsync(ActiveIntent active)
     {
-        T? result = default;
-        Exception? failure = null;
-        try
+        while (true)
         {
-            result = await active.Operation(active.Value, active.Lifetime.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException exception)
-        {
-            failure = exception;
-        }
-        catch (Exception exception)
-        {
-            failure = exception;
-        }
-
-        ActiveIntent? next = null;
-        lock (_gate)
-        {
-            if (ReferenceEquals(_active, active) && _pending is not null)
+            T? result = default;
+            Exception? failure = null;
+            try
             {
-                next = _pending;
-                _pending = null;
-                _active = next;
+                result = await active.Operation(active.Value, active.Lifetime.Token).ConfigureAwait(false);
             }
-            else
+            catch (OperationCanceledException exception)
             {
-                _active = null;
-                _running = false;
+                failure = exception;
             }
-        }
-
-        active.Lifetime.Dispose();
-        Complete(active.Completion, result, failure);
-
-        if (next is null)
-        {
-            return;
-        }
-
-        if (next.CallerCancellation.IsCancellationRequested)
-        {
-            next.Completion.TrySetCanceled(next.CallerCancellation);
-            lock (_gate)
+            catch (Exception exception)
             {
-                if (ReferenceEquals(_active, next))
+                failure = exception;
+            }
+
+            active.Lifetime.Dispose();
+            Complete(active.Completion, result, failure);
+
+            while (true)
+            {
+                ActiveIntent? next;
+                lock (_gate)
                 {
-                    _active = null;
-                    _running = false;
+                    if (!ReferenceEquals(_active, active))
+                    {
+                        return;
+                    }
+
+                    next = _pending;
+                    _pending = null;
+                    if (next is null)
+                    {
+                        _active = null;
+                        _running = false;
+                        return;
+                    }
+
+                    _active = next;
                 }
+
+                active = next;
+                if (!active.CallerCancellation.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                active.Completion.TrySetCanceled(active.CallerCancellation);
+                active.Lifetime.Dispose();
+                // A newer request may have arrived while this canceled pending
+                // intent was being discarded. Loop back and promote it under
+                // the same ownership instead of leaving it orphaned in
+                // _pending with _running set to false.
             }
 
-            return;
+            await Task.Yield();
+        }
+    }
+
+    private void CompleteDiscardedIntent(ActiveIntent intent)
+    {
+        if (intent.CallerCancellation.IsCancellationRequested)
+        {
+            intent.Completion.TrySetCanceled(intent.CallerCancellation);
+        }
+        else
+        {
+            intent.Completion.TrySetException(new OperationSupersededException(_operationName));
         }
 
-        await Task.Yield();
-        _ = RunAsync(next);
+        intent.Lifetime.Dispose();
     }
 
     private static void Complete(

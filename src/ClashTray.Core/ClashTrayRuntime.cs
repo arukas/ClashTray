@@ -73,8 +73,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private RemoteRefreshCompletion? _remoteRefreshCompletion;
     private readonly Func<TimeSpan, CancellationToken, Task> _remoteRefreshDelayAsync;
     private readonly Func<EndpointSession, EndpointSessionStatusEventArgs, CancellationToken, Task> _remoteLogStreamRunner;
+    private readonly Func<MihomoApiClient>? _controllerApiFactory;
     private bool _usingServiceCore;
-    private bool _coreHealthConfirmed;
+    private long _confirmedCoreLifecycleEpoch = long.MinValue;
+    private long _confirmedCoreProcessGeneration = long.MinValue;
+    private long _confirmedControllerGeneration = long.MinValue;
     private TunState _confirmedTunState = TunState.Unavailable;
     private long _coreLifecycleEpoch;
     private long _proxyOwnershipRevision;
@@ -151,7 +154,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         INetworkContextSource? networkContextSource = null,
         IEndpointSessionConnector? endpointSessionConnector = null,
         Func<TimeSpan, CancellationToken, Task>? remoteRefreshDelayAsync = null,
-        Func<EndpointSession, EndpointSessionStatusEventArgs, CancellationToken, Task>? remoteLogStreamRunner = null)
+        Func<EndpointSession, EndpointSessionStatusEventArgs, CancellationToken, Task>? remoteLogStreamRunner = null,
+        Func<MihomoApiClient>? controllerApiFactory = null)
     {
         bool useDefaultEnvironment = paths is null;
         _paths = paths ?? new AppPaths();
@@ -215,6 +219,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             OnScheduledSubscriptionCycleFailed);
         _remoteRefreshDelayAsync = remoteRefreshDelayAsync ?? Task.Delay;
         _remoteLogStreamRunner = remoteLogStreamRunner ?? RunRemoteLogStreamAsync;
+        _controllerApiFactory = controllerApiFactory;
         _throttledPublisher = new SnapshotPublishThrottle(Publish, _runtimeCts.Token);
         _processManager.StateChanged += OnProcessStateChanged;
         _processManager.LogLineReceived += OnProcessLogLine;
@@ -376,7 +381,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 }
 
                 await ApplyProgramOverridesAsync(
-                    coreRunning: _coreHealthConfirmed,
+                    coreRunning: CoreHealthConfirmed,
                     cancellationToken: cancellationToken);
                 StartPolling();
                 StartOptionalRefreshInBackground(_api);
@@ -515,39 +520,36 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpointId.Value);
-        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        ThrowIfRuntimeQuiescing();
+        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _runtimeCts.Token);
+        CancellationToken token = linked.Token;
+        if (endpointId == EndpointId.Local)
         {
-            if (endpointId == EndpointId.Local)
-            {
-                await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
-                return null;
-            }
-
-            EndpointDescriptor? endpoint = Endpoints.FirstOrDefault(candidate => candidate.Id == endpointId);
-            if (endpoint is null)
-            {
-                throw new KeyNotFoundException($"未找到端点 {endpointId.Value}。");
-            }
-
-            if (!endpoint.IsEnabled)
-            {
-                throw new InvalidOperationException($"端点 {endpoint.DisplayName} 已被禁用。");
-            }
-
-            EndpointSession? session = await _endpointSessions.SelectAsync(endpoint, cancellationToken)
-                .ConfigureAwait(false);
-            if (session is not null)
-            {
-                await WaitForRemoteRefreshAsync(session, cancellationToken).ConfigureAwait(false);
-            }
-
-            return session;
+            await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
+            return null;
         }
-        finally
+
+        EndpointDescriptor? endpoint = Endpoints.FirstOrDefault(candidate => candidate.Id == endpointId);
+        if (endpoint is null)
         {
-            _operationLock.Release();
+            throw new KeyNotFoundException($"未找到端点 {endpointId.Value}。");
         }
+
+        if (!endpoint.IsEnabled)
+        {
+            throw new InvalidOperationException($"端点 {endpoint.DisplayName} 已被禁用。");
+        }
+
+        EndpointSession? session = await _endpointSessions.SelectAsync(endpoint, token)
+            .ConfigureAwait(false);
+        if (session is not null)
+        {
+            await WaitForRemoteRefreshAsync(session, token).ConfigureAwait(false);
+        }
+
+        return session;
     }
 
     public async Task<EndpointHandshakeResult> TestRemoteEndpointAsync(
@@ -555,45 +557,34 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpointId.Value);
-        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        ThrowIfRuntimeQuiescing();
+        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _runtimeCts.Token);
+        if (endpointId == EndpointId.Local)
         {
-            if (endpointId == EndpointId.Local)
-            {
-                throw new InvalidOperationException("只读连接测试仅适用于远程端点。");
-            }
-
-            EndpointDescriptor? endpoint = Endpoints.FirstOrDefault(candidate => candidate.Id == endpointId);
-            if (endpoint is null)
-            {
-                throw new KeyNotFoundException($"未找到端点 {endpointId.Value}。");
-            }
-
-            if (!endpoint.IsEnabled)
-            {
-                throw new InvalidOperationException($"端点 {endpoint.DisplayName} 已被禁用。");
-            }
-
-            return await _endpointSessions.TestAsync(endpoint, cancellationToken)
-                .ConfigureAwait(false);
+            throw new InvalidOperationException("只读连接测试仅适用于远程端点。");
         }
-        finally
+
+        EndpointDescriptor? endpoint = Endpoints.FirstOrDefault(candidate => candidate.Id == endpointId);
+        if (endpoint is null)
         {
-            _operationLock.Release();
+            throw new KeyNotFoundException($"未找到端点 {endpointId.Value}。");
         }
+
+        if (!endpoint.IsEnabled)
+        {
+            throw new InvalidOperationException($"端点 {endpoint.DisplayName} 已被禁用。");
+        }
+
+        return await _endpointSessions.TestAsync(endpoint, linked.Token)
+            .ConfigureAwait(false);
     }
 
     public async Task DisconnectEndpointAsync()
     {
-        await _operationLock.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
-        }
-        finally
-        {
-            _operationLock.Release();
-        }
+        ThrowIfRuntimeQuiescing();
+        await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
     }
 
     public async Task<EndpointCatalogLoadResult> SaveRemoteEndpointAsync(
@@ -779,13 +770,19 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
             catch (ServiceRequestUnknownException exception)
             {
-                UpdateCoreState(CoreState.Failed, $"ClashTray 服务启动结果无法确认，请检查服务状态后重试：{ErrorSanitizer.Sanitize(exception)}");
-                return;
+                serviceResponse = await ReconcileUnknownServiceStartAsync(exception).ConfigureAwait(false);
+                if (serviceResponse is null)
+                {
+                    return;
+                }
             }
             catch (IOException exception)
             {
-                UpdateCoreState(CoreState.Failed, $"ClashTray 服务通信失败，启动结果无法确认：{ErrorSanitizer.Sanitize(exception)}");
-                return;
+                serviceResponse = await ReconcileUnknownServiceStartAsync(exception).ConfigureAwait(false);
+                if (serviceResponse is null)
+                {
+                    return;
+                }
             }
 
             if (serviceResponse is not null)
@@ -843,7 +840,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             }
 
             await ApplyProgramOverridesAsync(
-                coreRunning: _coreHealthConfirmed,
+                coreRunning: CoreHealthConfirmed,
                 cancellationToken: cancellationToken,
                 operationLockHeld: true);
             StartPolling();
@@ -869,6 +866,46 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    private async Task<ServiceResponse?> ReconcileUnknownServiceStartAsync(Exception startException)
+    {
+        // Once StartCore was dispatched, conservatively retain ownership even
+        // when the response was lost. This prevents a local fallback from
+        // starting a second core and guarantees shutdown will still issue the
+        // matching service StopCore request.
+        _usingServiceCore = true;
+        ServiceResponse? status = null;
+        Exception? statusException = null;
+        try
+        {
+            using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(
+                _runtimeCts.Token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            status = await _localDevice.GetStatusAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not StackOverflowException)
+        {
+            statusException = exception;
+        }
+
+        if (status?.Core == CoreState.Running)
+        {
+            _stateStore.Update(snapshot => snapshot with
+            {
+                Tun = AdoptServiceTunState(status.Tun)
+            });
+            return status with { Succeeded = true, Error = null };
+        }
+
+        string statusDetail = status is null
+            ? $"状态查询失败：{ErrorSanitizer.Sanitize(statusException ?? startException)}"
+            : $"服务当前报告 {status.Core}";
+        UpdateCoreState(
+            CoreState.Failed,
+            $"ClashTray 服务启动请求已发送，但结果尚未确认（{statusDetail}）。程序将继续后台核对，并在退出时保守停止服务核心。");
+        StartPolling();
+        return null;
+    }
+
     public Task StopCoreAsync(CancellationToken cancellationToken = default) =>
         AdmitCoreLifecycleAsync(
             "核心",
@@ -888,7 +925,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             Interlocked.Increment(ref _coreLifecycleEpoch);
             UpdateCoreState(CoreState.Stopping, null);
-            _coreHealthConfirmed = false;
+            InvalidateCoreHealth();
             SetController(null);
             await StopLogStreamAsync();
             if (_usingServiceCore)
@@ -1851,70 +1888,63 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             operationCancellationToken,
             _runtimeCts.Token);
         CancellationToken cancellationToken = linked.Token;
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        ThrowIfRuntimeQuiescing();
+        EndpointSession? remoteSession = CaptureActiveRemoteSession(
+            EndpointCommand.TestDelay,
+            "测速期间远程端点会话已切换，请重新测速。");
+        if (remoteSession is not null)
         {
-            EndpointSession? remoteSession = CaptureActiveRemoteSession(
-                EndpointCommand.TestDelay,
-                "测速期间远程端点会话已切换，请重新测速。");
-            if (remoteSession is not null)
-            {
-                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-                using JsonDocument remoteResponse = await remoteSession.Api.TestDelayAsync(
-                    proxy,
-                    new Uri("https://www.gstatic.com/generate_204"),
-                    5000,
-                    cancellationToken);
-                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
-                {
-                    throw new InvalidOperationException(
-                        "测速期间远程端点会话已切换，请重新测速。");
-                }
-
-                int? remoteDelay = remoteResponse.RootElement.TryGetProperty(
-                        "delay",
-                        out JsonElement remoteDelayElement)
-                    && remoteDelayElement.TryGetInt32(out int remoteMilliseconds)
-                    ? remoteMilliseconds
-                    : null;
-                if (!await RefreshRemoteControllerSnapshotAsync(
-                        remoteSession,
-                        remoteStatus,
-                        cancellationToken)
-                    .ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException(
-                        "远程节点测速结果无法确认，请重试。");
-                }
-
-                return remoteDelay;
-            }
-
-            (MihomoApiClient api, long generation) = CaptureControllerSession();
-            EnsureControllerCommand(
-                api,
-                generation,
-                EndpointCommand.TestDelay,
-                "测速期间核心会话已切换，请重新测速。");
-
-            using JsonDocument response = await api.TestDelayAsync(
+            EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+            using JsonDocument remoteResponse = await remoteSession.Api.TestDelayAsync(
                 proxy,
                 new Uri("https://www.gstatic.com/generate_204"),
                 5000,
                 cancellationToken);
-            EnsureControllerSession(api, generation, "测速期间核心会话已切换，请重新测速。");
-            if (response.RootElement.TryGetProperty("delay", out JsonElement delay)
-                && delay.TryGetInt32(out int milliseconds))
+            if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
             {
-                return milliseconds;
+                throw new InvalidOperationException(
+                    "测速期间远程端点会话已切换，请重新测速。");
             }
 
-            return null;
+            int? remoteDelay = remoteResponse.RootElement.TryGetProperty(
+                    "delay",
+                    out JsonElement remoteDelayElement)
+                && remoteDelayElement.TryGetInt32(out int remoteMilliseconds)
+                ? remoteMilliseconds
+                : null;
+            if (!await RefreshRemoteControllerSnapshotAsync(
+                    remoteSession,
+                    remoteStatus,
+                    cancellationToken)
+                .ConfigureAwait(false))
+            {
+                throw new InvalidOperationException(
+                    "远程节点测速结果无法确认，请重试。");
+            }
+
+            return remoteDelay;
         }
-        finally
+
+        (MihomoApiClient api, long generation) = CaptureControllerSession();
+        EnsureControllerCommand(
+            api,
+            generation,
+            EndpointCommand.TestDelay,
+            "测速期间核心会话已切换，请重新测速。");
+
+        using JsonDocument response = await api.TestDelayAsync(
+            proxy,
+            new Uri("https://www.gstatic.com/generate_204"),
+            5000,
+            cancellationToken);
+        EnsureControllerSession(api, generation, "测速期间核心会话已切换，请重新测速。");
+        if (response.RootElement.TryGetProperty("delay", out JsonElement delay)
+            && delay.TryGetInt32(out int milliseconds))
         {
-            _operationLock.Release();
+            return milliseconds;
         }
+
+        return null;
     }
 
     public Task<IReadOnlyDictionary<string, int?>> TestProxyGroupDelayAsync(
@@ -1935,69 +1965,65 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             operationCancellationToken,
             _runtimeCts.Token);
         CancellationToken token = linked.Token;
-        await _operationLock.WaitAsync(token);
+        ThrowIfRuntimeQuiescing();
+        EndpointSession? remoteSession = CaptureActiveRemoteSession(
+            EndpointCommand.TestDelay,
+            "测速期间远程端点会话已切换，请重新测速。");
+        if (remoteSession is not null)
+        {
+            EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+            using JsonDocument remoteResponse = await remoteSession.Api.TestGroupDelayAsync(
+                group,
+                new Uri("https://www.gstatic.com/generate_204"),
+                5000,
+                token);
+            IReadOnlyDictionary<string, int?> remoteDelays =
+                MihomoDataParser.ParseGroupDelays(remoteResponse);
+            if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
+            {
+                throw new InvalidOperationException(
+                    "测速期间远程端点会话已切换，请重新测速。");
+            }
+
+            if (!await RefreshRemoteControllerSnapshotAsync(
+                    remoteSession,
+                    remoteStatus,
+                    token)
+                .ConfigureAwait(false))
+            {
+                throw new InvalidOperationException(
+                    "远程代理组测速结果无法确认，请重试。");
+            }
+
+            return remoteDelays;
+        }
+
+        (MihomoApiClient api, long generation) = CaptureControllerSession();
+        EnsureControllerCommand(
+            api,
+            generation,
+            EndpointCommand.TestDelay,
+            "测速期间核心会话已切换，请重新测速。");
+        using JsonDocument response = await api.TestGroupDelayAsync(group, new Uri("https://www.gstatic.com/generate_204"), 5000, token);
+        IReadOnlyDictionary<string, int?> delays = MihomoDataParser.ParseGroupDelays(response);
+        await _dataRefreshLock.WaitAsync(token);
         try
         {
-            EndpointSession? remoteSession = CaptureActiveRemoteSession(
-                EndpointCommand.TestDelay,
-                "测速期间远程端点会话已切换，请重新测速。");
-            if (remoteSession is not null)
+            // Refresh now/history from the core and apply the confirmed batch result atomically.
+            ProxyDataResult proxies = await TryGetProxyDataAsync(api, token);
+            EnsureControllerSession(api, generation, "测速期间核心会话已切换，请重新测速。");
+
+            string? LatestDelay(string name, string? previous) => delays.TryGetValue(name, out int? delay)
+                ? delay?.ToString(System.Globalization.CultureInfo.InvariantCulture) : previous;
+            _stateStore.Update(snapshot => snapshot with
             {
-                EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-                using JsonDocument remoteResponse = await remoteSession.Api.TestGroupDelayAsync(
-                    group,
-                    new Uri("https://www.gstatic.com/generate_204"),
-                    5000,
-                    token);
-                IReadOnlyDictionary<string, int?> remoteDelays =
-                    MihomoDataParser.ParseGroupDelays(remoteResponse);
-                if (!IsCurrentRemoteSession(remoteSession, remoteStatus))
-                {
-                    throw new InvalidOperationException(
-                        "测速期间远程端点会话已切换，请重新测速。");
-                }
-
-                if (!await RefreshRemoteControllerSnapshotAsync(
-                        remoteSession,
-                        remoteStatus,
-                        token)
-                    .ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException(
-                        "远程代理组测速结果无法确认，请重试。");
-                }
-
-                return remoteDelays;
-            }
-
-            (MihomoApiClient api, long generation) = CaptureControllerSession();
-            EnsureControllerCommand(
-                api,
-                generation,
-                EndpointCommand.TestDelay,
-                "测速期间核心会话已切换，请重新测速。");
-            using JsonDocument response = await api.TestGroupDelayAsync(group, new Uri("https://www.gstatic.com/generate_204"), 5000, token);
-            IReadOnlyDictionary<string, int?> delays = MihomoDataParser.ParseGroupDelays(response);
-            await _dataRefreshLock.WaitAsync(token);
-            try
-            {
-                // Refresh now/history from the core and apply the confirmed batch result atomically.
-                ProxyDataResult proxies = await TryGetProxyDataAsync(api, token);
-                EnsureControllerSession(api, generation, "测速期间核心会话已切换，请重新测速。");
-
-                string? LatestDelay(string name, string? previous) => delays.TryGetValue(name, out int? delay)
-                    ? delay?.ToString(System.Globalization.CultureInfo.InvariantCulture) : previous;
-                _stateStore.Update(snapshot => snapshot with
-                {
-                    ProxyGroups = proxies.Groups.Select(item => item with { Delay = LatestDelay(item.Name, item.Delay) }).ToArray(),
-                    ProxyNodes = proxies.Nodes.Select(item => item with { Delay = LatestDelay(item.Name, item.Delay) }).ToArray()
-                });
-                Publish();
-            }
-            finally { _dataRefreshLock.Release(); }
-            return delays;
+                ProxyGroups = proxies.Groups.Select(item => item with { Delay = LatestDelay(item.Name, item.Delay) }).ToArray(),
+                ProxyNodes = proxies.Nodes.Select(item => item with { Delay = LatestDelay(item.Name, item.Delay) }).ToArray()
+            });
+            Publish();
         }
-        finally { _operationLock.Release(); }
+        finally { _dataRefreshLock.Release(); }
+        return delays;
     }
 
     public async Task CloseConnectionAsync(string id, CancellationToken cancellationToken = default)
@@ -2161,7 +2187,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (systemProxyBindingChanged)
             {
                 await ReconcileSystemProxyAsync(
-                    coreRunning: Snapshot.Core.State == CoreState.Running && _coreHealthConfirmed,
+                    coreRunning: Snapshot.Core.State == CoreState.Running && CoreHealthConfirmed,
                     cancellationToken);
             }
 
@@ -2286,7 +2312,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     cancellationToken);
             }
 
-            if (enabled && !_coreHealthConfirmed)
+            if (enabled && !CoreHealthConfirmed)
             {
                 await RevokeSystemProxyForCoreLossAsync(operationLockHeld: true);
                 _stateStore.Update(snapshot => snapshot with { SystemProxy = _localDevice.SystemProxyState });
@@ -2663,7 +2689,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     }
 
     private bool IsCoreHealthy() =>
-        Snapshot.Core.State == CoreState.Running && _coreHealthConfirmed;
+        Snapshot.Core.State == CoreState.Running && CoreHealthConfirmed;
 
     private async Task RollbackCoreUpdateAsync(CancellationToken cancellationToken)
     {
@@ -2708,9 +2734,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(api);
         SetController(api);
         _usingServiceCore = usingServiceCore;
-        _coreHealthConfirmed = true;
+        ConfirmCoreHealth(
+            Volatile.Read(ref _coreLifecycleEpoch),
+            _processManager.Generation,
+            ControllerGeneration);
         _stateStore.Update(snapshot => snapshot with { Core = snapshot.Core with { State = CoreState.Running } });
     }
+
+    internal bool IsCoreHealthConfirmedForTesting => CoreHealthConfirmed;
+
+    internal void SetCoreStateForTesting(CoreState state) => UpdateCoreState(state, null);
 
     internal Task RefreshControllerDataForTestingAsync(CancellationToken cancellationToken = default) =>
         RefreshFromApiAsync(cancellationToken);
@@ -2761,76 +2794,71 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             "停止订阅调度器",
             _ => _subscriptionScheduler.DisposeAsync().AsTask());
 
+        await _operationLock.WaitForCleanupOwnershipAsync(CancellationToken.None)
+            .ConfigureAwait(false);
+
         try
         {
-            await _operationLock.WaitForIdleAsync(
-                    DisposeCleanupTimeout,
-                    CancellationToken.None)
-                .ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            RecordCleanupFailure(cleanupFailures, "等待普通操作安全点", exception);
-            // A timed-out operation may still complete later. Advance the
-            // lifecycle so its late I/O cannot commit into the shutting-down runtime.
-            Interlocked.Increment(ref _coreLifecycleEpoch);
-        }
+            await RunCleanupStepAsync(
+                cleanupFailures,
+                "等待 TUN 操作安全点",
+                token => _tunOperation.WaitForIdleAsync(DisposeCleanupTimeout, token));
 
-        await RunCleanupStepAsync(
-            cleanupFailures,
-            "等待 TUN 操作安全点",
-            token => _tunOperation.WaitForIdleAsync(DisposeCleanupTimeout, token));
-
-        bool usingServiceCore = _usingServiceCore;
-        await RunCleanupStepAsync(
-            cleanupFailures,
-            "关闭 TUN",
-            async token =>
-            {
-                if (!usingServiceCore || Snapshot.Tun is TunState.Off or TunState.Unavailable)
+            bool usingServiceCore = _usingServiceCore;
+            await RunCleanupStepAsync(
+                cleanupFailures,
+                "关闭 TUN",
+                async token =>
                 {
-                    return;
-                }
+                    if (!usingServiceCore || Snapshot.Tun is TunState.Off or TunState.Unavailable)
+                    {
+                        return;
+                    }
 
-                await RequestTunOperationAsync(
-                        enabled: false,
-                        persistPreference: false,
-                        operationLockHeld: true,
-                        cancellationToken: token)
-                    .ConfigureAwait(false);
-            });
-
-        await RunCleanupStepAsync(
-            cleanupFailures,
-            "恢复系统代理",
-            async token =>
-            {
-                if (Snapshot.SystemProxy is SystemProxyState.On or SystemProxyState.RestoreRequired)
-                {
-                    await SetSystemProxyCoreAsync(
-                            false,
+                    await RequestTunOperationAsync(
+                            enabled: false,
                             persistPreference: false,
-                            cancellationToken: token,
-                            operationLockHeld: true)
+                            operationLockHeld: true,
+                            cancellationToken: token)
                         .ConfigureAwait(false);
-                }
-            });
+                });
 
-        await RunCleanupStepAsync(
-            cleanupFailures,
-            "停止核心",
-            async token =>
-            {
-                if (usingServiceCore
-                    || Snapshot.Core.State is CoreState.Running
-                        or CoreState.Starting
-                        or CoreState.Stopping
-                        or CoreState.Restarting
-                    || _api is not null)
+            await RunCleanupStepAsync(
+                cleanupFailures,
+                "恢复系统代理",
+                async token =>
                 {
-                    await StopCoreCoreAsync(operationLockHeld: true, token).ConfigureAwait(false);
-                }
-            });
+                    if (Snapshot.SystemProxy is SystemProxyState.On or SystemProxyState.RestoreRequired)
+                    {
+                        await SetSystemProxyCoreAsync(
+                                false,
+                                persistPreference: false,
+                                cancellationToken: token,
+                                operationLockHeld: true)
+                            .ConfigureAwait(false);
+                    }
+                });
+
+            await RunCleanupStepAsync(
+                cleanupFailures,
+                "停止核心",
+                async token =>
+                {
+                    if (usingServiceCore
+                        || Snapshot.Core.State is CoreState.Running
+                            or CoreState.Starting
+                            or CoreState.Stopping
+                            or CoreState.Restarting
+                        || _api is not null)
+                    {
+                        await StopCoreCoreAsync(operationLockHeld: true, token).ConfigureAwait(false);
+                    }
+                });
+        }
+        finally
+        {
+            _operationLock.Exit();
+        }
 
         SetController(null);
         await RunCleanupStepAsync(
@@ -2944,7 +2972,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             return;
         }
 
-        bool coreHealthWasUnconfirmed = !_coreHealthConfirmed;
+        bool coreHealthWasUnconfirmed = !CoreHealthConfirmed;
         await RefreshCoreHealthAsync(api, cancellationToken);
         await RefreshOptionalDataAsync(
             api,
@@ -2963,31 +2991,39 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         ProxyMode? mode = MihomoDataParser.ParseMode(configurationState);
         bool? tunEnabled = MihomoDataParser.ParseTunEnabled(configurationState);
 
-        if (!IsCurrentCoreBinding(api, controllerGeneration, lifecycleEpoch, processGeneration))
-        {
-            return;
-        }
-
         TunState observedTun = ResolveConfirmedTunState(tunEnabled);
-        if (!IsCurrentCoreBinding(api, controllerGeneration, lifecycleEpoch, processGeneration))
-        {
-            return;
-        }
-
-        _coreHealthConfirmed = true;
-        _stateStore.Update(snapshot => snapshot with
-        {
-            Core = snapshot.Core with
+        bool committed = _stateStore.TryUpdate(
+            snapshot => snapshot.Core.State == CoreState.Running
+                && IsCurrentCoreBinding(
+                    api,
+                    controllerGeneration,
+                    lifecycleEpoch,
+                    processGeneration),
+            snapshot => snapshot with
             {
-                State = CoreState.Running,
-                Version = versionText ?? snapshot.Core.Version,
-                Mode = mode ?? snapshot.Core.Mode,
+                Core = snapshot.Core with
+                {
+                    State = CoreState.Running,
+                    Version = versionText ?? snapshot.Core.Version,
+                    Mode = mode ?? snapshot.Core.Mode,
+                    ErrorMessage = null
+                },
+                Logs = _logBuffer.Snapshot(),
+                Tun = observedTun,
                 ErrorMessage = null
             },
-            Logs = _logBuffer.Snapshot(),
-            Tun = observedTun,
-            ErrorMessage = null
-        });
+            out _);
+        if (!committed)
+        {
+            return;
+        }
+
+        ConfirmCoreHealth(lifecycleEpoch, processGeneration, controllerGeneration);
+        if (!CoreHealthConfirmed)
+        {
+            return;
+        }
+
         Publish();
         EnsureLogStreamStarted();
     }
@@ -3047,12 +3083,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             Task<ConnectionDataResult> connectionsTask = TryGetConnectionDataAsync(api, cancellationToken);
             Task<IReadOnlyList<RuleInfo>> rulesTask = includeRulesAndProviders
                 ? TryGetRulesAsync(api, cancellationToken)
-                : Task.FromResult<IReadOnlyList<RuleInfo>>(Snapshot.Rules);
+                : Task.FromResult<IReadOnlyList<RuleInfo>>([]);
             Task<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> providersTask =
                 includeRulesAndProviders
                     ? TryGetProvidersAsync(api, cancellationToken)
                     : Task.FromResult<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)>(
-                        (Snapshot.Providers, Snapshot.RuleProviders));
+                        ([], []));
             await Task.WhenAll(proxyTask, trafficTask, memoryTask, connectionsTask, rulesTask, providersTask);
 
             if (!IsCurrentCoreBinding(api, controllerGeneration, lifecycleEpoch, processGeneration))
@@ -3066,52 +3102,70 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             ConnectionDataResult connectionData = await connectionsTask;
             IReadOnlyList<RuleInfo> rulesData = await rulesTask;
             (IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders) providerData = await providersTask;
-            CoreStatus currentCore = Snapshot.Core;
             TrafficSnapshot? traffic = trafficData.Value;
-            IReadOnlyList<ProxyGroup> proxyGroups = proxyData.Succeeded
-                ? ReuseIfEqual(Snapshot.ProxyGroups, proxyData.Groups, ProxyGroupsEqual)
-                : Snapshot.ProxyGroups;
-            IReadOnlyList<ProxyNode> proxyNodes = proxyData.Succeeded
-                ? ReuseIfEqual(Snapshot.ProxyNodes, proxyData.Nodes, ProxyNodesEqual)
-                : Snapshot.ProxyNodes;
-            IReadOnlyList<ConnectionInfo> connections = connectionData.Succeeded
-                ? ReuseIfEqual(Snapshot.Connections, connectionData.Value, EqualityComparer<ConnectionInfo>.Default.Equals)
-                : Snapshot.Connections;
-            IReadOnlyList<RuleInfo> rules = ReuseIfEqual(
-                Snapshot.Rules,
-                rulesData,
-                EqualityComparer<RuleInfo>.Default.Equals);
-            IReadOnlyList<ProviderStatus> providers = ReuseIfEqual(
-                Snapshot.Providers,
-                providerData.Providers,
-                EqualityComparer<ProviderStatus>.Default.Equals);
-            IReadOnlyList<ProviderStatus> ruleProviders = ReuseIfEqual(
-                Snapshot.RuleProviders,
-                providerData.RuleProviders,
-                EqualityComparer<ProviderStatus>.Default.Equals);
-
-            _stateStore.Update(snapshot => snapshot with
-            {
-                Core = currentCore with
+            bool committed = _stateStore.TryUpdate(
+                snapshot => snapshot.Core.State == CoreState.Running
+                    && IsCurrentCoreBinding(
+                        api,
+                        controllerGeneration,
+                        lifecycleEpoch,
+                        processGeneration),
+                snapshot =>
                 {
-                    UploadBytes = traffic?.UploadBytes ?? currentCore.UploadBytes,
-                    DownloadBytes = traffic?.DownloadBytes ?? currentCore.DownloadBytes,
-                    UploadBytesPerSecond = traffic?.UploadBytesPerSecond ?? currentCore.UploadBytesPerSecond,
-                    DownloadBytesPerSecond = traffic?.DownloadBytesPerSecond ?? currentCore.DownloadBytesPerSecond,
-                    TrafficAvailable = trafficData.Succeeded,
-                    ConnectionCount = connectionData.Succeeded ? connectionData.Value.Count : currentCore.ConnectionCount,
-                    MemoryBytes = memoryData.Value,
-                    MemoryAvailable = memoryData.Succeeded
+                    CoreStatus currentCore = snapshot.Core;
+                    return snapshot with
+                    {
+                        Core = currentCore with
+                        {
+                            UploadBytes = traffic?.UploadBytes ?? currentCore.UploadBytes,
+                            DownloadBytes = traffic?.DownloadBytes ?? currentCore.DownloadBytes,
+                            UploadBytesPerSecond = traffic?.UploadBytesPerSecond ?? currentCore.UploadBytesPerSecond,
+                            DownloadBytesPerSecond = traffic?.DownloadBytesPerSecond ?? currentCore.DownloadBytesPerSecond,
+                            TrafficAvailable = trafficData.Succeeded,
+                            ConnectionCount = connectionData.Succeeded
+                                ? connectionData.Value.Count
+                                : currentCore.ConnectionCount,
+                            MemoryBytes = memoryData.Value,
+                            MemoryAvailable = memoryData.Succeeded
+                        },
+                        ProxyGroups = proxyData.Succeeded
+                            ? ReuseIfEqual(snapshot.ProxyGroups, proxyData.Groups, ProxyGroupsEqual)
+                            : snapshot.ProxyGroups,
+                        ProxyNodes = proxyData.Succeeded
+                            ? ReuseIfEqual(snapshot.ProxyNodes, proxyData.Nodes, ProxyNodesEqual)
+                            : snapshot.ProxyNodes,
+                        Connections = connectionData.Succeeded
+                            ? ReuseIfEqual(
+                                snapshot.Connections,
+                                connectionData.Value,
+                                EqualityComparer<ConnectionInfo>.Default.Equals)
+                            : snapshot.Connections,
+                        Rules = includeRulesAndProviders
+                            ? ReuseIfEqual(
+                                snapshot.Rules,
+                                rulesData,
+                                EqualityComparer<RuleInfo>.Default.Equals)
+                            : snapshot.Rules,
+                        Providers = includeRulesAndProviders
+                            ? ReuseIfEqual(
+                                snapshot.Providers,
+                                providerData.Providers,
+                                EqualityComparer<ProviderStatus>.Default.Equals)
+                            : snapshot.Providers,
+                        RuleProviders = includeRulesAndProviders
+                            ? ReuseIfEqual(
+                                snapshot.RuleProviders,
+                                providerData.RuleProviders,
+                                EqualityComparer<ProviderStatus>.Default.Equals)
+                            : snapshot.RuleProviders,
+                        Logs = _logBuffer.Snapshot()
+                    };
                 },
-                ProxyGroups = proxyGroups,
-                ProxyNodes = proxyNodes,
-                Connections = connections,
-                Rules = rules,
-                Providers = providers,
-                RuleProviders = ruleProviders,
-                Logs = _logBuffer.Snapshot()
-            });
-            await _throttledPublisher.RequestAsync(cancellationToken);
+                out _);
+            if (committed)
+            {
+                await _throttledPublisher.RequestAsync(cancellationToken);
+            }
         }
         finally
         {
@@ -3284,6 +3338,36 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     break;
                 }
 
+                if (_usingServiceCore && _api is null)
+                {
+                    ServiceResponse pendingStatus = await _localDevice.GetStatusAsync(_runtimeCts.Token)
+                        .ConfigureAwait(false);
+                    _stateStore.Update(snapshot => snapshot with
+                    {
+                        Tun = AdoptServiceTunState(pendingStatus.Tun)
+                    });
+                    if (pendingStatus.Core != CoreState.Running)
+                    {
+                        const string pendingMessage =
+                            "服务核心启动结果仍未确认，正在等待后台状态收敛。";
+                        _stateStore.Update(snapshot => snapshot with
+                        {
+                            Core = snapshot.Core with
+                            {
+                                State = CoreState.Failed,
+                                ErrorMessage = pendingMessage
+                            },
+                            ErrorMessage = pendingMessage
+                        });
+                        Publish();
+                        retryDelay = IncreaseRetryDelay(retryDelay);
+                        continue;
+                    }
+
+                    SetController(CreateApiClient());
+                    SetCoreRunningPendingHealth(pendingStatus.Tun);
+                }
+
                 await RefreshFromApiAsync(
                     _runtimeCts.Token,
                     includeRulesAndProviders: false);
@@ -3412,6 +3496,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private MihomoApiClient CreateApiClient()
     {
+        if (_controllerApiFactory is not null)
+        {
+            return _controllerApiFactory();
+        }
+
         Uri controllerUri = new Uri($"http://127.0.0.1:{_settings.ControllerPort}/");
         return new MihomoApiClient(_httpClient, controllerUri, string.Empty);
     }
@@ -4289,7 +4378,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task ReconcileSystemProxyAsync(bool coreRunning, CancellationToken cancellationToken)
     {
-        if (_settings.SystemProxyEnabled && coreRunning && _coreHealthConfirmed)
+        if (_settings.SystemProxyEnabled && coreRunning && CoreHealthConfirmed)
         {
             if (_localDevice.SystemProxyState is (SystemProxyState.Off or SystemProxyState.Failed))
             {
@@ -4344,7 +4433,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         if (systemProxyBindingChanged)
         {
             await ReconcileSystemProxyAsync(
-                coreRunning: Snapshot.Core.State == CoreState.Running && _coreHealthConfirmed,
+                coreRunning: Snapshot.Core.State == CoreState.Running && CoreHealthConfirmed,
                 CancellationToken.None);
         }
     }
@@ -4958,7 +5047,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private void SetCoreRunningPendingHealth(TunState tunState)
     {
-        _coreHealthConfirmed = false;
+        InvalidateCoreHealth();
         TunState observedTun = AdoptServiceTunState(tunState);
         _stateStore.Update(snapshot => snapshot with
         {
@@ -4977,7 +5066,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private void MarkCoreHealthUnconfirmed(string phase, Exception exception, int retryCount = 0)
     {
-        _coreHealthConfirmed = false;
+        InvalidateCoreHealth();
         string message = $"核心状态暂时无法确认（{phase}：{DescribeControllerError(exception)}）。";
         LogControllerFailure(phase, "/version 或 /configs", exception, retryCount);
         _stateStore.Update(snapshot => snapshot with
@@ -5149,7 +5238,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         if (state != CoreState.Running)
         {
-            _coreHealthConfirmed = false;
+            InvalidateCoreHealth();
         }
 
         if (!string.IsNullOrWhiteSpace(error))
@@ -5172,7 +5261,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 ControllerGeneration,
                 Volatile.Read(ref _proxyOwnershipRevision),
                 Volatile.Read(ref _proxyIntentRevision),
-                _coreHealthConfirmed));
+                CoreHealthConfirmed));
         }
     }
 
@@ -5199,9 +5288,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private void Publish()
     {
-        RuntimeSnapshot snapshot = Snapshot;
         lock (_publishGate)
         {
+            RuntimeSnapshot snapshot = Snapshot;
             SnapshotChanged?.Invoke(this, snapshot);
             AppSnapshotChanged?.Invoke(this, ComposeAppSnapshot(snapshot));
         }
@@ -5209,9 +5298,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private void PublishAppSnapshot()
     {
-        RuntimeSnapshot snapshot = Snapshot;
         lock (_publishGate)
         {
+            RuntimeSnapshot snapshot = Snapshot;
             AppSnapshotChanged?.Invoke(this, ComposeAppSnapshot(snapshot));
         }
     }
@@ -5245,6 +5334,40 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         Snapshot.Core.State == CoreState.Running
         || _api is not null
         || _usingServiceCore;
+
+    private bool CoreHealthConfirmed =>
+        Volatile.Read(ref _confirmedCoreLifecycleEpoch)
+            == Volatile.Read(ref _coreLifecycleEpoch)
+        && Volatile.Read(ref _confirmedCoreProcessGeneration)
+            == _processManager.Generation
+        && Volatile.Read(ref _confirmedControllerGeneration)
+            == ControllerGeneration
+        && _controllerSessions.Current is not null;
+
+    private void ConfirmCoreHealth(
+        long lifecycleEpoch,
+        long processGeneration,
+        long controllerGeneration)
+    {
+        Volatile.Write(ref _confirmedCoreProcessGeneration, processGeneration);
+        Volatile.Write(ref _confirmedControllerGeneration, controllerGeneration);
+        Volatile.Write(ref _confirmedCoreLifecycleEpoch, lifecycleEpoch);
+    }
+
+    private void InvalidateCoreHealth()
+    {
+        Volatile.Write(ref _confirmedCoreLifecycleEpoch, long.MinValue);
+        Volatile.Write(ref _confirmedCoreProcessGeneration, long.MinValue);
+        Volatile.Write(ref _confirmedControllerGeneration, long.MinValue);
+    }
+
+    private void ThrowIfRuntimeQuiescing()
+    {
+        if (_operationLock.IsQuiescing)
+        {
+            throw new RuntimeQuiescingException();
+        }
+    }
 
     private static bool RequiresCoreRestart(AppSettings previous, AppSettings next) =>
         previous.HttpPort != next.HttpPort

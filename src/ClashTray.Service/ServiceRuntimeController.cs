@@ -116,12 +116,37 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             }
             else
             {
+                if (_requestCache.Count >= MaxCachedRequests)
+                {
+                    Guid[] completedRequestIds = _requestCache
+                        .Where(pair => pair.Value.Completion.Task.IsCompleted)
+                        .OrderBy(pair => pair.Value.ExpiresAt)
+                        .Take((_requestCache.Count - MaxCachedRequests) + 1)
+                        .Select(pair => pair.Key)
+                        .ToArray();
+                    foreach (Guid completedRequestId in completedRequestIds)
+                    {
+                        _requestCache.Remove(completedRequestId);
+                    }
+                }
+
+                if (_requestCache.Count >= MaxCachedRequests)
+                {
+                    return Failure(
+                        request,
+                        "服务请求缓存已被执行中的操作占满，请稍后重试。",
+                        _processManager.State,
+                        ServiceErrorCode.OperationBusy);
+                }
+
                 cached = new CachedRequest
                 {
                     Fingerprint = fingerprint,
                     Completion = new TaskCompletionSource<ServiceResponse>(
                         TaskCreationOptions.RunContinuationsAsynchronously),
-                    ExpiresAt = DateTimeOffset.UtcNow.Add(RequestCacheTtl)
+                    // An in-flight request must never expire: a duplicate with
+                    // the same RequestId has to join the original side effect.
+                    ExpiresAt = DateTimeOffset.MaxValue
                 };
                 _requestCache.Add(request.RequestId, cached);
                 owner = true;
@@ -147,14 +172,17 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 _lifetimeCts.Token);
             ServiceResponse response = await HandleCoreAsync(request, operationTimeout.Token)
                 .ConfigureAwait(false);
+            MarkCachedRequestCompleting(cached);
             cached.Completion.TrySetResult(response);
         }
         catch (OperationCanceledException) when (_lifetimeCts.IsCancellationRequested)
         {
+            MarkCachedRequestCompleting(cached);
             cached.Completion.TrySetCanceled(_lifetimeCts.Token);
         }
         catch (Exception exception)
         {
+            MarkCachedRequestCompleting(cached);
             cached.Completion.TrySetResult(
                 Failure(request, ErrorSanitizer.Sanitize(exception), _processManager.State));
         }
@@ -162,9 +190,20 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         {
             lock (_requestCacheGate)
             {
-                cached.ExpiresAt = DateTimeOffset.UtcNow.Add(RequestCacheTtl);
                 PurgeExpiredRequestsUnsafe();
             }
+        }
+    }
+
+    private void MarkCachedRequestCompleting(CachedRequest cached)
+    {
+        lock (_requestCacheGate)
+        {
+            // Publish the retention window before completing the task. That
+            // prevents a concurrent capacity purge from observing a completed
+            // entry with its in-flight sentinel and removing it before a retry
+            // can join the cached result.
+            cached.ExpiresAt = DateTimeOffset.UtcNow.Add(RequestCacheTtl);
         }
     }
 
@@ -228,7 +267,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         foreach (Guid requestId in _requestCache
-                     .Where(pair => pair.Value.ExpiresAt <= now)
+                     .Where(pair => pair.Value.Completion.Task.IsCompleted
+                         && pair.Value.ExpiresAt <= now)
                      .Select(pair => pair.Key)
                      .ToArray())
         {
@@ -241,6 +281,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
 
         foreach (Guid requestId in _requestCache
+                     .Where(pair => pair.Value.Completion.Task.IsCompleted)
                      .OrderBy(pair => pair.Value.ExpiresAt)
                      .Take(_requestCache.Count - MaxCachedRequests)
                      .Select(pair => pair.Key)
