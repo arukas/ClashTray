@@ -68,6 +68,12 @@ Start-Process -FilePath 'D:\ClashTray\packaging\out\ClashTray-0.3.1-win-x64-Full
 
 After approving UAC, the installer places files under `C:\Program Files\ClashTray`, installs the bundled core under `%PROGRAMDATA%\ClashTray\core`, registers and starts `ClashTrayService`, creates a Start Menu shortcut, starts the tray app, and writes the normal Windows uninstall entry. The service pipe is ACL-restricted to the installing user, LocalSystem, and Administrators.
 
+Installer user-identity support matrix:
+
+- **Standard elevation** (the installing user approves UAC with their own admin-capable account): the installer's account and the desktop session account are the same; all per-user decisions apply to that account.
+- **Over-the-shoulder (OTS) elevation** (a standard user runs the installer with a *different* administrator's credentials): the installer resolves the interactive session user through the session's `explorer.exe` owner, so the Mini runtime check and the service `--user-sid` ACL anchor to the account that will actually run ClashTray, not to the administrator whose credentials were used. If the session user cannot be resolved (for example no shell is running in the session), the installer falls back to the elevating account (the pre-0.3.2 `whoami` behavior).
+- **Unattended/service-session installation** (no interactive session) is not a supported install scenario for the Mini runtime check, because Windows App Runtime is registered per user; use Full/NoCET there.
+
 For a first manual verification:
 
 1. Quit any running ClashTray instance from its tray menu.

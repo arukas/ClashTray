@@ -217,6 +217,69 @@ begin
   Result := FailWith('ClashTrayService 仍在等待删除，请稍后重试。');
 end;
 
+function GetActiveSessionUserSid(): string;
+var
+  PowerShellPath: string;
+  Params: string;
+  ResultCode: Integer;
+  Output: TExecOutput;
+  I: Integer;
+  Line: string;
+begin
+  Result := '';
+  PowerShellPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  if not FileExists(PowerShellPath) then
+    exit;
+
+  // The spawned PowerShell shares the installer's session. Resolving the user
+  // through the session's explorer.exe owner yields the interactive account
+  // that will run ClashTray, even when the installer itself was elevated with
+  // over-the-shoulder administrator credentials (where whoami would report the
+  // administrator instead).
+  Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "'
+    + '$ErrorActionPreference = ''Stop''; '
+    + '$sessionId = (Get-Process -Id $PID).SessionId; '
+    + '$explorer = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq ''explorer.exe'' -and $_.SessionId -eq $sessionId } | Select-Object -First 1; '
+    + 'if ($null -eq $explorer) { exit 2 }; '
+    + '$owner = Invoke-CimMethod -InputObject $explorer -MethodName GetOwner; '
+    + 'if ($owner.ReturnValue -ne 0) { exit 3 }; '
+    + '$account = New-Object System.Security.Principal.NTAccount($owner.Domain, $owner.User); '
+    + 'Write-Output $account.Translate([System.Security.Principal.SecurityIdentifier]).Value"';
+  if not ExecAndCaptureOutput(
+    PowerShellPath,
+    Params,
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode,
+    Output) then
+    exit;
+  if ResultCode <> 0 then
+    exit;
+
+  for I := 0 to GetArrayLength(Output.StdOut) - 1 do
+  begin
+    Line := Trim(Output.StdOut[I]);
+    if Pos('S-1-', Line) = 1 then
+    begin
+      Result := Line;
+      exit;
+    end;
+  end;
+end;
+
+function GetCurrentUserSid(): string; forward;
+
+function ResolveInstallUserSid(): string;
+begin
+  // Prefer the interactive session user so over-the-shoulder elevation keeps
+  // per-user decisions (Windows App Runtime registration, service --user-sid)
+  // anchored to the account that will actually run ClashTray.
+  Result := GetActiveSessionUserSid();
+  if Result = '' then
+    Result := GetCurrentUserSid();
+end;
+
 function GetCurrentUserSid(): string;
 var
   ResultCode: Integer;
@@ -315,7 +378,7 @@ var
 begin
   Result := False;
   DetectedVersion := '';
-  UserSid := GetCurrentUserSid();
+  UserSid := ResolveInstallUserSid();
   if UserSid = '' then
     exit;
 
@@ -440,7 +503,7 @@ begin
     exit;
   end;
 
-  UserSid := GetCurrentUserSid();
+  UserSid := ResolveInstallUserSid();
   if UserSid = '' then
   begin
     LastInstallerError := '无法确定当前 Windows 用户 SID，不能安全配置服务管道权限。';
