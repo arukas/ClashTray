@@ -88,7 +88,7 @@ public partial class App : Application, IAsyncDisposable
         try
         {
             await _mainWindow!.CaptureSmokeTestAsync(_smokeDirectory!);
-            RequestQuit();
+            await RequestQuitAsync();
         }
         catch (Exception exception)
         {
@@ -97,10 +97,18 @@ public partial class App : Application, IAsyncDisposable
         }
     }
 
-    public async void RequestQuit()
+    public async Task RequestQuitAsync()
     {
         _mainWindow?.AllowClose();
-        await DisposeAsync();
+        try
+        {
+            await DisposeAsync();
+        }
+        catch (Exception)
+        {
+            // An explicit quit must still complete when cleanup fails; the
+            // runtime has already logged the individual cleanup failures.
+        }
         _mainWindow?.Close();
         Environment.Exit(0);
     }
@@ -304,7 +312,7 @@ public partial class App : Application, IAsyncDisposable
                     _ = SetLocalModeFromTrayAsync(ProxyMode.Direct);
                     break;
                 case 1009:
-                    RequestQuit();
+                    _ = RequestQuitAsync();
                     break;
             }
         });

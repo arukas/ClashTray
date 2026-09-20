@@ -695,7 +695,7 @@ public sealed partial class MainWindow : Window
 
     private void SettingsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_settingsPage, PanelPage.Settings);
 
-    private void QuitButton_Click(object sender, RoutedEventArgs e) => _app.RequestQuit();
+    private async void QuitButton_Click(object sender, RoutedEventArgs e) => await _app.RequestQuitAsync();
 
     private void CopyEndpointButton_Click(object sender, RoutedEventArgs e)
     {
