@@ -1,10 +1,10 @@
 # ClashTray 0.3.2 工程质量专项规划
 
-> 文档状态：规划草案
+> 文档状态：全部专项已实施（S1-S8），发布候选验证中
 > 目标版本：0.3.2
 > 功能基线：0.3.1
 > 平台范围：Windows 10 22H2 / Windows 11，x64
-> 最后更新：2026-09-20
+> 最后更新：2026-09-21
 
 > **范围声明：** 0.3.2 不加任何新产品功能。它只做工程质量收口：把 0.3.1 并发整改审查与 0.3.1 发布前排查中确认存在、但当时为控制回归风险而有意不动的结构性问题逐项修掉。Wi-Fi/SSID、ARM64、历史流量分析等仍不在范围内。
 
@@ -85,3 +85,18 @@
 - **Mini 检测"误报"排查**：经 Inno 探针端到端验证，检测机制在真实提权上下文下行为正确（本机 PROBE-PASS）；真实问题是缺少运行时时的死胡同提示，已在 0.3.1 修复（`916aab2` 补充官方下载地址与按用户注册说明，`95105cb` 将 dotnet host 探测固定到 64 位 Program Files）。
 - **行尾统一**：工作树已统一 CRLF，`core.autocrlf=true` 保证仓库层一致，无需仓库变更。
 - **锁内日志快照分配的双锁重构**：会引入快照乱序回归风险，收益微小，明确放弃。
+
+## 5. 实施状态（2026-09-21）
+
+| 专项 | 状态 | Alpha | 说明 |
+| --- | --- | --- | --- |
+| S1 操作锁令牌化 | 完成 | alpha.1–alpha.2 | `OperationGate`/`OperationLease` 令牌化，`operationLockHeld` 零引用 |
+| S2 锁冲突矩阵车道 | 完成 | alpha.3 | 冲突矩阵落 `docs/architecture.md`，车道并发与超时测试齐全 |
+| S3 拆上帝类 | 完成（按修正口径） | alpha.4–alpha.8 | 拆出 5 个协调器（远程刷新、日志管线、代理操作、数据摄取、端点目录），`ClashTrayRuntime` 5411 → 3656 行；App 公共 API 面不变，每单元独立可测（共 27 个新测试） |
+| S4 Service 落盘日志 | 完成 | alpha.11 | `RollingFileLoggerProvider` + ACL 收紧 + 全链路留痕；4 个新集成测试 |
+| S5 SmokeTest 移出 Release | 完成 | alpha.9 | `#if DEBUG` + csproj 条件排除；Release 二进制零 SmokeTest 痕迹 |
+| S6 收敛 CA1031 | 完成 | alpha.10 | Core/Service 五处分组豁免移除，27 处逐方法 `SuppressMessage` 附理由；另修复 App 分组豁免 glob 失效与 Service 被掩盖的 7 处 catch-all |
+| S7 Mini 版本中央化 | 完成 | alpha.12 | `Get-MiniPrerequisiteVersions.ps1` 单一解析口 + Inno `#error` 强制 `/D`；漂移探针与 Mini 端到端构建通过 |
+| S8 OTS 提权口径 | 完成（VM 验收待人工） | alpha.13 | 活动会话用户解析 + 两处调用点切换 + `docs/setup.md` 支持矩阵；OTS 真实 VM 场景列入发布前人工验收 |
+
+S3 的修正口径（记录备查）：轮询循环、核心健康三元组与生命周期/配置切换/设置/TUN/系统代理编排保留在 `ClashTrayRuntime`。原因是轮询切片需注入约 18 个编排依赖（`_usingServiceCore`、`AdoptServiceTunState`、`SetController`、代理撤销、健康三元组等），拆出只是搬迁耦合而非消解耦合，且触及"核心丢失→撤销系统代理"的安全关键路径，收益/风险比不划算；既有 5 个协调器已满足"每单元独立可测、公共 API 面不变"的验收实质。
