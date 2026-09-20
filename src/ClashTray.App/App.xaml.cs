@@ -121,11 +121,19 @@ public partial class App : Application, IAsyncDisposable
         }
 
         _disposed = true;
+        _instanceCoordinator.ActivationRequested -= OnActivationRequested;
+        _runtime.AppSnapshotChanged -= OnAppSnapshotChanged;
+        if (_trayIcon is not null)
+        {
+            _trayIcon.MenuItemSelected -= OnMenuItemSelected;
+        }
+
         lock (_snapshotDispatchGate)
         {
             _pendingAppSnapshot = null;
             _snapshotDispatchScheduled = false;
         }
+
         _trayIcon?.Dispose();
         await _runtime.DisposeAsync();
         _instanceCoordinator.Dispose();

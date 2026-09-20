@@ -737,6 +737,7 @@ public sealed partial class MainWindow : Window
     {
         if (_allowClose)
         {
+            _appWindow?.Closing -= AppWindow_Closing;
             return;
         }
 
