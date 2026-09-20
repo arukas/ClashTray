@@ -387,18 +387,30 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _lifetimeCts.CancelAsync().ConfigureAwait(false);
+        // Cleanup runs on its own bounded token: it must not inherit a caller
+        // token that may already be canceled, and it must not hang forever.
+        using CancellationTokenSource cleanupTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        CancellationToken cleanupToken = cleanupTimeout.Token;
         bool safeToStopCore = _processManager.State != CoreState.Running
             && (_tunState is TunState.Off or TunState.Unavailable);
         try
         {
             if (_api is not null)
             {
-                TunShutdownResult tunShutdown = await TunShutdownGuard.EnsureDisabledAsync(
-                    _api,
-                    _tunHealthProbe,
-                    CancellationToken.None);
-                SetTunState(tunShutdown.State);
-                safeToStopCore = tunShutdown.Succeeded;
+                try
+                {
+                    TunShutdownResult tunShutdown = await TunShutdownGuard.EnsureDisabledAsync(
+                        _api,
+                        _tunHealthProbe,
+                        cleanupToken);
+                    SetTunState(tunShutdown.State);
+                    safeToStopCore = tunShutdown.Succeeded;
+                }
+                catch (OperationCanceledException) when (cleanupTimeout.IsCancellationRequested)
+                {
+                    SetTunState(TunState.Unknown);
+                    safeToStopCore = false;
+                }
             }
 
             _processManager.LogLineReceived -= OnProcessLogLine;

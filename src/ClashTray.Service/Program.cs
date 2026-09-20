@@ -25,6 +25,22 @@ internal static class Program
 
         await using ServiceCommandHost commandHost = new ServiceCommandHost(userSid);
         commandHost.Start();
-        await Task.Delay(Timeout.InfiniteTimeSpan);
+
+        // Console mode must still run the full cleanup path on Ctrl+C /
+        // process exit; otherwise the hosted core and TUN state leak.
+        using CancellationTokenSource shutdown = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, eventArgs) =>
+        {
+            eventArgs.Cancel = true;
+            shutdown.Cancel();
+        };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => shutdown.Cancel();
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, shutdown.Token);
+        }
+        catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+        {
+        }
     }
 }
