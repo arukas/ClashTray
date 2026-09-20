@@ -6,7 +6,7 @@ namespace ClashTray.Core;
 
 public sealed record CoreUpdateManifest(string Version, Uri DownloadUri, string Sha256);
 
-public sealed class CoreUpdater
+public sealed class CoreUpdater : IDisposable
 {
     private const long MaxArchiveBytes = 128L * 1024 * 1024;
     private const long MaxExecutableBytes = 128L * 1024 * 1024;
@@ -15,6 +15,7 @@ public sealed class CoreUpdater
         WriteIndented = true
     };
     private readonly HttpClient _httpClient;
+    private readonly bool _ownsHttpClient;
     private readonly AppPaths _paths;
     private readonly string? _managedUserSid;
 
@@ -24,8 +25,17 @@ public sealed class CoreUpdater
         string? managedUserSid = null)
     {
         _paths = paths;
+        _ownsHttpClient = httpClient is null;
         _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
         _managedUserSid = managedUserSid;
+    }
+
+    public void Dispose()
+    {
+        if (_ownsHttpClient)
+        {
+            _httpClient.Dispose();
+        }
     }
 
     public async Task<string> DownloadAndInstallAsync(

@@ -426,6 +426,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         finally
         {
             _operationGate.Dispose();
+            _coreUpdater.Dispose();
             _httpClient.Dispose();
             _coreUpdateHttpClient.Dispose();
             _lifetimeCts.Dispose();

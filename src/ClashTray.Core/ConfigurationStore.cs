@@ -24,6 +24,7 @@ public sealed class ConfigurationStore
     private const int MaxBackupBytes = 24 * 1024 * 1024;
     private const int BackupSchemaVersion = 1;
     private static readonly string[] SupportedExtensions = [".yaml", ".yml"];
+    private static readonly HttpClient SharedSubscriptionClient = CreateSubscriptionClient();
     private readonly AppPaths _paths;
     private readonly HttpMessageHandler? _subscriptionHandler;
     private readonly IConfigurationCandidateValidator? _candidateValidator;
@@ -141,15 +142,17 @@ public sealed class ConfigurationStore
             throw new InvalidDataException("Subscription URL must be an absolute HTTP or HTTPS URL.");
         }
 
-        using HttpClient httpClient = _subscriptionHandler is null
-            ? new HttpClient()
-            : new HttpClient(_subscriptionHandler, disposeHandler: false);
-        httpClient.Timeout = TimeSpan.FromSeconds(30);
-        httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(BundledMihomo.UserAgent);
-        using HttpResponseMessage response = await httpClient.GetAsync(subscriptionUri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        await using Stream responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        byte[] bytes = await ReadBytesWithLimitAsync(responseStream, cancellationToken);
+        byte[] bytes;
+        if (_subscriptionHandler is null)
+        {
+            bytes = await DownloadSubscriptionAsync(SharedSubscriptionClient, subscriptionUri, cancellationToken);
+        }
+        else
+        {
+            using HttpClient scopedClient = CreateSubscriptionClient(_subscriptionHandler);
+            bytes = await DownloadSubscriptionAsync(scopedClient, subscriptionUri, cancellationToken);
+        }
+
         ValidateYaml(bytes);
         byte[] contentHash = SHA256.HashData(bytes);
         string id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(subscriptionUri.ToString()))).ToLowerInvariant()[..16];
@@ -612,6 +615,28 @@ public sealed class ConfigurationStore
 
     private static bool IsValidProfileId(string id) =>
         id.Length == 16 && id.All(Uri.IsHexDigit);
+
+    private static HttpClient CreateSubscriptionClient(HttpMessageHandler? handler = null)
+    {
+        HttpClient client = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
+        client.Timeout = TimeSpan.FromSeconds(30);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(BundledMihomo.UserAgent);
+        return client;
+    }
+
+    private static async Task<byte[]> DownloadSubscriptionAsync(
+        HttpClient httpClient,
+        Uri subscriptionUri,
+        CancellationToken cancellationToken)
+    {
+        using HttpResponseMessage response = await httpClient.GetAsync(
+            subscriptionUri,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+        await using Stream responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        return await ReadBytesWithLimitAsync(responseStream, cancellationToken);
+    }
 
     private static async Task<byte[]> ReadBytesWithLimitAsync(Stream source, CancellationToken cancellationToken)
     {

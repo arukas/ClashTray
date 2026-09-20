@@ -29,7 +29,7 @@ public sealed class CoreUpdaterTests
             byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
             using ArchiveHandler handler = new ArchiveHandler(archiveBytes);
             using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
-            CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
             CoreUpdateManifest manifest = CreateManifest(archiveBytes);
 
             string installedPath = await updater.DownloadAndInstallAsync(manifest);
@@ -65,7 +65,7 @@ public sealed class CoreUpdaterTests
             byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
             using ArchiveHandler handler = new ArchiveHandler(archiveBytes);
             using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
-            CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
 
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(CreateManifest(archiveBytes)));
             Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable));
@@ -87,7 +87,7 @@ public sealed class CoreUpdaterTests
         {
             using OversizedArchiveHandler handler = new OversizedArchiveHandler();
             using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
-            CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
 
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(
                 CreateManifest([])));
@@ -118,7 +118,7 @@ public sealed class CoreUpdaterTests
             byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
             using MutableArchiveHandler handler = new MutableArchiveHandler(archiveBytes);
             using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
-            CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
 
             await updater.DownloadAndInstallAsync(CreateManifest(archiveBytes) with { Version = "v1" });
             await updater.DownloadAndInstallAsync(CreateManifest(archiveBytes) with { Version = "v2" });
@@ -152,7 +152,7 @@ public sealed class CoreUpdaterTests
 
         try
         {
-            CoreUpdater updater = new CoreUpdater(paths);
+            using CoreUpdater updater = new CoreUpdater(paths);
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(
                 new CoreUpdateManifest(
                     "v0.0.0-test",

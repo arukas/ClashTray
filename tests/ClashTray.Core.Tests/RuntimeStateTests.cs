@@ -1196,7 +1196,7 @@ public sealed class RuntimeStateTests
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
-        CoreUpdater updater = new CoreUpdater(paths);
+        using CoreUpdater updater = new CoreUpdater(paths);
 
         try
         {
