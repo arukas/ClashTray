@@ -28,7 +28,10 @@
   #define IncludeCore "1"
 #endif
 #ifndef MiniDotNetMajorVersion
-  #define MiniDotNetMajorVersion "10"
+  #error "MiniDotNetMajorVersion must be supplied via /D by Build-EXE.ps1 (resolved from the App project TargetFramework)."
+#endif
+#ifndef MiniWinAppRuntimeMajorMinor
+  #error "MiniWinAppRuntimeMajorMinor must be supplied via /D by Build-EXE.ps1 (resolved from Directory.Packages.props)."
 #endif
 
 [Setup]
@@ -93,7 +96,7 @@ Filename: "{app}\App\ClashTray.App.exe"; WorkingDir: "{app}\App"; Description: "
 const
   InstallerVariant = '{#Variant}';
   RequiredDotNetMajorVersion = '{#MiniDotNetMajorVersion}';
-  RequiredWinAppRuntimeMajorMinor = '2.4';
+  RequiredWinAppRuntimeMajorMinor = '{#MiniWinAppRuntimeMajorMinor}';
   ServiceName = 'ClashTrayService';
   ServiceKey = 'SYSTEM\CurrentControlSet\Services\ClashTrayService';
   ServiceExecutableName = 'ClashTray.Service.exe';
