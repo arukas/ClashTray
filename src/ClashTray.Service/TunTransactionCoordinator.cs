@@ -451,8 +451,11 @@ internal sealed class TunTransactionCoordinator
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            System.Diagnostics.Trace.TraceWarning(
+                "ClashTray service: TUN disable convergence failed: {0}",
+                ErrorSanitizer.Sanitize(exception));
             return false;
         }
     }
@@ -471,8 +474,11 @@ internal sealed class TunTransactionCoordinator
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            System.Diagnostics.Trace.TraceWarning(
+                "ClashTray service: TUN recovery restart failed: {0}",
+                ErrorSanitizer.Sanitize(exception));
             return false;
         }
     }
@@ -509,8 +515,11 @@ internal sealed class TunTransactionCoordinator
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            System.Diagnostics.Trace.TraceWarning(
+                "ClashTray service: TUN post-restart confirmation failed: {0}",
+                ErrorSanitizer.Sanitize(exception));
             return false;
         }
     }

@@ -978,8 +978,11 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             {
                 throw;
             }
-            catch
+            catch (Exception exception)
             {
+                System.Diagnostics.Trace.TraceWarning(
+                    "ClashTray service: recovery restart after TUN shutdown failed: {0}",
+                    ErrorSanitizer.Sanitize(exception));
                 return false;
             }
         }
