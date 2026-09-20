@@ -164,6 +164,56 @@ internal sealed class OperationGate : IDisposable
         Interlocked.Increment(ref _activeCount);
     }
 
+    /// <summary>
+    /// Acquires the mutation lane and returns a lease that releases it on
+    /// disposal. Ownership is lexical: holders pass the lease down the call
+    /// chain instead of tracking a boolean flag.
+    /// </summary>
+    public async Task<Lease> AcquireAsync(CancellationToken cancellationToken = default)
+    {
+        await WaitAsync(cancellationToken).ConfigureAwait(false);
+        return new Lease(this);
+    }
+
+    /// <summary>
+    /// Non-blocking variant of <see cref="AcquireAsync"/>; returns <see langword="null"/>
+    /// when the lane is busy or quiescing instead of waiting.
+    /// </summary>
+    public Lease? TryAcquire() => TryEnter() ? new Lease(this) : null;
+
+    /// <summary>
+    /// Lease-returning variant of <see cref="WaitForCleanupOwnershipAsync(TimeSpan, CancellationToken)"/>.
+    /// </summary>
+    public async Task<Lease> AcquireCleanupOwnershipAsync(
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        await WaitForCleanupOwnershipAsync(timeout, cancellationToken).ConfigureAwait(false);
+        return new Lease(this);
+    }
+
+    /// <summary>
+    /// Lease-returning variant of <see cref="WaitForCleanupOwnershipAsync(CancellationToken)"/>.
+    /// </summary>
+    public async Task<Lease> AcquireCleanupOwnershipAsync(CancellationToken cancellationToken = default)
+    {
+        await WaitForCleanupOwnershipAsync(cancellationToken).ConfigureAwait(false);
+        return new Lease(this);
+    }
+
+    /// <summary>
+    /// Lexical ownership token for the mutation lane. Disposing releases the
+    /// lane exactly once; repeated disposal is a no-op.
+    /// </summary>
+    public sealed class Lease : IDisposable
+    {
+        private OperationGate? _owner;
+
+        internal Lease(OperationGate owner) => _owner = owner;
+
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.Exit();
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)

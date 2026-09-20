@@ -199,7 +199,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _networkRuleStore,
             networkContextSource,
             CreateNetworkSwitchPolicyInput,
-            (request, cancellation) => ExecuteConfigurationSwitchAsync(request, cancellation));
+            (request, cancellation) => ExecuteConfigurationSwitchWithLeaseAsync(request, cancellation));
         _networkSwitchRuntimeController.StatusChanged += OnNetworkSwitchStatusChanged;
         _settingsStore = settingsStore ?? new SettingsStore(_paths);
         _startupRegistration = startupRegistration
@@ -348,7 +348,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             },
             SystemProxy = _localDevice.DetectSystemProxyState()
         });
-        await ApplyProgramOverridesAsync(coreRunning: false, cancellationToken: cancellationToken);
+        await ApplyProgramOverridesWithLeaseAsync(coreRunning: false, cancellationToken: cancellationToken);
         try
         {
             ServiceResponse serviceStatus = await _localDevice.GetStatusAsync(cancellationToken);
@@ -380,7 +380,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     MarkCoreHealthUnconfirmed("初始化", exception);
                 }
 
-                await ApplyProgramOverridesAsync(
+                await ApplyProgramOverridesWithLeaseAsync(
                     coreRunning: CoreHealthConfirmed,
                     cancellationToken: cancellationToken);
                 StartPolling();
@@ -592,15 +592,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
-        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken).ConfigureAwait(false))
         {
             await _endpointStore.UpsertAsync(endpoint, cancellationToken).ConfigureAwait(false);
             return await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _operationLock.Release();
         }
     }
 
@@ -612,8 +607,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
-        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken).ConfigureAwait(false))
         {
             await _endpointProvisioningCoordinator.ProvisionAsync(
                     descriptor,
@@ -623,10 +617,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     cancellationToken)
                 .ConfigureAwait(false);
             return await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _operationLock.Release();
         }
     }
 
@@ -639,8 +629,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
-        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken).ConfigureAwait(false))
         {
             await _endpointProvisioningCoordinator.UpdateAsync(
                     endpointId,
@@ -652,18 +641,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 .ConfigureAwait(false);
             return await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
         }
-        finally
-        {
-            _operationLock.Release();
-        }
     }
 
     public async Task<EndpointRemovalResult> RemoveRemoteEndpointAsync(
         EndpointId endpointId,
         CancellationToken cancellationToken = default)
     {
-        await _operationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken).ConfigureAwait(false))
         {
             EndpointRemovalResult result = await _endpointRemovalCoordinator.RemoveAsync(
                     endpointId,
@@ -672,49 +656,37 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
             return result;
         }
-        finally
-        {
-            _operationLock.Release();
-        }
     }
 
     public Task StartCoreAsync(CancellationToken cancellationToken = default) =>
         AdmitCoreLifecycleAsync(
             "核心",
-            token => StartCoreCoreAsync(operationLockHeld: true, token),
+            (operationLease, token) => StartCoreCoreAsync(operationLease, token),
             cancellationToken);
 
     private async Task AdmitCoreLifecycleAsync(
         string operationName,
-        Func<CancellationToken, Task> operation,
+        Func<OperationGate.Lease, CancellationToken, Task> operation,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(operation);
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_operationLock.TryEnter())
+        OperationGate.Lease? lease = _operationLock.TryAcquire();
+        if (lease is null)
         {
             throw new OperationBusyException(operationName);
         }
 
-        try
+        using (lease)
         {
-            await operation(cancellationToken).ConfigureAwait(false);
-        }
-        finally
-        {
-            _operationLock.Exit();
+            await operation(lease, cancellationToken).ConfigureAwait(false);
         }
     }
 
     private async Task StartCoreCoreAsync(
-        bool operationLockHeld,
+        OperationGate.Lease operationLease,
         CancellationToken cancellationToken)
     {
-        if (!operationLockHeld)
-        {
-            await _operationLock.WaitAsync(cancellationToken);
-        }
-
         try
         {
             if (Snapshot.Core.State == CoreState.Running)
@@ -730,7 +702,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 UpdateCoreState(CoreState.Missing, "未找到 Mihomo 核心，请在设置中安装或选择 mihomo.exe");
                 await RevokeSystemProxyForCoreLossAsync(
-                    operationLockHeld: true,
+                    operationLease,
                     cancellationToken: cancellationToken);
                 return;
             }
@@ -739,7 +711,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 UpdateCoreState(CoreState.Failed, "请先导入一个 Mihomo 配置");
                 await RevokeSystemProxyForCoreLossAsync(
-                    operationLockHeld: true,
+                    operationLease,
                     cancellationToken: cancellationToken);
                 return;
             }
@@ -848,7 +820,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             await ApplyProgramOverridesAsync(
                 coreRunning: CoreHealthConfirmed,
                 cancellationToken: cancellationToken,
-                operationLockHeld: true);
+                operationLease: operationLease);
             StartPolling();
             StartOptionalRefreshInBackground(_api);
         }
@@ -859,16 +831,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             await RevokeSystemProxyForCoreLossAsync(
-                operationLockHeld: true,
+                operationLease,
                 cancellationToken: cancellationToken);
             UpdateCoreState(CoreState.Failed, ErrorSanitizer.Sanitize(exception));
-        }
-        finally
-        {
-            if (!operationLockHeld)
-            {
-                _operationLock.Release();
-            }
         }
     }
 
@@ -915,18 +880,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public Task StopCoreAsync(CancellationToken cancellationToken = default) =>
         AdmitCoreLifecycleAsync(
             "核心",
-            token => StopCoreCoreAsync(operationLockHeld: true, token),
+            (operationLease, token) => StopCoreCoreAsync(operationLease, token),
             cancellationToken);
 
     private async Task StopCoreCoreAsync(
-        bool operationLockHeld,
+        OperationGate.Lease operationLease,
         CancellationToken cancellationToken)
     {
-        if (!operationLockHeld)
-        {
-            await _operationLock.WaitAsync(cancellationToken);
-        }
-
         try
         {
             Interlocked.Increment(ref _coreLifecycleEpoch);
@@ -1014,12 +974,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         finally
         {
             await RevokeSystemProxyForCoreLossAsync(
-                operationLockHeld: true,
+                operationLease,
                 cancellationToken: cancellationToken);
-            if (!operationLockHeld)
-            {
-                _operationLock.Release();
-            }
         }
     }
 
@@ -1029,11 +985,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             RestartCoreCoreAsync,
             cancellationToken);
 
-    private async Task RestartCoreCoreAsync(CancellationToken cancellationToken)
+    private async Task RestartCoreCoreAsync(
+        OperationGate.Lease operationLease,
+        CancellationToken cancellationToken)
     {
         UpdateCoreState(CoreState.Restarting, null);
-        await StopCoreCoreAsync(operationLockHeld: true, cancellationToken);
-        await StartCoreCoreAsync(operationLockHeld: true, cancellationToken);
+        await StopCoreCoreAsync(operationLease, cancellationToken);
+        await StartCoreCoreAsync(operationLease, cancellationToken);
     }
 
     public async Task<ConfigurationProfile> ImportLocalConfigurationAsync(string path, string? name = null, CancellationToken cancellationToken = default)
@@ -1084,19 +1042,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task RefreshSubscriptionCoreAsync(ConfigurationProfile profile, CancellationToken cancellationToken)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
-            await RefreshSubscriptionCoreLockedAsync(profile, cancellationToken);
-        }
-        finally
-        {
-            _operationLock.Release();
+            await RefreshSubscriptionCoreLockedAsync(profile, operationLease, cancellationToken);
         }
     }
 
     private async Task RefreshSubscriptionCoreLockedAsync(
         ConfigurationProfile profile,
+        OperationGate.Lease operationLease,
         CancellationToken cancellationToken)
     {
         if (profile.SubscriptionUri is null)
@@ -1162,8 +1116,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     ForceApply: update.ContentChanged);
                 ConfigurationSwitchResult result = await ExecuteConfigurationSwitchAsync(
                     request,
-                    cancellationToken,
-                    operationLockHeld: true);
+                    operationLease,
+                    cancellationToken);
                 switchCommitted = result.Outcome is
                     ConfigurationSwitchOutcome.NoOp
                     or ConfigurationSwitchOutcome.Committed;
@@ -1256,8 +1210,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             return;
         }
 
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             await _configurationStore.ReloadAsync(profile, cancellationToken);
             bool isActive = profile.IsActive
@@ -1270,29 +1223,24 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                         profile.Id,
                         restartCore: Snapshot.Core.State == CoreState.Running,
                         forceApply: true),
-                    cancellationToken,
-                    operationLockHeld: true);
+                    operationLease,
+                    cancellationToken);
             }
             else
             {
                 await RefreshConfigurationSnapshotAsync(cancellationToken);
             }
         }
-        finally
-        {
-            _operationLock.Release();
-        }
     }
 
     public async Task SetActiveConfigurationAsync(string id, CancellationToken cancellationToken = default)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             ConfigurationSwitchResult result = await ExecuteConfigurationSwitchAsync(
                 ConfigurationSwitchRequest.Create(ConfigurationSwitchSource.Manual, id),
-                cancellationToken,
-                operationLockHeld: true);
+                operationLease,
+                cancellationToken);
             if (result.Outcome == ConfigurationSwitchOutcome.NoOp)
             {
                 await RefreshConfigurationSnapshotAsync(cancellationToken);
@@ -1302,10 +1250,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 _networkSwitchRuntimeController.SetManualOverrideForCurrentNetwork(id);
             }
-        }
-        finally
-        {
-            _operationLock.Release();
         }
     }
 
@@ -1318,44 +1262,30 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         NetworkSwitchRuleSet rules,
         CancellationToken cancellationToken)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             await _networkSwitchRuntimeController.SetRulesAsync(rules, cancellationToken);
-        }
-        finally
-        {
-            _operationLock.Release();
         }
     }
 
     public async Task ClearNetworkSwitchManualOverrideAsync(
         CancellationToken cancellationToken = default)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             if (_networkSwitchRuntimeController.IsInitialized)
             {
                 _networkSwitchRuntimeController.ClearManualOverride();
             }
         }
-        finally
-        {
-            _operationLock.Release();
-        }
     }
 
     private async Task<ConfigurationSwitchResult> ExecuteConfigurationSwitchAsync(
         ConfigurationSwitchRequest request,
-        CancellationToken cancellationToken,
-        bool operationLockHeld = false)
+        OperationGate.Lease operationLease,
+        CancellationToken cancellationToken)
     {
-        if (!operationLockHeld)
-        {
-            await _operationLock.WaitAsync(cancellationToken);
-        }
-
+        _configurationSwitchOperations.ActiveLease = operationLease;
         try
         {
             ConfigurationSwitchResult result = await _configurationSwitchCoordinator.ExecuteAsync(
@@ -1367,11 +1297,16 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         finally
         {
-            if (!operationLockHeld)
-            {
-                _operationLock.Release();
-            }
+            _configurationSwitchOperations.ActiveLease = null;
         }
+    }
+
+    private async Task<ConfigurationSwitchResult> ExecuteConfigurationSwitchWithLeaseAsync(
+        ConfigurationSwitchRequest request,
+        CancellationToken cancellationToken)
+    {
+        using OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken).ConfigureAwait(false);
+        return await ExecuteConfigurationSwitchAsync(request, operationLease, cancellationToken).ConfigureAwait(false);
     }
 
     private static void ThrowIfConfigurationSwitchFailed(ConfigurationSwitchResult result)
@@ -1596,14 +1531,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public async Task DeleteConfigurationAsync(ConfigurationProfile profile, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             bool wasActive = profile.IsActive
                 || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
             if (wasActive && Snapshot.Core.State == CoreState.Running)
             {
-                await StopCoreCoreAsync(operationLockHeld: true, cancellationToken);
+                await StopCoreCoreAsync(operationLease, cancellationToken);
             }
 
             await _configurationStore.DeleteAsync(profile, cancellationToken);
@@ -1623,10 +1557,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 Core = wasActive ? snapshot.Core with { ConfigurationName = null } : snapshot.Core
             });
             Publish();
-        }
-        finally
-        {
-            _operationLock.Release();
         }
     }
 
@@ -1677,8 +1607,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         ModeIntent intent,
         CancellationToken cancellationToken)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.SwitchMode,
@@ -1689,10 +1618,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 cancellationToken,
                 intent.RouteToRemote,
                 refreshScope: MutationRefreshScope.Mode);
-        }
-        finally
-        {
-            _operationLock.Release();
         }
 
         return intent;
@@ -1723,8 +1648,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         ProxySelectionIntent intent,
         CancellationToken cancellationToken)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             string? previousProxy = Snapshot.ProxyGroups
                 .FirstOrDefault(item => string.Equals(item.Name, intent.Group, StringComparison.Ordinal))
@@ -1789,10 +1713,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 Publish();
                 throw new InvalidOperationException(message, disconnectException);
             }
-        }
-        finally
-        {
-            _operationLock.Release();
         }
 
         return intent;
@@ -2034,8 +1954,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task CloseConnectionAsync(string id, CancellationToken cancellationToken = default)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.CloseConnection,
@@ -2045,16 +1964,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 (session, token) => session.Api.CloseConnectionAsync(id, token),
                 cancellationToken);
         }
-        finally
-        {
-            _operationLock.Release();
-        }
     }
 
     public async Task CloseAllConnectionsAsync(CancellationToken cancellationToken = default)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.CloseConnection,
@@ -2064,16 +1978,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 (session, token) => session.Api.CloseAllConnectionsAsync(token),
                 cancellationToken);
         }
-        finally
-        {
-            _operationLock.Release();
-        }
     }
 
     public async Task RefreshProviderAsync(string name, bool rules, CancellationToken cancellationToken = default)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.RefreshProvider,
@@ -2087,10 +1996,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     : session.Api.RefreshProviderAsync(name, token),
                 cancellationToken);
         }
-        finally
-        {
-            _operationLock.Release();
-        }
     }
 
     public void ClearLogs()
@@ -2102,8 +2007,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task ClearFakeIpCacheAsync(CancellationToken cancellationToken = default)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.ClearCache,
@@ -2113,17 +2017,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 (session, token) => session.Api.ClearFakeIpCacheAsync(token),
                 cancellationToken);
         }
-        finally
-        {
-            _operationLock.Release();
-        }
     }
 
     public async Task UpdateSettingsAsync(AppSettings settings, bool reconcileStartup = false, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ValidateSettings(settings);
-        await _operationLock.WaitAsync(cancellationToken);
+        using OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken);
         AppSettings previousSettings = _settings;
         bool networkSettingsChanged = settings.AllowLan != previousSettings.AllowLan
             || settings.Ipv6 != previousSettings.Ipv6;
@@ -2162,7 +2062,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (coreRestartRequired && coreWasRunning)
             {
                 restartStarted = true;
-                await RestartCoreCoreAsync(cancellationToken);
+                await RestartCoreCoreAsync(operationLease, cancellationToken);
                 if (!IsCoreHealthy())
                 {
                     throw new InvalidOperationException("运行中设置已保存，但核心重启健康检查失败。");
@@ -2235,7 +2135,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     coreWasRunning,
                     networkSettingsChanged,
                     systemProxyBindingChanged,
-                    restartStarted);
+                    restartStarted,
+                    operationLease);
             }
             catch (Exception restoreException)
             {
@@ -2276,10 +2177,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             throw;
         }
-        finally
-        {
-            _operationLock.Release();
-        }
     }
 
     public Task SetSystemProxyAsync(bool enabled, CancellationToken cancellationToken = default) =>
@@ -2287,19 +2184,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             enabled,
             persistPreference: true,
             cancellationToken: cancellationToken,
-            operationLockHeld: false);
+            operationLease: null);
 
     private async Task SetSystemProxyCoreAsync(
         bool enabled,
         bool persistPreference,
         CancellationToken cancellationToken,
-        bool operationLockHeld = false)
+        OperationGate.Lease? operationLease = null)
     {
-        bool operationLockAcquired = false;
-        if (!operationLockHeld)
+        OperationGate.Lease? ownedLease = null;
+        if (operationLease is null)
         {
-            await _operationLock.WaitAsync(cancellationToken);
-            operationLockAcquired = true;
+            ownedLease = await _operationLock.AcquireAsync(cancellationToken);
         }
 
         AppSettings previousSettings = _settings;
@@ -2320,7 +2216,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             if (enabled && !CoreHealthConfirmed)
             {
-                await RevokeSystemProxyForCoreLossAsync(operationLockHeld: true);
+                await RevokeSystemProxyForCoreLossAsync(operationLease ?? ownedLease!);
                 _stateStore.Update(snapshot => snapshot with { SystemProxy = _localDevice.SystemProxyState });
                 Publish();
                 return;
@@ -2355,10 +2251,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         finally
         {
-            if (operationLockAcquired)
-            {
-                _operationLock.Release();
-            }
+            ownedLease?.Dispose();
         }
     }
 
@@ -2367,7 +2260,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await RequestTunOperationAsync(
                 enabled,
                 persistPreference: true,
-                operationLockHeld: false,
+                operationLease: null,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
     }
@@ -2375,32 +2268,31 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private Task<TunState> RequestTunOperationAsync(
         bool enabled,
         bool persistPreference,
-        bool operationLockHeld,
+        OperationGate.Lease? operationLease,
         CancellationToken cancellationToken) =>
         _tunOperation.RequestAsync(
             enabled,
             (target, token) => SetTunCoreAsync(
                 target,
                 persistPreference,
-                operationLockHeld,
+                operationLease,
                 token),
             cancellationToken);
 
     private async Task<TunState> SetTunCoreAsync(
         bool enabled,
         bool persistPreference,
-        bool operationLockHeld,
+        OperationGate.Lease? operationLease,
         CancellationToken cancellationToken)
     {
-        bool operationLockAcquired = false;
-        if (!operationLockHeld)
+        OperationGate.Lease? ownedLease = null;
+        if (operationLease is null)
         {
-            if (!_operationLock.TryEnter())
+            ownedLease = _operationLock.TryAcquire();
+            if (ownedLease is null)
             {
                 throw new OperationBusyException("TUN");
             }
-
-            operationLockAcquired = true;
         }
 
         AppSettings previousSettings = _settings;
@@ -2551,17 +2443,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         finally
         {
-            if (operationLockAcquired)
-            {
-                _operationLock.Release();
-            }
+            ownedLease?.Dispose();
         }
     }
 
     public async Task ClearDnsCacheAsync(CancellationToken cancellationToken = default)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.ClearCache,
@@ -2571,16 +2459,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 (session, token) => session.Api.ClearDnsCacheAsync(token),
                 cancellationToken);
         }
-        finally
-        {
-            _operationLock.Release();
-        }
     }
 
     public async Task UpdateGeoAsync(CancellationToken cancellationToken = default)
     {
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.UpdateGeo,
@@ -2590,22 +2473,17 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 (session, token) => session.Api.UpdateGeoAsync(token),
                 cancellationToken);
         }
-        finally
-        {
-            _operationLock.Release();
-        }
     }
 
     public async Task<string> InstallCoreUpdateAsync(CoreUpdateManifest manifest, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(manifest);
-        await _operationLock.WaitAsync(cancellationToken);
-        try
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             bool wasRunning = Snapshot.Core.State == CoreState.Running;
             if (wasRunning)
             {
-                await StopCoreCoreAsync(operationLockHeld: true, cancellationToken);
+                await StopCoreCoreAsync(operationLease, cancellationToken);
             }
 
             bool installed = false;
@@ -2628,10 +2506,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 Publish();
                 if (wasRunning)
                 {
-                    await StartCoreCoreAsync(operationLockHeld: true, cancellationToken);
+                    await StartCoreCoreAsync(operationLease, cancellationToken);
                     if (!IsCoreHealthy())
                     {
-                        await StopCoreCoreAsync(operationLockHeld: true, CancellationToken.None);
+                        await StopCoreCoreAsync(operationLease, CancellationToken.None);
                         await RollbackCoreUpdateAsync(CancellationToken.None);
                         rolledBack = true;
                         _stateStore.Update(snapshot => snapshot with
@@ -2644,7 +2522,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                             ErrorMessage = "新核心健康检查失败，已自动回滚。"
                         });
                         Publish();
-                        await StartCoreCoreAsync(operationLockHeld: true, CancellationToken.None);
+                        await StartCoreCoreAsync(operationLease, CancellationToken.None);
                         if (!IsCoreHealthy())
                         {
                             throw new InvalidOperationException("核心更新失败，且回滚后的旧核心也未能恢复。");
@@ -2669,7 +2547,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 {
                     if (Snapshot.Core.State == CoreState.Running || _api is not null || _usingServiceCore)
                     {
-                        await StopCoreCoreAsync(operationLockHeld: true, CancellationToken.None);
+                        await StopCoreCoreAsync(operationLease, CancellationToken.None);
                     }
 
                     await RollbackCoreUpdateAsync(CancellationToken.None);
@@ -2682,15 +2560,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
                 if (wasRunning && !IsCoreHealthy())
                 {
-                    await StartCoreCoreAsync(operationLockHeld: true, CancellationToken.None);
+                    await StartCoreCoreAsync(operationLease, CancellationToken.None);
                 }
 
                 throw;
             }
-        }
-        finally
-        {
-            _operationLock.Release();
         }
     }
 
@@ -2729,9 +2603,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         if (_api is not null)
         {
-            await RefreshFromApiWithRetryAsync(
-                cancellationToken,
-                operationLockHeld: false);
+            await RefreshFromApiWithRetryAsync(cancellationToken);
         }
     }
 
@@ -2759,8 +2631,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationToken cancellationToken = default) =>
         RefreshFromApiAsync(cancellationToken, includeRulesAndProviders);
 
-    internal Task RevokeSystemProxyForTestingAsync() =>
-        RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
+    internal async Task RevokeSystemProxyForTestingAsync()
+    {
+        using OperationGate.Lease operationLease = await _operationLock.AcquireAsync();
+        await RevokeSystemProxyForCoreLossAsync(operationLease);
+    }
 
     public ValueTask DisposeAsync()
     {
@@ -2800,11 +2675,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             "停止订阅调度器",
             _ => _subscriptionScheduler.DisposeAsync().AsTask());
 
-        await _operationLock.WaitForCleanupOwnershipAsync(CancellationToken.None)
-            .ConfigureAwait(false);
-
-        try
         {
+            using OperationGate.Lease cleanupLease = await _operationLock.AcquireCleanupOwnershipAsync(CancellationToken.None)
+                .ConfigureAwait(false);
+
             await RunCleanupStepAsync(
                 cleanupFailures,
                 "等待 TUN 操作安全点",
@@ -2824,7 +2698,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     await RequestTunOperationAsync(
                             enabled: false,
                             persistPreference: false,
-                            operationLockHeld: true,
+                            operationLease: cleanupLease,
                             cancellationToken: token)
                         .ConfigureAwait(false);
                 });
@@ -2840,7 +2714,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                                 false,
                                 persistPreference: false,
                                 cancellationToken: token,
-                                operationLockHeld: true)
+                                operationLease: cleanupLease)
                             .ConfigureAwait(false);
                     }
                 });
@@ -2857,13 +2731,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                             or CoreState.Restarting
                         || _api is not null)
                     {
-                        await StopCoreCoreAsync(operationLockHeld: true, token).ConfigureAwait(false);
+                        await StopCoreCoreAsync(cleanupLease, token).ConfigureAwait(false);
                     }
                 });
-        }
-        finally
-        {
-            _operationLock.Exit();
         }
 
         SetController(null);
@@ -3179,15 +3049,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    private async Task RefreshFromApiWithRetryAsync(
-        CancellationToken cancellationToken,
-        bool operationLockHeld = false)
+    private async Task RefreshFromApiWithRetryAsync(CancellationToken cancellationToken)
     {
         await RefreshCoreHealthWithRetryAsync(cancellationToken);
-        await ApplyProgramOverridesAsync(
-            coreRunning: true,
-            cancellationToken: cancellationToken,
-            operationLockHeld: operationLockHeld);
+        await ApplyProgramOverridesWithLeaseAsync(coreRunning: true, cancellationToken);
         MihomoApiClient? api = _api;
         if (api is not null)
         {
@@ -3377,10 +3242,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 await RefreshFromApiAsync(
                     _runtimeCts.Token,
                     includeRulesAndProviders: false);
-                await ApplyProgramOverridesAsync(
+                await ApplyProgramOverridesWithLeaseAsync(
                     coreRunning: true,
-                    cancellationToken: _runtimeCts.Token,
-                    operationLockHeld: false);
+                    cancellationToken: _runtimeCts.Token);
                 retryDelay = TimeSpan.FromSeconds(2);
                 retryCount = 0;
             }
@@ -3399,7 +3263,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 {
                     if (_processManager.State == CoreState.Running)
                     {
-                        await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
+                        await RevokeSystemProxyForCoreLossWithLeaseAsync();
                         MarkCoreHealthUnconfirmed("轮询", exception, retryCount);
                         retryDelay = IncreaseRetryDelay(retryDelay);
                         continue;
@@ -3438,7 +3302,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 {
                     SetController(null);
                     await StopLogStreamAsync();
-                    await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
+                    await RevokeSystemProxyForCoreLossWithLeaseAsync();
                     _confirmedTunState = TunState.Unavailable;
                     _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
                     MarkCoreHealthUnconfirmed("服务重连", serviceException ?? exception, retryCount);
@@ -3449,7 +3313,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 if (serviceStatus.Core == CoreState.Running)
                 {
                     SetController(CreateApiClient());
-                    await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
+                    await RevokeSystemProxyForCoreLossWithLeaseAsync();
                     _stateStore.Update(snapshot => snapshot with { Tun = AdoptServiceTunState(serviceStatus.Tun) });
                     MarkCoreHealthUnconfirmed("控制器重连", exception, retryCount);
                     retryDelay = IncreaseRetryDelay(retryDelay);
@@ -3458,7 +3322,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
                 SetController(null);
                 await StopLogStreamAsync();
-                await RevokeSystemProxyForCoreLossAsync(operationLockHeld: false);
+                await RevokeSystemProxyForCoreLossWithLeaseAsync();
                 _stateStore.Update(snapshot => snapshot with { Tun = AdoptServiceTunState(serviceStatus.Tun) });
                 if (serviceStatus.Core is CoreState.Stopped or CoreState.Failed)
                 {
@@ -4180,35 +4044,32 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private async Task ApplyProgramOverridesAsync(
         bool coreRunning,
-        CancellationToken cancellationToken,
-        bool operationLockHeld = false)
+        OperationGate.Lease operationLease,
+        CancellationToken cancellationToken)
     {
-        if (!operationLockHeld)
-        {
-            await _operationLock.WaitAsync(cancellationToken);
-        }
-
-        try
-        {
-            await ApplyProgramOverridesCoreAsync(coreRunning, cancellationToken);
-        }
-        finally
-        {
-            if (!operationLockHeld)
-            {
-                _operationLock.Release();
-            }
-        }
+        await ApplyProgramOverridesCoreAsync(coreRunning, operationLease, cancellationToken);
     }
 
-    private async Task ApplyProgramOverridesCoreAsync(bool coreRunning, CancellationToken cancellationToken)
+    private async Task ApplyProgramOverridesWithLeaseAsync(
+        bool coreRunning,
+        CancellationToken cancellationToken)
     {
-        await ApplyControllerProgramOverridesAsync(coreRunning, cancellationToken);
+        using OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken).ConfigureAwait(false);
+        await ApplyProgramOverridesAsync(coreRunning, operationLease, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ApplyProgramOverridesCoreAsync(
+        bool coreRunning,
+        OperationGate.Lease operationLease,
+        CancellationToken cancellationToken)
+    {
+        await ApplyControllerProgramOverridesAsync(coreRunning, operationLease, cancellationToken);
         await ApplyLocalDeviceProgramOverridesAsync(coreRunning, cancellationToken);
     }
 
     private async Task ApplyControllerProgramOverridesAsync(
         bool coreRunning,
+        OperationGate.Lease operationLease,
         CancellationToken cancellationToken)
     {
         if (!coreRunning || _api is null)
@@ -4237,7 +4098,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         try
         {
-            await ApplyProgramTunPreferenceAsync(cancellationToken);
+            await ApplyProgramTunPreferenceAsync(operationLease, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -4335,7 +4196,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    private async Task ApplyProgramTunPreferenceAsync(CancellationToken cancellationToken)
+    private async Task ApplyProgramTunPreferenceAsync(
+        OperationGate.Lease operationLease,
+        CancellationToken cancellationToken)
     {
         if (!_usingServiceCore)
         {
@@ -4387,7 +4250,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await RequestTunOperationAsync(
                 _settings.TunEnabled,
                 persistPreference: false,
-                operationLockHeld: true,
+                operationLease: operationLease,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
     }
@@ -4428,14 +4291,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         bool coreWasRunning,
         bool networkSettingsChanged,
         bool systemProxyBindingChanged,
-        bool restartStarted)
+        bool restartStarted,
+        OperationGate.Lease operationLease)
     {
         _settings = previousSettings;
         await _settingsStore.SaveAsync(previousSettings, CancellationToken.None);
 
         if (restartStarted)
         {
-            await RestartCoreCoreAsync(CancellationToken.None);
+            await RestartCoreCoreAsync(operationLease, CancellationToken.None);
             if (coreWasRunning && !IsCoreHealthy())
             {
                 throw new InvalidOperationException("旧设置已恢复，但核心未能恢复健康。");
@@ -5151,15 +5015,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 return;
             }
 
-            _proxyRecoveryTask = Task.Run(() => RevokeSystemProxyForCoreLossAsync(
-                operationLockHeld: false,
-                context: context,
-                cancellationToken: CancellationToken.None));
+            _proxyRecoveryTask = Task.Run(() => RevokeSystemProxyForCoreLossWithLeaseAsync(
+                context,
+                CancellationToken.None));
         }
     }
 
     private async Task RevokeSystemProxyForCoreLossAsync(
-        bool operationLockHeld,
+        OperationGate.Lease operationLease,
         CoreLossContext? context = null,
         CancellationToken cancellationToken = default)
     {
@@ -5168,45 +5031,38 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             return;
         }
 
-        if (!operationLockHeld)
+        if (context is { } committedContext && !CanApplyCoreLossRecovery(committedContext))
         {
-            await _operationLock.WaitAsync(cancellationToken);
+            return;
         }
 
         try
         {
-            if (context is { } committedContext && !CanApplyCoreLossRecovery(committedContext))
-            {
-                return;
-            }
-
-            try
-            {
-                await ReconcileSystemProxyAsync(coreRunning: false, cancellationToken);
-            }
-            catch (Exception exception)
-            {
-                AddApplicationLog(new LogEntry(
-                    DateTimeOffset.UtcNow,
-                    "ClashTray",
-                    "error",
-                    $"核心不可用时撤销系统代理失败：{ErrorSanitizer.Sanitize(exception)}"));
-                _stateStore.Update(snapshot => snapshot with
-                {
-                    SystemProxy = _localDevice.SystemProxyState,
-                    ErrorMessage = "核心不可用时撤销系统代理失败，系统代理状态需要恢复。",
-                    Logs = _logBuffer.Snapshot()
-                });
-                Publish();
-            }
+            await ReconcileSystemProxyAsync(coreRunning: false, cancellationToken);
         }
-        finally
+        catch (Exception exception)
         {
-            if (!operationLockHeld)
+            AddApplicationLog(new LogEntry(
+                DateTimeOffset.UtcNow,
+                "ClashTray",
+                "error",
+                $"核心不可用时撤销系统代理失败：{ErrorSanitizer.Sanitize(exception)}"));
+            _stateStore.Update(snapshot => snapshot with
             {
-                _operationLock.Release();
-            }
+                SystemProxy = _localDevice.SystemProxyState,
+                ErrorMessage = "核心不可用时撤销系统代理失败，系统代理状态需要恢复。",
+                Logs = _logBuffer.Snapshot()
+            });
+            Publish();
         }
+    }
+
+    private async Task RevokeSystemProxyForCoreLossWithLeaseAsync(
+        CoreLossContext? context = null,
+        CancellationToken cancellationToken = default)
+    {
+        using OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken).ConfigureAwait(false);
+        await RevokeSystemProxyForCoreLossAsync(operationLease, context, cancellationToken).ConfigureAwait(false);
     }
 
     private bool CanApplyCoreLossRecovery(CoreLossContext context) =>
@@ -5425,11 +5281,21 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private sealed class RuntimeConfigurationSwitchOperations : IConfigurationSwitchOperations
     {
         private readonly ClashTrayRuntime _runtime;
+        private OperationGate.Lease? _activeLease;
 
         public RuntimeConfigurationSwitchOperations(ClashTrayRuntime runtime)
         {
             _runtime = runtime;
         }
+
+        internal OperationGate.Lease? ActiveLease
+        {
+            get => _activeLease;
+            set => _activeLease = value;
+        }
+
+        private OperationGate.Lease RequireLease() =>
+            _activeLease ?? throw new InvalidOperationException("配置切换未在操作锁内执行。");
 
         public string? CurrentConfigurationId => _runtime._settings.ActiveConfigurationId;
 
@@ -5470,7 +5336,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             bool restartCore = context.Request.RestartCore && context.PreviousState.CoreWasRunning;
             if (restartCore)
             {
-                await _runtime.StopCoreCoreAsync(operationLockHeld: true, cancellationToken);
+                await _runtime.StopCoreCoreAsync(RequireLease(), cancellationToken);
                 await context.SetStageAsync(
                     ConfigurationSwitchStage.NetworkStateSafeguarded,
                     CancellationToken.None);
@@ -5483,7 +5349,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             if (restartCore)
             {
-                await _runtime.StartCoreCoreAsync(operationLockHeld: true, cancellationToken);
+                await _runtime.StartCoreCoreAsync(RequireLease(), cancellationToken);
                 if (!_runtime.IsCoreHealthy())
                 {
                     throw new InvalidOperationException("切换后的 Mihomo 核心健康检查失败。");
@@ -5509,7 +5375,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 cancellationToken);
             if (context.PreviousState.CoreWasRunning)
             {
-                await _runtime.RestartCoreCoreAsync(cancellationToken);
+                await _runtime.RestartCoreCoreAsync(RequireLease(), cancellationToken);
                 if (!_runtime.IsCoreHealthy())
                 {
                     throw new InvalidOperationException("旧配置核心恢复后的健康检查失败。");
