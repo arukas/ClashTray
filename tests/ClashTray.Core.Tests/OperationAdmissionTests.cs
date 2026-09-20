@@ -76,6 +76,10 @@ public sealed class OperationAdmissionTests
         await cancellationEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
         await cancellation.CancelAsync();
         await Assert.ThrowsAsync<OperationCanceledException>(() => cancelled);
+        // Caller-side cancellation is observed immediately; the operation's own
+        // teardown completes asynchronously afterwards, so wait for idle before
+        // asserting the released state.
+        await singleFlight.WaitForIdleAsync(TimeSpan.FromSeconds(2));
         Assert.IsFalse(singleFlight.IsBusy);
 
         int result = await singleFlight.RequestAsync(
