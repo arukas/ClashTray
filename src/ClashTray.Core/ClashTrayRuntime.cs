@@ -3399,7 +3399,17 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                         continue;
                     }
 
+                    // Polling can be the first observer of an exited process when
+                    // the exit event was missed; commit the CoreLost fact instead
+                    // of silently abandoning the loop on a stale Running snapshot.
+                    bool unexpectedCoreLost = Snapshot.Core.State is CoreState.Running or CoreState.Starting;
+                    if (unexpectedCoreLost)
+                    {
+                        SetController(null);
+                    }
+
                     await StopLogStreamAsync();
+                    UpdateCoreState(CoreState.Failed, "Mihomo 进程已退出", unexpectedCoreLost);
                     break;
                 }
 
