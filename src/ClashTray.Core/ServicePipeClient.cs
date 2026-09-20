@@ -115,14 +115,6 @@ public sealed class ServicePipeClient : IServicePipeClient
         {
             throw Unknown(request, $"服务命令 {command} 已发送，但结果无法确认。");
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new TimeoutException($"服务命令 {command} 超过 {timeout.TotalSeconds:0} 秒。", null);
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
         catch (JsonException exception)
         {
             throw Unknown(request, "ClashTray service returned invalid data.", exception);

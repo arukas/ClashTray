@@ -888,7 +888,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             timeout.CancelAfter(TimeSpan.FromSeconds(5));
             status = await _localDevice.GetStatusAsync(timeout.Token).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is not StackOverflowException)
+        catch (Exception exception)
         {
             statusException = exception;
         }
