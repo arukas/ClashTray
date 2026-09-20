@@ -450,6 +450,10 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1031",
+        Justification = "The drain loop is fire-and-forget; an unexpected failure must be observed and surfaced as a log line instead of faulting an unobserved task.")]
     private async Task DrainAsync(StreamReader reader, bool isError, CancellationToken cancellationToken)
     {
         try
@@ -470,6 +474,12 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (Exception exception)
+        {
+            LogLineReceived?.Invoke(
+                $"[ClashTray] Mihomo 输出读取中断：{ErrorSanitizer.Sanitize(exception)}",
+                true);
         }
     }
 
