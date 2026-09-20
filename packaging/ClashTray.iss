@@ -257,7 +257,7 @@ begin
   if not IsWin64 then
     exit;
 
-  Result := ExpandConstant('{autopf}\dotnet\dotnet.exe');
+  Result := ExpandConstant('{autopf64}\dotnet\dotnet.exe');
   if not FileExists(Result) then
     Result := '';
 end;
