@@ -93,6 +93,7 @@ Filename: "{app}\App\ClashTray.App.exe"; WorkingDir: "{app}\App"; Description: "
 const
   InstallerVariant = '{#Variant}';
   RequiredDotNetMajorVersion = '{#MiniDotNetMajorVersion}';
+  RequiredWinAppRuntimeMajorMinor = '2.4';
   ServiceName = 'ClashTrayService';
   ServiceKey = 'SYSTEM\CurrentControlSet\Services\ClashTrayService';
   ServiceExecutableName = 'ClashTray.Service.exe';
@@ -323,7 +324,7 @@ begin
     + '$ErrorActionPreference = ''Stop''; '
     + '$packages = @(Get-AppxPackage -User ''' + UserSid + ''' -Name ''Microsoft.WindowsAppRuntime.2'' -PackageTypeFilter Framework '
     + '| Where-Object { $_.Architecture.ToString() -eq ''X64'' -and $_.IsFramework '
-    + '-and $_.Version -ge [version]''2.4.0.0'' '
+    + '-and $_.Version -ge [version]''' + RequiredWinAppRuntimeMajorMinor + '.0.0'' '
     + '-and (Test-Path -LiteralPath $_.InstallLocation) } '
     + '| Sort-Object Version -Descending); '
     + 'if ($packages.Count -lt 1) { exit 1 }; '
@@ -363,7 +364,7 @@ begin
   if not HasDotNetRuntime('Microsoft.NETCore.App', CoreRuntimeLine) then
     Missing := Missing + #13#10 + '- Microsoft.NETCore.App ' + RequiredDotNetMajorVersion + '.x（x64）';
   if not HasWindowsAppRuntime(WindowsAppRuntimeVersion) then
-    Missing := Missing + #13#10 + '- 当前用户已注册且可访问的 Windows App Runtime 2.4+ framework（x64）';
+    Missing := Missing + #13#10 + '- 当前用户已注册且可访问的 Windows App Runtime ' + RequiredWinAppRuntimeMajorMinor + '+ framework（x64）';
 
   if Missing = '' then
   begin
@@ -375,6 +376,10 @@ begin
   Log('Mini prerequisite check failed: ' + Missing);
   LastInstallerError := 'Mini 版本安装前检查未通过：' + Missing
     + #13#10#13#10 + '请先安装对应的 x64 运行时，并使用同一个 Windows 用户重新运行安装程序。'
+    + #13#10#13#10 + '官方下载地址：'
+    + #13#10 + '- .NET ' + RequiredDotNetMajorVersion + ' 运行时（x64）：https://aka.ms/dotnet/' + RequiredDotNetMajorVersion + '.0/dotnet-runtime-win-x64.exe'
+    + #13#10 + '- Windows App Runtime ' + RequiredWinAppRuntimeMajorMinor + '+（x64）：https://aka.ms/windowsappsdk/' + RequiredWinAppRuntimeMajorMinor + '/latest/windowsappruntimeinstall-x64.exe'
+    + #13#10#13#10 + 'Windows App Runtime 按用户注册：安装运行时时必须使用将要运行 ClashTray 的同一个 Windows 用户。'
     + #13#10 + '安装器会停止，不会创建或启动不兼容的服务。';
   Result := False;
 end;
@@ -472,7 +477,7 @@ begin
   if (ResultCode <> 0) and (ResultCode <> ErrorServiceAlreadyRunning) then
   begin
     if ResultCode = ErrorServiceRequestTimeout then
-      LastInstallerError := '启动 ClashTrayService 失败（错误代码 1053）。Mini 的框架依赖可能未能被服务进程加载；请安装 x64 .NET 10 运行时和 Windows App Runtime 2.4+，或改用 Full 版本。'
+      LastInstallerError := '启动 ClashTrayService 失败（错误代码 1053）。Mini 的框架依赖可能未能被服务进程加载；请安装 x64 .NET ' + RequiredDotNetMajorVersion + ' 运行时和 Windows App Runtime ' + RequiredWinAppRuntimeMajorMinor + '+，或改用 Full 版本。'
     else
       LastInstallerError := Format('启动 ClashTrayService 失败（错误代码 %d）。', [ResultCode]);
     exit;
