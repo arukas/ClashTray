@@ -50,6 +50,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly RemoteControllerRefreshCoordinator _remoteRefresh;
     private readonly RuntimeLogCoordinator _logs;
     private readonly ControllerSessionGuard _controllerGuard;
+    private readonly RuntimeDataRefreshCoordinator _dataRefresh;
     private readonly ProxyOperationCoordinator _proxyOps;
     private readonly Func<MihomoApiClient>? _controllerApiFactory;
     private bool _usingServiceCore;
@@ -66,15 +67,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     private static readonly TimeSpan DisposeCleanupTimeout = TimeSpan.FromSeconds(30);
 
-    private sealed record ProxyDataResult(
-        bool Succeeded,
-        IReadOnlyList<ProxyGroup> Groups,
-        IReadOnlyList<ProxyNode> Nodes);
-
-    private readonly record struct TrafficDataResult(bool Succeeded, TrafficSnapshot? Value);
-
-    private readonly record struct MemoryDataResult(bool Succeeded, long Value);
-
     private readonly record struct CoreLossContext(
         long LifecycleEpoch,
         long ProcessGeneration,
@@ -82,10 +74,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         long ProxyOwnershipRevision,
         long ProxyIntentRevision,
         bool CoreHealthConfirmed);
-
-    private readonly record struct ConnectionDataResult(
-        bool Succeeded,
-        IReadOnlyList<ConnectionInfo> Value);
 
     public ClashTrayRuntime(AppPaths? paths = null)
         : this(paths, null, null, null)
@@ -189,6 +177,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             remoteLogStreamRunner,
             _runtimeCts.Token);
         _controllerGuard = new ControllerSessionGuard(_controllerSessions);
+        _dataRefresh = new RuntimeDataRefreshCoordinator(
+            _stateStore,
+            _controllerGuard,
+            _dataRefreshLock,
+            CaptureCoreBindingEpochs,
+            IsCurrentCoreBinding,
+            LogControllerFailure,
+            _throttledPublisher.RequestAsync,
+            Publish);
         _proxyOps = new ProxyOperationCoordinator(
             _operationLock,
             _stateStore,
@@ -1568,7 +1565,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         try
         {
             // Refresh now/history from the core and apply the confirmed batch result atomically.
-            ProxyDataResult proxies = await TryGetProxyDataAsync(api, cancellationToken);
+            ProxyDataResult proxies = await _dataRefresh.TryGetProxyDataAsync(api, cancellationToken);
             EnsureControllerSession(api, generation, "测速期间核心会话已切换，请重新测速。");
 
             string? LatestDelay(string name, string? previous) => delays.TryGetValue(name, out int? delay)
@@ -2472,7 +2469,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         bool coreHealthWasUnconfirmed = !CoreHealthConfirmed;
         await RefreshCoreHealthAsync(api, cancellationToken);
-        await RefreshOptionalDataAsync(
+        await _dataRefresh.RefreshOptionalDataAsync(
             api,
             cancellationToken,
             includeRulesAndProviders || coreHealthWasUnconfirmed);
@@ -2559,118 +2556,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         return state;
     }
 
-    private async Task RefreshOptionalDataAsync(
-        MihomoApiClient api,
-        CancellationToken cancellationToken,
-        bool includeRulesAndProviders = true)
-    {
-        long lifecycleEpoch = Volatile.Read(ref _coreLifecycleEpoch);
-        long processGeneration = _processManager.Generation;
-        long controllerGeneration = ControllerGeneration;
-        await _dataRefreshLock.WaitAsync(cancellationToken);
-        try
-        {
-            if (!IsCurrentCoreBinding(api, controllerGeneration, lifecycleEpoch, processGeneration))
-            {
-                return;
-            }
-
-            Task<ProxyDataResult> proxyTask = TryGetProxyDataAsync(api, cancellationToken);
-            Task<TrafficDataResult> trafficTask = TryGetTrafficSnapshotAsync(api, cancellationToken);
-            Task<MemoryDataResult> memoryTask = TryGetMemoryAsync(api, cancellationToken);
-            Task<ConnectionDataResult> connectionsTask = TryGetConnectionDataAsync(api, cancellationToken);
-            Task<IReadOnlyList<RuleInfo>> rulesTask = includeRulesAndProviders
-                ? TryGetRulesAsync(api, cancellationToken)
-                : Task.FromResult<IReadOnlyList<RuleInfo>>([]);
-            Task<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> providersTask =
-                includeRulesAndProviders
-                    ? TryGetProvidersAsync(api, cancellationToken)
-                    : Task.FromResult<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)>(
-                        ([], []));
-            await Task.WhenAll(proxyTask, trafficTask, memoryTask, connectionsTask, rulesTask, providersTask);
-
-            if (!IsCurrentCoreBinding(api, controllerGeneration, lifecycleEpoch, processGeneration))
-            {
-                return;
-            }
-
-            ProxyDataResult proxyData = await proxyTask;
-            TrafficDataResult trafficData = await trafficTask;
-            MemoryDataResult memoryData = await memoryTask;
-            ConnectionDataResult connectionData = await connectionsTask;
-            IReadOnlyList<RuleInfo> rulesData = await rulesTask;
-            (IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders) providerData = await providersTask;
-            TrafficSnapshot? traffic = trafficData.Value;
-            bool committed = _stateStore.TryUpdate(
-                snapshot => snapshot.Core.State == CoreState.Running
-                    && IsCurrentCoreBinding(
-                        api,
-                        controllerGeneration,
-                        lifecycleEpoch,
-                        processGeneration),
-                snapshot =>
-                {
-                    CoreStatus currentCore = snapshot.Core;
-                    return snapshot with
-                    {
-                        Core = currentCore with
-                        {
-                            UploadBytes = traffic?.UploadBytes ?? currentCore.UploadBytes,
-                            DownloadBytes = traffic?.DownloadBytes ?? currentCore.DownloadBytes,
-                            UploadBytesPerSecond = traffic?.UploadBytesPerSecond ?? currentCore.UploadBytesPerSecond,
-                            DownloadBytesPerSecond = traffic?.DownloadBytesPerSecond ?? currentCore.DownloadBytesPerSecond,
-                            TrafficAvailable = trafficData.Succeeded,
-                            ConnectionCount = connectionData.Succeeded
-                                ? connectionData.Value.Count
-                                : currentCore.ConnectionCount,
-                            MemoryBytes = memoryData.Value,
-                            MemoryAvailable = memoryData.Succeeded
-                        },
-                        ProxyGroups = proxyData.Succeeded
-                            ? SnapshotDataComparer.ReuseIfEqual(snapshot.ProxyGroups, proxyData.Groups, SnapshotDataComparer.ProxyGroupsEqual)
-                            : snapshot.ProxyGroups,
-                        ProxyNodes = proxyData.Succeeded
-                            ? SnapshotDataComparer.ReuseIfEqual(snapshot.ProxyNodes, proxyData.Nodes, SnapshotDataComparer.ProxyNodesEqual)
-                            : snapshot.ProxyNodes,
-                        Connections = connectionData.Succeeded
-                            ? SnapshotDataComparer.ReuseIfEqual(
-                                snapshot.Connections,
-                                connectionData.Value,
-                                EqualityComparer<ConnectionInfo>.Default.Equals)
-                            : snapshot.Connections,
-                        Rules = includeRulesAndProviders
-                            ? SnapshotDataComparer.ReuseIfEqual(
-                                snapshot.Rules,
-                                rulesData,
-                                EqualityComparer<RuleInfo>.Default.Equals)
-                            : snapshot.Rules,
-                        Providers = includeRulesAndProviders
-                            ? SnapshotDataComparer.ReuseIfEqual(
-                                snapshot.Providers,
-                                providerData.Providers,
-                                EqualityComparer<ProviderStatus>.Default.Equals)
-                            : snapshot.Providers,
-                        RuleProviders = includeRulesAndProviders
-                            ? SnapshotDataComparer.ReuseIfEqual(
-                                snapshot.RuleProviders,
-                                providerData.RuleProviders,
-                                EqualityComparer<ProviderStatus>.Default.Equals)
-                            : snapshot.RuleProviders,
-                        Logs = _logs.Snapshot()
-                    };
-                },
-                out _);
-            if (committed)
-            {
-                await _throttledPublisher.RequestAsync(cancellationToken);
-            }
-        }
-        finally
-        {
-            _dataRefreshLock.Release();
-        }
-    }
-
     private async Task RefreshFromApiWithRetryAsync(CancellationToken cancellationToken)
     {
         await RefreshCoreHealthWithRetryAsync(cancellationToken);
@@ -2678,60 +2563,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         MihomoApiClient? api = _api;
         if (api is not null)
         {
-            await RefreshOptionalDataAsync(api, cancellationToken);
-        }
-    }
-
-    private async Task RefreshModeSnapshotAsync(
-        MihomoApiClient api,
-        long generation,
-        CancellationToken cancellationToken)
-    {
-        await _dataRefreshLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            EnsureControllerSession(api, generation, "模式刷新期间核心会话已切换，请重试。");
-            using JsonDocument configuration = await api.GetConfigurationAsync(
-                force: false,
-                cancellationToken);
-            EnsureControllerSession(api, generation, "模式刷新期间核心会话已切换，请重试。");
-            ProxyMode? mode = MihomoDataParser.ParseMode(configuration);
-            if (mode is not ProxyMode confirmedMode)
-            {
-                throw new InvalidOperationException("Mihomo 未返回可识别的代理模式。");
-            }
-
-            _stateStore.Update(snapshot => snapshot with { Core = snapshot.Core with { Mode = confirmedMode } });
-            Publish();
-        }
-        finally
-        {
-            _dataRefreshLock.Release();
-        }
-    }
-
-    private async Task RefreshProxySelectionSnapshotAsync(
-        MihomoApiClient api,
-        long generation,
-        CancellationToken cancellationToken)
-    {
-        await _dataRefreshLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            EnsureControllerSession(api, generation, "节点刷新期间核心会话已切换，请重试。");
-            using JsonDocument proxies = await api.GetProxiesAsync(cancellationToken);
-            EnsureControllerSession(api, generation, "节点刷新期间核心会话已切换，请重试。");
-            (IReadOnlyList<ProxyGroup> groups, IReadOnlyList<ProxyNode> nodes) = MihomoDataParser.ParseProxies(proxies);
-            _stateStore.Update(snapshot => snapshot with
-            {
-                ProxyGroups = SnapshotDataComparer.ReuseIfEqual(snapshot.ProxyGroups, groups, SnapshotDataComparer.ProxyGroupsEqual),
-                ProxyNodes = SnapshotDataComparer.ReuseIfEqual(snapshot.ProxyNodes, nodes, SnapshotDataComparer.ProxyNodesEqual)
-            });
-            Publish();
-        }
-        finally
-        {
-            _dataRefreshLock.Release();
+            await _dataRefresh.RefreshOptionalDataAsync(api, cancellationToken);
         }
     }
 
@@ -2948,7 +2780,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         try
         {
-            await RefreshOptionalDataAsync(api, _runtimeCts.Token);
+            await _dataRefresh.RefreshOptionalDataAsync(api, _runtimeCts.Token);
         }
         catch (OperationCanceledException) when (_runtimeCts.IsCancellationRequested)
         {
@@ -3002,6 +2834,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
         }
     }
+
+    private CoreBindingEpochs CaptureCoreBindingEpochs() => new(
+        Volatile.Read(ref _coreLifecycleEpoch),
+        _processManager.Generation,
+        ControllerGeneration);
 
     private bool IsCurrentCoreBinding(
         MihomoApiClient api,
@@ -3068,11 +2905,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         EnsureControllerSession(api, generation, staleSessionMessage);
         if (refreshScope == MutationRefreshScope.Mode)
         {
-            await RefreshModeSnapshotAsync(api, generation, cancellationToken).ConfigureAwait(false);
+            await _dataRefresh.RefreshModeSnapshotAsync(api, generation, cancellationToken).ConfigureAwait(false);
         }
         else if (refreshScope == MutationRefreshScope.ProxySelection)
         {
-            await RefreshProxySelectionSnapshotAsync(api, generation, cancellationToken).ConfigureAwait(false);
+            await _dataRefresh.RefreshProxySelectionSnapshotAsync(api, generation, cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -3453,130 +3290,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch
         {
             return false;
-        }
-    }
-
-    private async Task<ProxyDataResult> TryGetProxyDataAsync(
-        MihomoApiClient api,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            using JsonDocument document = await api.GetProxiesAsync(cancellationToken);
-            (IReadOnlyList<ProxyGroup> Groups, IReadOnlyList<ProxyNode> Nodes) data = MihomoDataParser.ParseProxies(document);
-            return new ProxyDataResult(true, data.Groups, data.Nodes);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            LogControllerFailure("代理数据刷新", "/proxies", exception, 0);
-            return new ProxyDataResult(false, Snapshot.ProxyGroups, Snapshot.ProxyNodes);
-        }
-    }
-
-    private async Task<TrafficDataResult> TryGetTrafficSnapshotAsync(
-        MihomoApiClient api,
-        CancellationToken cancellationToken)
-    {
-        Stopwatch stopwatch = Stopwatch.StartNew();
-        try
-        {
-            using JsonDocument document = await api.GetTrafficAsync(cancellationToken);
-            return new TrafficDataResult(true, MihomoDataParser.ParseTraffic(document));
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            LogControllerFailure("指标刷新", "/traffic", exception, 0, stopwatch.Elapsed);
-            return new TrafficDataResult(false, null);
-        }
-    }
-
-    private async Task<MemoryDataResult> TryGetMemoryAsync(
-        MihomoApiClient api,
-        CancellationToken cancellationToken)
-    {
-        Stopwatch stopwatch = Stopwatch.StartNew();
-        try
-        {
-            using JsonDocument memory = await api.GetMemoryAsync(cancellationToken);
-            return new MemoryDataResult(true, MihomoDataParser.ParseMemoryBytes(memory));
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            LogControllerFailure("指标刷新", "/memory", exception, 0, stopwatch.Elapsed);
-            return new MemoryDataResult(false, Snapshot.Core.MemoryBytes);
-        }
-    }
-
-    private async Task<ConnectionDataResult> TryGetConnectionDataAsync(
-        MihomoApiClient api,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            using JsonDocument document = await api.GetConnectionsAsync(cancellationToken);
-            return new ConnectionDataResult(true, MihomoDataParser.ParseConnections(document));
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            LogControllerFailure("连接数据刷新", "/connections", exception, 0);
-            return new ConnectionDataResult(false, Snapshot.Connections);
-        }
-    }
-
-    private async Task<IReadOnlyList<RuleInfo>> TryGetRulesAsync(
-        MihomoApiClient api,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            using JsonDocument document = await api.GetRulesAsync(cancellationToken);
-            return MihomoDataParser.ParseRules(document);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            LogControllerFailure("规则数据刷新", "/rules", exception, 0);
-            return Snapshot.Rules;
-        }
-    }
-
-    private async Task<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> TryGetProvidersAsync(
-        MihomoApiClient api,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            using JsonDocument providers = await api.GetProvidersAsync(cancellationToken);
-            using JsonDocument ruleProviders = await api.GetRuleProvidersAsync(cancellationToken);
-            return (MihomoDataParser.ParseProviders(providers, "proxy"), MihomoDataParser.ParseProviders(ruleProviders, "rule"));
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            LogControllerFailure("Provider 数据刷新", "/providers", exception, 0);
-            return (Snapshot.Providers, Snapshot.RuleProviders);
         }
     }
 
