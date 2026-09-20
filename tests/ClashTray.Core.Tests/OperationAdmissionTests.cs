@@ -260,6 +260,109 @@ public sealed class OperationAdmissionTests
     }
 
     [TestMethod]
+    public async Task SharedAdmissionsRunConcurrently()
+    {
+        using OperationGate gate = new();
+        OperationGate.Lease first = await gate.AcquireSharedAsync();
+        Task<OperationGate.Lease> second = gate.AcquireSharedAsync();
+        OperationGate.Lease secondLease = await second.WaitAsync(TimeSpan.FromSeconds(2));
+        secondLease.Dispose();
+        first.Dispose();
+    }
+
+    [TestMethod]
+    public async Task ExclusiveAdmissionWaitsForSharedHolders()
+    {
+        using OperationGate gate = new();
+        OperationGate.Lease shared = await gate.AcquireSharedAsync();
+        Task<OperationGate.Lease> exclusive = gate.AcquireAsync();
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        Assert.IsFalse(exclusive.IsCompleted);
+
+        shared.Dispose();
+        using OperationGate.Lease exclusiveLease = await exclusive.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [TestMethod]
+    public async Task SharedAdmissionWaitsForExclusiveHolder()
+    {
+        using OperationGate gate = new();
+        OperationGate.Lease exclusive = await gate.AcquireAsync();
+        Task<OperationGate.Lease> shared = gate.AcquireSharedAsync();
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        Assert.IsFalse(shared.IsCompleted);
+
+        exclusive.Dispose();
+        using OperationGate.Lease sharedLease = await shared.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [TestMethod]
+    public async Task WaitingExclusiveBlocksNewSharedAdmissions()
+    {
+        using OperationGate gate = new();
+        OperationGate.Lease firstShared = await gate.AcquireSharedAsync();
+        Task<OperationGate.Lease> exclusive = gate.AcquireAsync();
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        Assert.IsFalse(exclusive.IsCompleted);
+
+        Task<OperationGate.Lease> secondShared = gate.AcquireSharedAsync();
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        Assert.IsFalse(secondShared.IsCompleted);
+
+        firstShared.Dispose();
+        OperationGate.Lease exclusiveLease = await exclusive.WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        Assert.IsFalse(secondShared.IsCompleted);
+
+        exclusiveLease.Dispose();
+        using OperationGate.Lease secondSharedLease = await secondShared.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [TestMethod]
+    public async Task QuiescingWakesPendingSharedAdmission()
+    {
+        using OperationGate gate = new();
+        OperationGate.Lease exclusive = await gate.AcquireAsync();
+        Task<OperationGate.Lease> pendingShared = gate.AcquireSharedAsync();
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        Assert.IsFalse(pendingShared.IsCompleted);
+
+        gate.BeginQuiescing();
+        await Assert.ThrowsExactlyAsync<RuntimeQuiescingException>(
+            () => pendingShared.WaitAsync(TimeSpan.FromSeconds(2)));
+        await Assert.ThrowsExactlyAsync<RuntimeQuiescingException>(() => gate.AcquireSharedAsync());
+        exclusive.Dispose();
+    }
+
+    [TestMethod]
+    public async Task CleanupOwnershipWaitsForSharedHolders()
+    {
+        using OperationGate gate = new();
+        OperationGate.Lease shared = await gate.AcquireSharedAsync();
+        gate.BeginQuiescing();
+
+        Task<OperationGate.Lease> cleanup = gate.AcquireCleanupOwnershipAsync();
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        Assert.IsFalse(cleanup.IsCompleted);
+
+        shared.Dispose();
+        using OperationGate.Lease cleanupLease = await cleanup.WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [TestMethod]
+    public async Task WaitForIdleTracksSharedHolders()
+    {
+        using OperationGate gate = new();
+        OperationGate.Lease shared = await gate.AcquireSharedAsync();
+        Task idle = gate.WaitForIdleAsync(TimeSpan.FromSeconds(2));
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
+        Assert.IsFalse(idle.IsCompleted);
+
+        shared.Dispose();
+        await idle;
+    }
+
+    [TestMethod]
     public async Task SingleFlightSharesDuplicateDelayProbe()
     {
         SingleFlightOperation<int> singleFlight = new("delay");

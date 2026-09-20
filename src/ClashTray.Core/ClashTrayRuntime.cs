@@ -1607,7 +1607,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         ModeIntent intent,
         CancellationToken cancellationToken)
     {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.SwitchMode,
@@ -1648,7 +1648,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         ProxySelectionIntent intent,
         CancellationToken cancellationToken)
     {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             string? previousProxy = Snapshot.ProxyGroups
                 .FirstOrDefault(item => string.Equals(item.Name, intent.Group, StringComparison.Ordinal))
@@ -1954,7 +1954,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task CloseConnectionAsync(string id, CancellationToken cancellationToken = default)
     {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.CloseConnection,
@@ -1968,7 +1968,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task CloseAllConnectionsAsync(CancellationToken cancellationToken = default)
     {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.CloseConnection,
@@ -1982,7 +1982,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task RefreshProviderAsync(string name, bool rules, CancellationToken cancellationToken = default)
     {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.RefreshProvider,
@@ -2007,7 +2007,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task ClearFakeIpCacheAsync(CancellationToken cancellationToken = default)
     {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.ClearCache,
@@ -2449,7 +2449,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task ClearDnsCacheAsync(CancellationToken cancellationToken = default)
     {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.ClearCache,
@@ -2463,7 +2463,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public async Task UpdateGeoAsync(CancellationToken cancellationToken = default)
     {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
+        using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
                 EndpointCommand.UpdateGeo,
