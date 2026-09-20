@@ -56,6 +56,7 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
         "Reliability",
         "CA2000:Dispose objects before losing scope",
         Justification = "Connected pipes transfer ownership to a tracked client task; every untransferred pipe is disposed in finally.")]
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The shutdown join only observes client tasks while cancellation is requested; individual pipe failures are already handled by HandleClientAsync.")]
     private async Task RunAsync()
     {
         while (!_cts.IsCancellationRequested)
@@ -135,6 +136,7 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
             TaskScheduler.Default);
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The named-pipe command boundary converts any handler failure into a bounded ServiceResponse so a single bad request cannot crash the service.")]
     private async Task HandleClientAsync(NamedPipeServerStream pipe)
     {
         await using (pipe.ConfigureAwait(false))

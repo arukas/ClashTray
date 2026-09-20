@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
 using ClashTray.Contracts;
@@ -164,6 +165,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Cached command execution converts any failure into a failure ServiceResponse so concurrent joiners always observe a completed result.")]
     private async Task ExecuteCachedRequestAsync(ServiceRequest request, CachedRequest cached)
     {
         try
@@ -208,6 +210,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The command dispatch boundary converts any handler failure into a failure ServiceResponse instead of throwing across the IPC boundary.")]
     private async Task<ServiceResponse> HandleCoreAsync(ServiceRequest request, CancellationToken cancellationToken)
     {
         try
@@ -292,6 +295,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "A failed TUN status probe degrades to a bounded failure response; status queries must never throw across the IPC boundary.")]
     private async Task<ServiceResponse> GetStatusAsync(ServiceRequest request, CancellationToken cancellationToken)
     {
         if (_processManager.State != CoreState.Running || _api is null || _activeCore is null)
@@ -796,6 +800,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Post-start TUN reconciliation degrades to TunState.Unknown with a bounded message; a probe failure must not fail the completed core start.")]
     private async Task<ServiceResponse> RefreshTunStateAfterStartAsync(
         ServiceRequest request,
         CancellationToken cancellationToken)
@@ -946,6 +951,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             await api.SetTunAsync(enabled, cancellationToken).ConfigureAwait(false);
         }
 
+        [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Recovery restart is best-effort and reports success through its return value; it must not throw into the TUN shutdown guard.")]
         public async Task<bool> RestartCoreWithTunDisabledAsync(CancellationToken cancellationToken)
         {
             ServiceCorePayload? payload = _controller._activeCore;

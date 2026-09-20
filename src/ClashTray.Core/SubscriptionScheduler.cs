@@ -1,4 +1,5 @@
 using ClashTray.Contracts;
+using System.Diagnostics.CodeAnalysis;
 
 namespace ClashTray.Core;
 
@@ -48,6 +49,7 @@ public sealed class SubscriptionScheduler : IAsyncDisposable
         _cts.Dispose();
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The scheduler loop must keep running; per-profile and per-cycle failures are reported through the failure callbacks.")]
     private async Task RunAsync()
     {
         while (!_cts.IsCancellationRequested)
@@ -92,6 +94,7 @@ public sealed class SubscriptionScheduler : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "A throwing notification callback must not terminate the scheduler loop.")]
     private void NotifyRefreshFailed(ConfigurationProfile profile, Exception exception)
     {
         try
@@ -103,6 +106,7 @@ public sealed class SubscriptionScheduler : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "A throwing notification callback must not terminate the scheduler loop.")]
     private void NotifyCycleFailed(Exception exception)
     {
         try

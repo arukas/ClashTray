@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using ClashTray.Contracts;
 
@@ -231,6 +232,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public event EventHandler<AppSnapshot>? AppSnapshotChanged;
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Startup recovery converts journal cleanup, backup restore, and health-confirmation failures into degraded-state messages so initialization always completes.")]
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         SettingsLoadResult settingsLoad = await _settingsStore.LoadWithStatusAsync(cancellationToken);
@@ -564,6 +566,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Core start must end in a typed Failed state with the system proxy revoked; unexpected failures are sanitized into the snapshot instead of escaping the operation boundary.")]
     private async Task StartCoreCoreAsync(
         OperationGate.Lease operationLease,
         CancellationToken cancellationToken)
@@ -718,6 +721,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The start request was already dispatched; the status probe only refines the failure message and must never throw.")]
     private async Task<ServiceResponse?> ReconcileUnknownServiceStartAsync(Exception startException)
     {
         // Once StartCore was dispatched, conservatively retain ownership even
@@ -929,6 +933,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Subscription refresh runs unattended; every failure is converted into a typed per-profile result and state update.")]
     private async Task RefreshSubscriptionCoreLockedAsync(
         ConfigurationProfile profile,
         OperationGate.Lease operationLease,
@@ -1545,6 +1550,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Settings application rolls back to the previously persisted settings on any failure, so the rollback must run regardless of failure type.")]
     public async Task UpdateSettingsAsync(AppSettings settings, bool reconcileStartup = false, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -2172,6 +2178,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Disposal must not throw; cleanup failures are logged and the remaining shutdown steps still run.")]
     private async Task DisposeCoreAsync()
     {
         List<Exception> cleanupFailures = [];
@@ -2320,6 +2327,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _runtimeCts.Dispose();
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Individual cleanup steps are best-effort so one failing step cannot block the remaining shutdown sequence.")]
     private async Task RunCleanupStepAsync(
         ICollection<Exception> failures,
         string operationName,
@@ -2470,6 +2478,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The retry loop classifies every non-cancellation failure as retryable until the attempt budget is exhausted.")]
     private async Task RefreshCoreHealthWithRetryAsync(CancellationToken cancellationToken)
     {
         MihomoApiClient? api = _api;
@@ -2517,6 +2526,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _pollingTask = Task.Run(RunPollingAsync, CancellationToken.None);
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The background polling loop must survive transient endpoint failures; failures degrade to the last confirmed snapshot.")]
     private async Task RunPollingAsync()
     {
         TimeSpan retryDelay = TimeSpan.FromSeconds(2);
@@ -2679,6 +2689,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             CancellationToken.None);
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Optional data refresh is non-fatal; failures only leave the affected snapshot section stale.")]
     private async Task RunOptionalRefreshAsync(MihomoApiClient api)
     {
         try
@@ -2853,6 +2864,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await ApplyLocalDeviceProgramOverridesAsync(coreRunning, cancellationToken);
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Program overrides are best-effort; a failing override must not fail the core lifecycle operation that triggered it.")]
     private async Task ApplyControllerProgramOverridesAsync(
         bool coreRunning,
         OperationGate.Lease operationLease,
@@ -2902,6 +2914,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Program overrides are best-effort; a failing override must not fail the core lifecycle operation that triggered it.")]
     private async Task ApplyLocalDeviceProgramOverridesAsync(
         bool coreRunning,
         CancellationToken cancellationToken)
@@ -3110,6 +3123,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _settingsStore.SaveAsync(settings, cancellationToken);
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Failure rollback must run to completion regardless of which restore step fails.")]
     private async Task RestoreSettingsAfterOperationFailureAsync(AppSettings settings)
     {
         _settings = settings;
@@ -3148,6 +3162,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         return false;
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Network restore is a safety net that reports success through its return value; it must never throw into the recovery path.")]
     private static async Task<bool> TryRestoreNetworkSettingsAsync(
         MihomoApiClient api,
         bool? allowLan,
@@ -3295,6 +3310,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Proxy revocation on core loss is safety-critical and must complete even when individual steps fail.")]
     private async Task RevokeSystemProxyForCoreLossAsync(
         OperationGate.Lease operationLease,
         CoreLossContext? context = null,
@@ -3349,6 +3365,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         && Snapshot.Core.State != CoreState.Running
         && !_runtimeCts.IsCancellationRequested;
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Queued proxy recovery is observed best-effort; the awaiting operation must not fail because recovery observation failed.")]
     private async Task AwaitQueuedProxyRecoveryAsync()
     {
         Task? recoveryTask;

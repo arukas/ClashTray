@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using ClashTray.Contracts;
 using Microsoft.Win32;
@@ -40,6 +41,7 @@ public sealed class SystemProxyManager : ISystemProxyController
         return State;
     }
 
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Rollback of the registry write is itself best-effort; failure surfaces as the RestoreRequired state instead of escaping.")]
     public async Task EnableAsync(int port, string bypassList, CancellationToken cancellationToken = default)
     {
         State = SystemProxyState.Enabling;

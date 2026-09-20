@@ -14,7 +14,7 @@
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <PublishReadyToRun>false</PublishReadyToRun>
     <ApplicationIcon>Assets\App\ClashTray.ico</ApplicationIcon>
-    <!-- WinUI pages/Application are public XAML entry points; UI handlers preserve the existing visible-error behavior. -->
+    <!-- WinUI pages/Application are public XAML entry points; CA1031 stays exempt only in this UI layer, where event handlers translate external failures into visible, bounded errors. -->
     <!-- Theme names and App type naming are persisted/framework contracts; CA5392 is emitted by SDK-generated P/Invoke code. -->
     <NoWarn>$(NoWarn);CA1031;CA1308;CA1515;CA1724;CA5392</NoWarn>
   </PropertyGroup>

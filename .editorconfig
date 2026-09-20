@@ -26,7 +26,6 @@ dotnet_diagnostic.CA2007.severity = none
 # EventArgs would change the existing application contract without improving safety.
 [src/ClashTray.Core/ClashTrayRuntime.cs]
 dotnet_diagnostic.CA1003.severity = none
-dotnet_diagnostic.CA1031.severity = none
 
 [src/ClashTray.Core/MihomoProcessManager.cs]
 dotnet_diagnostic.CA1003.severity = none
@@ -36,7 +35,6 @@ dotnet_diagnostic.CA1003.severity = none
 [src/ClashTray.Core/SystemProxyManager.cs]
 dotnet_diagnostic.CA1054.severity = none
 dotnet_diagnostic.CA1056.severity = none
-dotnet_diagnostic.CA1031.severity = none
 
 # Lowercase is part of the Mihomo protocol, stable configuration IDs, file extensions,
 # and persisted log/theme values; uppercasing would change observable behavior.
@@ -52,30 +50,12 @@ dotnet_diagnostic.CA1308.severity = none
 [src/ClashTray.Core/ConfigurationStore.cs]
 dotnet_diagnostic.CA1308.severity = none
 
-# These handlers are deliberate trust-boundary translators: they preserve cancellation,
-# update state/rollback information, and convert unexpected external failures into a
-# bounded user-visible result.
-[src/ClashTray.Core/SubscriptionScheduler.cs]
-dotnet_diagnostic.CA1031.severity = none
-
-[src/ClashTray.Service/ServiceRuntimeController.cs]
-dotnet_diagnostic.CA1031.severity = none
-
-[src/ClashTray.Service/ServiceCommandHost.cs]
-dotnet_diagnostic.CA1031.severity = none
-
 # Test classes must remain public for MSTest discovery; native interop declarations are
 # public because the App test-linking surface consumes them directly.
 [tests/**/*.cs]
 dotnet_diagnostic.CA1515.severity = none
 
 [src/ClashTray.App/NativeMethods.cs]
-dotnet_diagnostic.CA1515.severity = none
-
-# WinUI XAML pages and the Application object are public runtime entry points;
-# UI event handlers translate external failures into visible, bounded errors.
-[src/ClashTray.App/**/*.cs]
-dotnet_diagnostic.CA1031.severity = none
 dotnet_diagnostic.CA1515.severity = none
 
 # The App type name is required by the WinUI application model and XAML contract.
