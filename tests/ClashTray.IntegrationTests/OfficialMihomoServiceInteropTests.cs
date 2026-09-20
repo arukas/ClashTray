@@ -74,7 +74,8 @@ public sealed class OfficialMihomoServiceInteropTests
         ServiceRequest startRequest = new(
             Guid.NewGuid(),
             ServiceCommand.StartCore,
-            JsonSerializer.Serialize(payload));
+            JsonSerializer.Serialize(payload),
+            ProtocolVersion: ServiceProtocol.CurrentVersion);
         DisabledTunNetworkHealthProbe healthProbe = new();
 
         try
