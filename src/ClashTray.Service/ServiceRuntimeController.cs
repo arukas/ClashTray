@@ -36,6 +36,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private readonly Dictionary<Guid, CachedRequest> _requestCache = [];
     private MihomoApiClient? _api;
     private TunState _tunState = TunState.Off;
+    private long _tunStateRevision;
     private int _tunDesired;
     private ServiceCorePayload? _activeCore;
     private long _tunListenerErrorSequence;
@@ -396,7 +397,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                     _api,
                     _tunHealthProbe,
                     CancellationToken.None);
-                _tunState = tunShutdown.State;
+                SetTunState(tunShutdown.State);
                 safeToStopCore = tunShutdown.Succeeded;
             }
 
@@ -500,7 +501,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             cancellationToken: cancellationToken);
         _activeCore = payload;
         _api = CreateApi(payload.ControllerPort, payload.ControllerSecret);
-        _tunState = TunState.Unknown;
+        SetTunState(TunState.Unknown);
         return await RefreshTunStateAfterStartAsync(request, cancellationToken);
     }
 
@@ -662,7 +663,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     {
         if (_processManager.State == CoreState.Running && _api is null)
         {
-            _tunState = TunState.Unknown;
+            SetTunState(TunState.Unknown);
             return Failure(request, "停止核心前无法确认 TUN 状态，核心保持运行。", CoreState.Running);
         }
 
@@ -674,20 +675,20 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 cancellationToken);
             if (!tunShutdown.Succeeded)
             {
-                _tunState = tunShutdown.State;
+                SetTunState(tunShutdown.State);
                 return Failure(
                     request,
                     tunShutdown.Error ?? "停止核心前无法确认 TUN 已关闭，核心保持运行。",
                     CoreState.Running);
             }
 
-            _tunState = tunShutdown.State;
+            SetTunState(tunShutdown.State);
         }
 
         await _processManager.StopAsync(cancellationToken);
         _api = null;
         _activeCore = null;
-        _tunState = TunState.Off;
+        SetTunState(TunState.Off);
         return Success(request);
     }
 
@@ -726,7 +727,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 },
                 cancellationToken)
             .ConfigureAwait(false);
-        _tunState = result.State;
+        SetTunState(result.State);
         return result.Succeeded
             ? Success(request)
             : Failure(
@@ -746,27 +747,27 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             throw new OperationBusyException("ClashTray 服务");
         }
 
-        _tunState = enabled ? TunState.Enabling : TunState.Disabling;
+        SetTunState(enabled ? TunState.Enabling : TunState.Disabling);
         try
         {
             if (_processManager.State != CoreState.Running
                 || _api is null
                 || _activeCore is null)
             {
-                _tunState = TunState.Unavailable;
+                SetTunState(TunState.Unavailable);
                 throw new InvalidOperationException("Mihomo 核心尚未运行。");
             }
 
             if (_activeCore.ControllerPort != payload.ControllerPort
                 || !string.Equals(_activeCore.ControllerSecret, payload.ControllerSecret, StringComparison.Ordinal))
             {
-                _tunState = TunState.Unknown;
+                SetTunState(TunState.Unknown);
                 throw new InvalidOperationException("TUN 请求与当前 Mihomo 核心不匹配。");
             }
 
             TunTransactionResult result = await _tunTransactions.ExecuteAsync(enabled, cancellationToken)
                 .ConfigureAwait(false);
-            _tunState = result.State;
+            SetTunState(result.State);
             if (result.Succeeded)
             {
                 lock (_tunLogGate)
@@ -796,7 +797,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                     _tunHealthProbe,
                     cancellationToken)
                 .ConfigureAwait(false);
-            _tunState = shutdown.State;
+            SetTunState(shutdown.State);
             return shutdown.Succeeded
                 ? Success(request)
                 : Success(
@@ -809,7 +810,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            _tunState = TunState.Unknown;
+            SetTunState(TunState.Unknown);
             return Success(request, $"Mihomo 已启动，但 TUN 状态暂时无法确认：{DescribeControllerError(exception)}");
         }
     }
@@ -829,6 +830,31 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         _ => exception.GetType().Name
     };
 
+    /// <summary>
+    /// Monotonic revision of the service-owned TUN state. Every mutation goes
+    /// through <see cref="SetTunState"/> so the log listener, lifecycle
+    /// commands and shutdown cleanup share one write boundary.
+    /// </summary>
+    internal long TunStateRevision
+    {
+        get
+        {
+            lock (_tunLogGate)
+            {
+                return _tunStateRevision;
+            }
+        }
+    }
+
+    private void SetTunState(TunState state)
+    {
+        lock (_tunLogGate)
+        {
+            _tunState = state;
+            _tunStateRevision++;
+        }
+    }
+
     private void OnProcessLogLine(string line, bool _)
     {
         if (!line.Contains("Start TUN listening error:", StringComparison.OrdinalIgnoreCase))
@@ -842,7 +868,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             _lastTunListenerError = ErrorSanitizer.Sanitize(line);
             if (_tunState == TunState.On)
             {
-                _tunState = TunState.Unknown;
+                SetTunState(TunState.Unknown);
             }
         }
     }
@@ -924,7 +950,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 await _controller._processManager.StopAsync(cancellationToken).ConfigureAwait(false);
                 _controller._api = null;
                 _controller._activeCore = null;
-                _controller._tunState = TunState.Off;
+                _controller.SetTunState(TunState.Off);
 
                 ServiceRequest request = new(
                     Guid.NewGuid(),
