@@ -19,13 +19,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly SnapshotPublishThrottle _throttledPublisher;
     private readonly AppPaths _paths;
     private readonly ConfigurationStore _configurationStore;
-    private readonly EndpointStore _endpointStore;
-    private readonly EndpointSecretStore _endpointSecretStore;
-    private readonly EndpointCertificateStore _endpointCertificateStore;
     private readonly EndpointTransportOptionsResolver _endpointTransportOptionsResolver;
     private readonly EndpointSessionManager _endpointSessions;
-    private readonly EndpointRemovalCoordinator _endpointRemovalCoordinator;
-    private readonly EndpointProvisioningCoordinator _endpointProvisioningCoordinator;
+    private readonly EndpointCatalogCoordinator _endpointCatalog;
     private readonly NetworkRuleStore _networkRuleStore;
     private readonly ConfigurationSwitchJournalStore _configurationSwitchJournalStore;
     private readonly ConfigurationSwitchCoordinator _configurationSwitchCoordinator;
@@ -44,9 +40,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private Task? _dataRefreshTask;
     private AppSettings _settings = new();
     private readonly RuntimeStateStore _stateStore = new(CreateInitialSnapshot());
-    private IReadOnlyList<EndpointDescriptor> _remoteEndpointDescriptors = [];
-    private EndpointStoreLoadStatus _endpointStoreStatus = EndpointStoreLoadStatus.FirstRun;
-    private string? _endpointStoreMessage;
     private readonly RemoteControllerRefreshCoordinator _remoteRefresh;
     private readonly RuntimeLogCoordinator _logs;
     private readonly ControllerSessionGuard _controllerGuard;
@@ -101,12 +94,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         bool useDefaultEnvironment = paths is null;
         _paths = paths ?? new AppPaths();
         _paths.EnsureDirectories();
-        _endpointStore = new EndpointStore(_paths);
-        _endpointSecretStore = new EndpointSecretStore(_paths);
-        _endpointCertificateStore = new EndpointCertificateStore(_paths);
+        EndpointStore endpointStore = new(_paths);
+        EndpointSecretStore endpointSecretStore = new(_paths);
+        EndpointCertificateStore endpointCertificateStore = new(_paths);
         _endpointTransportOptionsResolver = new EndpointTransportOptionsResolver(
-            _endpointSecretStore,
-            _endpointCertificateStore);
+            endpointSecretStore,
+            endpointCertificateStore);
         IEndpointSessionConnector resolvedEndpointSessionConnector = endpointSessionConnector
             ?? new MihomoEndpointSessionConnector(
                 ResolveEndpointRecordAsync,
@@ -114,15 +107,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _endpointSessions = new EndpointSessionManager(
             ControllerEndpointFactory.CreateLocal(_settings.ControllerPort),
             resolvedEndpointSessionConnector);
-        _endpointRemovalCoordinator = new EndpointRemovalCoordinator(
-            _endpointStore,
-            _endpointSecretStore,
-            _endpointCertificateStore,
-            _endpointSessions);
-        _endpointProvisioningCoordinator = new EndpointProvisioningCoordinator(
-            _endpointStore,
-            _endpointSecretStore,
-            _endpointCertificateStore);
+        _endpointCatalog = new EndpointCatalogCoordinator(
+            _operationLock,
+            _endpointSessions,
+            endpointStore,
+            endpointSecretStore,
+            endpointCertificateStore,
+            () => _settings,
+            Publish);
         _coreDiscovery = new CoreDiscovery(_paths);
         _configurationStore = new ConfigurationStore(
             _paths,
@@ -211,20 +203,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
     public AppSettings Settings => _settings;
 
-    public IReadOnlyList<EndpointDescriptor> Endpoints
-    {
-        get
-        {
-            List<EndpointDescriptor> endpoints =
-            [ControllerEndpointFactory.CreateLocal(_settings.ControllerPort)];
-            endpoints.AddRange(_remoteEndpointDescriptors);
-            return endpoints;
-        }
-    }
+    public IReadOnlyList<EndpointDescriptor> Endpoints => _endpointCatalog.Endpoints;
 
-    public EndpointStoreLoadStatus EndpointStoreStatus => _endpointStoreStatus;
+    public EndpointStoreLoadStatus EndpointStoreStatus => _endpointCatalog.StoreStatus;
 
-    public string? EndpointStoreMessage => _endpointStoreMessage;
+    public string? EndpointStoreMessage => _endpointCatalog.StoreMessage;
 
     public EndpointSessionStatusEventArgs EndpointSessionStatus => _endpointSessions.Status;
 
@@ -475,23 +458,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public async Task<EndpointCatalogLoadResult> LoadEndpointCatalogAsync(
-        CancellationToken cancellationToken = default)
-    {
-        EndpointCatalog catalog = new(
-            _endpointStore,
-            ControllerEndpointFactory.CreateLocal(_settings.ControllerPort));
-        EndpointCatalogLoadResult result = await catalog.LoadAsync(cancellationToken)
-            .ConfigureAwait(false);
-        _remoteEndpointDescriptors = result.Endpoints
-            .Where(endpoint => endpoint.Id != EndpointId.Local)
-            .ToArray();
-        _endpointStoreStatus = result.RemoteStoreStatus;
-        _endpointStoreMessage = result.Message;
-        await ReconcileEndpointSessionAsync(result.Endpoints).ConfigureAwait(false);
-        Publish();
-        return result;
-    }
+    public Task<EndpointCatalogLoadResult> LoadEndpointCatalogAsync(
+        CancellationToken cancellationToken = default) =>
+        _endpointCatalog.LoadAsync(cancellationToken);
 
     public async Task<EndpointSession?> SelectEndpointAsync(
         EndpointId endpointId,
@@ -503,24 +472,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             cancellationToken,
             _runtimeCts.Token);
         CancellationToken token = linked.Token;
-        if (endpointId == EndpointId.Local)
-        {
-            await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
-            return null;
-        }
-
-        EndpointDescriptor? endpoint = Endpoints.FirstOrDefault(candidate => candidate.Id == endpointId);
-        if (endpoint is null)
-        {
-            throw new KeyNotFoundException($"未找到端点 {endpointId.Value}。");
-        }
-
-        if (!endpoint.IsEnabled)
-        {
-            throw new InvalidOperationException($"端点 {endpoint.DisplayName} 已被禁用。");
-        }
-
-        EndpointSession? session = await _endpointSessions.SelectAsync(endpoint, token)
+        EndpointSession? session = await _endpointCatalog.SelectAsync(endpointId, token)
             .ConfigureAwait(false);
         if (session is not null)
         {
@@ -539,102 +491,53 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             _runtimeCts.Token);
-        if (endpointId == EndpointId.Local)
-        {
-            throw new InvalidOperationException("只读连接测试仅适用于远程端点。");
-        }
-
-        EndpointDescriptor? endpoint = Endpoints.FirstOrDefault(candidate => candidate.Id == endpointId);
-        if (endpoint is null)
-        {
-            throw new KeyNotFoundException($"未找到端点 {endpointId.Value}。");
-        }
-
-        if (!endpoint.IsEnabled)
-        {
-            throw new InvalidOperationException($"端点 {endpoint.DisplayName} 已被禁用。");
-        }
-
-        return await _endpointSessions.TestAsync(endpoint, linked.Token)
+        return await _endpointCatalog.TestAsync(endpointId, linked.Token)
             .ConfigureAwait(false);
     }
 
     public async Task DisconnectEndpointAsync()
     {
         ThrowIfRuntimeQuiescing();
-        await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
+        await _endpointCatalog.DisconnectAsync().ConfigureAwait(false);
     }
 
-    public async Task<EndpointCatalogLoadResult> SaveRemoteEndpointAsync(
+    public Task<EndpointCatalogLoadResult> SaveRemoteEndpointAsync(
         EndpointRecord endpoint,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(endpoint);
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken).ConfigureAwait(false))
-        {
-            await _endpointStore.UpsertAsync(endpoint, cancellationToken).ConfigureAwait(false);
-            return await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
-        }
-    }
+        CancellationToken cancellationToken = default) =>
+        _endpointCatalog.SaveAsync(endpoint, cancellationToken);
 
-    public async Task<EndpointCatalogLoadResult> ProvisionRemoteEndpointAsync(
+    public Task<EndpointCatalogLoadResult> ProvisionRemoteEndpointAsync(
         EndpointDescriptor descriptor,
         string? secret,
         ReadOnlyMemory<byte>? customCaCertificate,
         DateTimeOffset? insecureHttpAcknowledgedAtUtc,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(descriptor);
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken).ConfigureAwait(false))
-        {
-            await _endpointProvisioningCoordinator.ProvisionAsync(
-                    descriptor,
-                    secret,
-                    customCaCertificate,
-                    insecureHttpAcknowledgedAtUtc,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            return await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
-        }
-    }
+        CancellationToken cancellationToken = default) =>
+        _endpointCatalog.ProvisionAsync(
+            descriptor,
+            secret,
+            customCaCertificate,
+            insecureHttpAcknowledgedAtUtc,
+            cancellationToken);
 
-    public async Task<EndpointCatalogLoadResult> UpdateRemoteEndpointAsync(
+    public Task<EndpointCatalogLoadResult> UpdateRemoteEndpointAsync(
         EndpointId endpointId,
         EndpointDescriptor descriptor,
         string? secret,
         ReadOnlyMemory<byte>? customCaCertificate,
         DateTimeOffset? insecureHttpAcknowledgedAtUtc,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(descriptor);
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken).ConfigureAwait(false))
-        {
-            await _endpointProvisioningCoordinator.UpdateAsync(
-                    endpointId,
-                    descriptor,
-                    secret,
-                    customCaCertificate,
-                    insecureHttpAcknowledgedAtUtc,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            return await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
-        }
-    }
+        CancellationToken cancellationToken = default) =>
+        _endpointCatalog.UpdateAsync(
+            endpointId,
+            descriptor,
+            secret,
+            customCaCertificate,
+            insecureHttpAcknowledgedAtUtc,
+            cancellationToken);
 
-    public async Task<EndpointRemovalResult> RemoveRemoteEndpointAsync(
+    public Task<EndpointRemovalResult> RemoveRemoteEndpointAsync(
         EndpointId endpointId,
-        CancellationToken cancellationToken = default)
-    {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken).ConfigureAwait(false))
-        {
-            EndpointRemovalResult result = await _endpointRemovalCoordinator.RemoveAsync(
-                    endpointId,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            await LoadEndpointCatalogAsync(cancellationToken).ConfigureAwait(false);
-            return result;
-        }
-    }
+        CancellationToken cancellationToken = default) =>
+        _endpointCatalog.RemoveAsync(endpointId, cancellationToken);
 
     public Task StartCoreAsync(CancellationToken cancellationToken = default) =>
         AdmitCoreLifecycleAsync(
@@ -2804,36 +2707,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         return new MihomoApiClient(_httpClient, controllerUri, string.Empty);
     }
 
-    private async Task<EndpointRecord?> ResolveEndpointRecordAsync(
+    private Task<EndpointRecord?> ResolveEndpointRecordAsync(
         EndpointId endpointId,
-        CancellationToken cancellationToken)
-    {
-        EndpointStoreLoadResult loaded = await _endpointStore.LoadAsync(cancellationToken)
-            .ConfigureAwait(false);
-        if (loaded.Status == EndpointStoreLoadStatus.ReadFailed)
-        {
-            throw new IOException(loaded.Message ?? "端点元数据无法读取。");
-        }
-
-        return loaded.Endpoints.FirstOrDefault(endpoint => endpoint.Descriptor.Id == endpointId);
-    }
-
-    private async Task ReconcileEndpointSessionAsync(
-        IReadOnlyList<EndpointDescriptor> catalogEndpoints)
-    {
-        EndpointSessionStatusEventArgs status = _endpointSessions.Status;
-        if (status.Endpoint.Kind != EndpointKind.Remote)
-        {
-            return;
-        }
-
-        EndpointDescriptor? catalogEndpoint = catalogEndpoints.FirstOrDefault(endpoint =>
-            endpoint.Id == status.Endpoint.Id);
-        if (catalogEndpoint is null || catalogEndpoint != status.Endpoint)
-        {
-            await _endpointSessions.DisconnectAsync().ConfigureAwait(false);
-        }
-    }
+        CancellationToken cancellationToken) =>
+        _endpointCatalog.ResolveRecordAsync(endpointId, cancellationToken);
 
     private CoreBindingEpochs CaptureCoreBindingEpochs() => new(
         Volatile.Read(ref _coreLifecycleEpoch),
