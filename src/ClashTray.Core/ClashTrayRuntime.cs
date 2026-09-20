@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net.WebSockets;
 using System.Text.Json;
 using ClashTray.Contracts;
 
@@ -26,7 +25,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly object _disposeGate = new();
     private readonly object _publishGate = new();
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(8) };
-    private readonly BoundedLogBuffer _logBuffer = new(500);
     private readonly SnapshotPublishThrottle _throttledPublisher;
     private readonly AppPaths _paths;
     private readonly ConfigurationStore _configurationStore;
@@ -49,19 +47,17 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly SubscriptionScheduler _subscriptionScheduler;
     private readonly MihomoProcessManager _processManager = new();
     private readonly IStartupRegistration _startupRegistration;
-    private readonly object _logStreamGate = new();
     private MihomoApiClient? _api => _controllerSessions.Current?.Api;
     private long ControllerGeneration => _controllerSessions.Generation;
     private Task? _pollingTask;
     private Task? _dataRefreshTask;
-    private CancellationTokenSource? _logStreamCts;
-    private Task? _logStreamTask;
     private AppSettings _settings = new();
     private readonly RuntimeStateStore _stateStore = new(CreateInitialSnapshot());
     private IReadOnlyList<EndpointDescriptor> _remoteEndpointDescriptors = [];
     private EndpointStoreLoadStatus _endpointStoreStatus = EndpointStoreLoadStatus.FirstRun;
     private string? _endpointStoreMessage;
     private readonly RemoteControllerRefreshCoordinator _remoteRefresh;
+    private readonly RuntimeLogCoordinator _logs;
     private readonly Func<MihomoApiClient>? _controllerApiFactory;
     private bool _usingServiceCore;
     private long _confirmedCoreLifecycleEpoch = long.MinValue;
@@ -186,6 +182,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             OnScheduledSubscriptionCycleFailed);
         _controllerApiFactory = controllerApiFactory;
         _throttledPublisher = new SnapshotPublishThrottle(Publish, _runtimeCts.Token);
+        _logs = new RuntimeLogCoordinator(
+            _stateStore,
+            () => _api,
+            () => _usingServiceCore,
+            () => _settings.LogLevel,
+            () => _throttledPublisher.Queue(),
+            Publish,
+            _runtimeCts.Token);
         _remoteRefresh = new RemoteControllerRefreshCoordinator(
             _endpointSessions,
             () => _settings.LogLevel,
@@ -197,7 +201,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _runtimeCts.Token);
         _endpointSessions.StatusChanged += _remoteRefresh.HandleSessionStatusChanged;
         _processManager.StateChanged += OnProcessStateChanged;
-        _processManager.LogLineReceived += OnProcessLogLine;
+        _processManager.LogLineReceived += _logs.OnProcessLogLine;
     }
 
     public RuntimeSnapshot Snapshot => _stateStore.Snapshot;
@@ -868,7 +872,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             UpdateCoreState(CoreState.Stopping, null);
             InvalidateCoreHealth();
             SetController(null);
-            await StopLogStreamAsync();
+            await _logs.StopLogStreamAsync();
             if (_usingServiceCore)
             {
                 try
@@ -1115,12 +1119,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             if (shouldRemainActive && !update.ContentChanged && !activeSelectionChanged)
             {
-                AddApplicationLog(new LogEntry(
+                _logs.AddApplicationLog(new LogEntry(
                     DateTimeOffset.UtcNow,
                     "ClashTray",
                     "info",
                     "订阅内容 SHA-256 未变化，已跳过 Mihomo 重启。"));
-                _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
+                _stateStore.Update(snapshot => snapshot with { Logs = _logs.Snapshot() });
                 Publish();
             }
         }
@@ -1665,7 +1669,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                                 generation,
                                 "节点切换期间核心会话已切换，请重新选择节点。");
                             disconnectException = exception;
-                            AddApplicationLog(new LogEntry(
+                            _logs.AddApplicationLog(new LogEntry(
                                 DateTimeOffset.UtcNow,
                                 "ClashTray",
                                 "error",
@@ -1683,7 +1687,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 _stateStore.Update(snapshot => snapshot with
                 {
                     ErrorMessage = message,
-                    Logs = _logBuffer.Snapshot()
+                    Logs = _logs.Snapshot()
                 });
                 Publish();
                 throw new InvalidOperationException(message, disconnectException);
@@ -1973,12 +1977,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public void ClearLogs()
-    {
-        _logBuffer.Clear();
-        _stateStore.Update(snapshot => snapshot with { Logs = [] });
-        Publish();
-    }
+    public void ClearLogs() => _logs.ClearLogs();
 
     public async Task ClearFakeIpCacheAsync(CancellationToken cancellationToken = default)
     {
@@ -2059,7 +2058,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     _stateStore.Update(snapshot => snapshot with
                     {
                         ErrorMessage = $"程序局域网/IPv6 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
-                        Logs = _logBuffer.Snapshot()
+                        Logs = _logs.Snapshot()
                     });
                     throw new InvalidOperationException("运行中网络设置应用失败，正在恢复旧设置。", exception);
                 }
@@ -2139,7 +2138,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _stateStore.Update(snapshot => snapshot with
             {
                 ErrorMessage = message,
-                Logs = _logBuffer.Snapshot()
+                Logs = _logs.Snapshot()
             });
             Publish();
 
@@ -2503,12 +2502,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                             throw new InvalidOperationException("核心更新失败，且回滚后的旧核心也未能恢复。");
                         }
 
-                        AddApplicationLog(new LogEntry(
+                        _logs.AddApplicationLog(new LogEntry(
                             DateTimeOffset.UtcNow,
                             "ClashTray",
                             "warning",
                             "新核心健康检查失败，已自动回滚并恢复旧核心。"));
-                        _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
+                        _stateStore.Update(snapshot => snapshot with { Logs = _logs.Snapshot() });
                         Publish();
                         throw new InvalidOperationException("核心更新健康检查失败，已自动回滚并恢复旧核心。");
                     }
@@ -2631,7 +2630,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _endpointSessions.StatusChanged -= _remoteRefresh.HandleSessionStatusChanged;
         _networkSwitchRuntimeController.StatusChanged -= OnNetworkSwitchStatusChanged;
         _processManager.StateChanged -= OnProcessStateChanged;
-        _processManager.LogLineReceived -= OnProcessLogLine;
+        _processManager.LogLineReceived -= _logs.OnProcessLogLine;
 
         await RunCleanupStepAsync(
             cleanupFailures,
@@ -2715,7 +2714,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await RunCleanupStepAsync(
             cleanupFailures,
             "停止日志流",
-            _ => StopLogStreamAsync());
+            _ => _logs.StopLogStreamAsync());
         await RunCleanupStepAsync(
             cleanupFailures,
             "等待数据刷新",
@@ -2741,8 +2740,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             "停止发布 worker",
             _ => _throttledPublisher.DisposeAsync().AsTask());
 
-        _logStreamCts?.Dispose();
-        _logStreamCts = null;
+        _logs.Dispose();
         _remoteRefresh.Dispose();
 
         if (cleanupFailures.Count > 0)
@@ -2751,7 +2749,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _stateStore.Update(snapshot => snapshot with
             {
                 ErrorMessage = message,
-                Logs = _logBuffer.Snapshot()
+                Logs = _logs.Snapshot()
             });
             try
             {
@@ -2795,7 +2793,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             $"{operationName}：{ErrorSanitizer.Sanitize(exception)}",
             exception);
         failures.Add(sanitized);
-        AddApplicationLog(new LogEntry(
+        _logs.AddApplicationLog(new LogEntry(
             DateTimeOffset.UtcNow,
             "ClashTray",
             "error",
@@ -2856,7 +2854,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     Mode = mode ?? snapshot.Core.Mode,
                     ErrorMessage = null
                 },
-                Logs = _logBuffer.Snapshot(),
+                Logs = _logs.Snapshot(),
                 Tun = observedTun,
                 ErrorMessage = null
             },
@@ -2873,7 +2871,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
 
         Publish();
-        EnsureLogStreamStarted();
+        _logs.EnsureLogStreamStarted();
     }
 
     private TunState ResolveConfirmedTunState(bool? controllerEnabled)
@@ -3006,7 +3004,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                                 providerData.RuleProviders,
                                 EqualityComparer<ProviderStatus>.Default.Equals)
                             : snapshot.RuleProviders,
-                        Logs = _logBuffer.Snapshot()
+                        Logs = _logs.Snapshot()
                     };
                 },
                 out _);
@@ -3215,7 +3213,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                         SetController(null);
                     }
 
-                    await StopLogStreamAsync();
+                    await _logs.StopLogStreamAsync();
                     UpdateCoreState(CoreState.Failed, "Mihomo 进程已退出", unexpectedCoreLost);
                     break;
                 }
@@ -3238,7 +3236,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 if (serviceStatus is null)
                 {
                     SetController(null);
-                    await StopLogStreamAsync();
+                    await _logs.StopLogStreamAsync();
                     await RevokeSystemProxyForCoreLossWithLeaseAsync();
                     _confirmedTunState = TunState.Unavailable;
                     _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
@@ -3258,7 +3256,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 }
 
                 SetController(null);
-                await StopLogStreamAsync();
+                await _logs.StopLogStreamAsync();
                 await RevokeSystemProxyForCoreLossWithLeaseAsync();
                 _stateStore.Update(snapshot => snapshot with { Tun = AdoptServiceTunState(serviceStatus.Tun) });
                 if (serviceStatus.Core is CoreState.Stopped or CoreState.Failed)
@@ -3306,7 +3304,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             LogControllerFailure("后台数据刷新", "/metrics", exception, 0);
-            _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
+            _stateStore.Update(snapshot => snapshot with { Logs = _logs.Snapshot() });
             Publish();
         }
     }
@@ -3528,7 +3526,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _stateStore.Update(snapshot => snapshot with
             {
                 ErrorMessage = $"程序局域网/IPv6 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
-                Logs = _logBuffer.Snapshot()
+                Logs = _logs.Snapshot()
             });
             Publish();
         }
@@ -3547,7 +3545,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _stateStore.Update(snapshot => snapshot with
             {
                 ErrorMessage = $"程序 TUN 设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
-                Logs = _logBuffer.Snapshot()
+                Logs = _logs.Snapshot()
             });
             Publish();
         }
@@ -3567,12 +3565,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", $"程序系统代理设置应用失败：{ErrorSanitizer.Sanitize(exception)}"));
+            _logs.AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", $"程序系统代理设置应用失败：{ErrorSanitizer.Sanitize(exception)}"));
             _stateStore.Update(snapshot => snapshot with
             {
                 SystemProxy = _localDevice.SystemProxyState,
                 ErrorMessage = $"程序系统代理设置应用失败：{ErrorSanitizer.Sanitize(exception)}",
-                Logs = _logBuffer.Snapshot()
+                Logs = _logs.Snapshot()
             });
             Publish();
         }
@@ -3622,7 +3620,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             if (!await TryRestoreNetworkSettingsAsync(api, currentAllowLan, currentIpv6))
             {
-                AddApplicationLog(new LogEntry(
+                _logs.AddApplicationLog(new LogEntry(
                     DateTimeOffset.UtcNow,
                     "ClashTray",
                     "error",
@@ -3821,122 +3819,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    private void EnsureLogStreamStarted()
-    {
-        if (!_usingServiceCore)
-        {
-            return;
-        }
-
-        lock (_logStreamGate)
-        {
-            MihomoApiClient? api = _api;
-            if (api is null || _logStreamTask is { IsCompleted: false })
-            {
-                return;
-            }
-
-            _logStreamCts?.Dispose();
-            CancellationTokenSource streamCts = CancellationTokenSource.CreateLinkedTokenSource(_runtimeCts.Token);
-            _logStreamCts = streamCts;
-            _logStreamTask = Task.Run(
-                () => RunLogStreamAsync(api, streamCts.Token),
-                CancellationToken.None);
-        }
-    }
-
-    private async Task StopLogStreamAsync()
-    {
-        Task? task;
-        CancellationTokenSource? streamCts;
-        lock (_logStreamGate)
-        {
-            task = _logStreamTask;
-            streamCts = _logStreamCts;
-            _logStreamTask = null;
-            _logStreamCts = null;
-        }
-
-        if (streamCts is not null)
-        {
-            await streamCts.CancelAsync();
-        }
-        try
-        {
-            if (task is not null)
-            {
-                await task.ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (WebSocketException)
-        {
-        }
-        catch (HttpRequestException)
-        {
-        }
-        catch (IOException)
-        {
-        }
-        finally
-        {
-            streamCts?.Dispose();
-        }
-    }
-
-    private async Task RunLogStreamAsync(MihomoApiClient api, CancellationToken cancellationToken)
-    {
-        TimeSpan retryDelay = TimeSpan.FromSeconds(1);
-        string path = $"/logs?level={Uri.EscapeDataString(_settings.LogLevel)}&format=structured";
-        while (!cancellationToken.IsCancellationRequested && ReferenceEquals(_api, api))
-        {
-            try
-            {
-                using ClientWebSocket socket = await api.ConnectWebSocketAsync(path, cancellationToken);
-                retryDelay = TimeSpan.FromSeconds(1);
-                await ControllerLogStreamReceiver.ReceiveLogMessagesAsync(
-                    socket,
-                    "mihomo",
-                    AddMihomoLog,
-                    cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-            }
-            catch (WebSocketException)
-            {
-            }
-            catch (HttpRequestException)
-            {
-            }
-            catch (IOException)
-            {
-            }
-
-            if (cancellationToken.IsCancellationRequested || !ReferenceEquals(_api, api))
-            {
-                break;
-            }
-
-            try
-            {
-                await Task.Delay(retryDelay, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-
-            retryDelay = TimeSpan.FromSeconds(Math.Min(30, retryDelay.TotalSeconds * 2));
-        }
-    }
-
     private async Task<ProxyDataResult> TryGetProxyDataAsync(
         MihomoApiClient api,
         CancellationToken cancellationToken)
@@ -4061,24 +3943,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    private async Task<IReadOnlyList<LogEntry>> TryGetLogsAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            using JsonDocument logs = await _api!.GetLogsAsync(_settings.LogLevel, cancellationToken);
-            foreach (LogEntry entry in MihomoDataParser.ParseLogs(logs, "mihomo"))
-            {
-                _logBuffer.Add(entry);
-            }
-
-            return _logBuffer.Snapshot();
-        }
-        catch (HttpRequestException)
-        {
-            return _logBuffer.Snapshot();
-        }
-    }
-
     private ConfigurationProfile? GetActiveConfiguration() =>
         Snapshot.Configurations.FirstOrDefault(configuration => configuration.IsActive)
         ?? Snapshot.Configurations.FirstOrDefault(configuration => configuration.Id == _settings.ActiveConfigurationId);
@@ -4136,7 +4000,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             Core = snapshot.Core with { State = CoreState.Running, ErrorMessage = message },
             ErrorMessage = message,
-            Logs = _logBuffer.Snapshot()
+            Logs = _logs.Snapshot()
         });
         Publish();
     }
@@ -4154,7 +4018,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         string duration = elapsed is null ? "未测量" : $"{elapsed.Value.TotalMilliseconds:0}ms";
         string hosting = _usingServiceCore ? "service" : "local";
         string message = $"{phase}失败：托管方式={hosting}，路径={path}，{status}，耗时={duration}，重试={retryCount}，错误类型={DescribeControllerError(exception)}。";
-        AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "warning", message));
+        _logs.AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "warning", message));
     }
 
     private static string DescribeControllerError(Exception exception) => exception switch
@@ -4225,7 +4089,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            AddApplicationLog(new LogEntry(
+            _logs.AddApplicationLog(new LogEntry(
                 DateTimeOffset.UtcNow,
                 "ClashTray",
                 "error",
@@ -4234,7 +4098,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 SystemProxy = _localDevice.SystemProxyState,
                 ErrorMessage = "核心不可用时撤销系统代理失败，系统代理状态需要恢复。",
-                Logs = _logBuffer.Snapshot()
+                Logs = _logs.Snapshot()
             });
             Publish();
         }
@@ -4280,7 +4144,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            AddApplicationLog(new LogEntry(
+            _logs.AddApplicationLog(new LogEntry(
                 DateTimeOffset.UtcNow,
                 "ClashTray",
                 "error",
@@ -4298,14 +4162,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
         if (!string.IsNullOrWhiteSpace(error))
         {
-            AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", error));
+            _logs.AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", error));
         }
 
         _stateStore.Update(snapshot => snapshot with
         {
             Core = snapshot.Core with { State = state, ErrorMessage = error },
             ErrorMessage = error,
-            Logs = _logBuffer.Snapshot()
+            Logs = _logs.Snapshot()
         });
         Publish();
         if (unexpectedCoreLost)
@@ -4324,10 +4188,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     {
         if (!string.IsNullOrWhiteSpace(error))
         {
-            AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", error));
+            _logs.AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", error));
         }
 
-        _stateStore.Update(snapshot => snapshot with { Subscription = state, ErrorMessage = error, Logs = _logBuffer.Snapshot() });
+        _stateStore.Update(snapshot => snapshot with { Subscription = state, ErrorMessage = error, Logs = _logs.Snapshot() });
         Publish();
     }
 
@@ -4366,24 +4230,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         Endpoints,
         activeController: _remoteRefresh.BuildActiveControllerSnapshot(),
         controllerGeneration: ControllerGeneration);
-
-    private void OnProcessLogLine(string line, bool isError)
-    {
-        AddMihomoLog(new LogEntry(DateTimeOffset.UtcNow, "mihomo", isError ? "error" : "info", line));
-    }
-
-    private void AddMihomoLog(LogEntry entry)
-    {
-        _logBuffer.Add(entry);
-        _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
-        _throttledPublisher.Queue();
-    }
-
-    private void AddApplicationLog(LogEntry entry)
-    {
-        _logBuffer.Add(entry);
-        _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
-    }
 
     private bool IsCoreRunningForSettings() =>
         Snapshot.Core.State == CoreState.Running
