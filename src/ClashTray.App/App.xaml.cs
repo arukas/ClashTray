@@ -13,7 +13,9 @@ public partial class App : Application, IAsyncDisposable
     private MainWindow? _mainWindow;
     private TrayIconService? _trayIcon;
     private readonly ClashTrayRuntime _runtime;
+#if DEBUG
     private readonly string? _smokeDirectory;
+#endif
     private readonly object _snapshotDispatchGate = new();
     private AppSnapshot? _pendingAppSnapshot;
     private bool _snapshotDispatchScheduled;
@@ -26,19 +28,27 @@ public partial class App : Application, IAsyncDisposable
     internal App(SingleInstanceCoordinator instanceCoordinator, string? smokeDirectory = null)
     {
         _instanceCoordinator = instanceCoordinator;
+#if DEBUG
         _smokeDirectory = smokeDirectory;
         AppPaths? runtimePaths = smokeDirectory is null
             ? null
             : new AppPaths(
                 Path.Combine(smokeDirectory, "user"),
                 Path.Combine(smokeDirectory, "service"));
+#else
+        AppPaths? runtimePaths = null;
+#endif
         // Wi-Fi/SSID switching is intentionally outside the 0.3.0 Beta scope.
         // Keep the runtime seam available for a later release, but do not create
         // a production network context source that could read or monitor SSIDs.
         _runtime = new ClashTrayRuntime(runtimePaths, networkContextSource: null);
         UnhandledException += (_, e) =>
         {
+#if DEBUG
             string directory = _smokeDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClashTray", "logs");
+#else
+            string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClashTray", "logs");
+#endif
             Directory.CreateDirectory(directory);
             File.AppendAllText(Path.Combine(directory, "startup-error.log"), $"{DateTimeOffset.Now:O} {e.Exception}\n");
         };
@@ -46,12 +56,17 @@ public partial class App : Application, IAsyncDisposable
         // Set the Windows App SDK language override after the Application object
         // exists but before InitializeComponent loads MRT resources.
         LocalizationService.ApplyStartupLanguage(
+#if DEBUG
             smokeDirectory is null
                 ? new AppPaths()
                 : new AppPaths(
                     Path.Combine(smokeDirectory, "user"),
                     Path.Combine(smokeDirectory, "service")),
             forceChineseForDiagnostics: smokeDirectory is not null);
+#else
+            new AppPaths(),
+            forceChineseForDiagnostics: false);
+#endif
 
         InitializeComponent();
     }
@@ -67,12 +82,17 @@ public partial class App : Application, IAsyncDisposable
         _mainWindow.HidePanel();
         _trayIcon = new TrayIconService(_mainWindow, OnTrayInteraction, _mainWindow.HandleDeactivation);
         _trayIcon.MenuItemSelected += OnMenuItemSelected;
+#if DEBUG
         if (_smokeDirectory is null)
         {
             _trayIcon.Install();
         }
+#else
+        _trayIcon.Install();
+#endif
 
         _mainWindow.Initialize(_trayIcon, _runtime);
+#if DEBUG
         if (_smokeDirectory is null)
         {
             _ = InitializeRuntimeAsync();
@@ -81,8 +101,12 @@ public partial class App : Application, IAsyncDisposable
         {
             _ = RunSmokeTestAsync();
         }
+#else
+        _ = InitializeRuntimeAsync();
+#endif
     }
 
+#if DEBUG
     private async Task RunSmokeTestAsync()
     {
         try
@@ -96,6 +120,7 @@ public partial class App : Application, IAsyncDisposable
             Environment.Exit(1);
         }
     }
+#endif
 
     public async Task RequestQuitAsync()
     {

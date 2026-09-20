@@ -33,4 +33,7 @@
     <Content Include="Assets\Themes\*\Tray\ico\*.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="Assets\Themes\*\Tray\png\*.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup Condition="'$(Configuration)' != 'Debug'">
+    <Compile Remove="MainWindow.SmokeTest.cs" />
+  </ItemGroup>
 </Project>
