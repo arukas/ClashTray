@@ -1,5 +1,7 @@
 using ClashTray.Contracts;
 using ClashTray.Core;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClashTray.Service;
 
@@ -91,13 +93,15 @@ internal sealed class TunTransactionCoordinator
     private readonly ITunNetworkHealthProbe _healthProbe;
     private readonly TunTransactionOptions _options;
     private readonly Func<bool> _shouldRetryEnable;
+    private readonly ILogger _logger;
     private TunOperationPhase _phase = TunOperationPhase.Idle;
 
     public TunTransactionCoordinator(
         ITunTransactionBackend backend,
         ITunNetworkHealthProbe healthProbe,
         TunTransactionOptions? options = null,
-        Func<bool>? shouldRetryEnable = null)
+        Func<bool>? shouldRetryEnable = null,
+        ILogger? logger = null)
     {
         _backend = backend ?? throw new ArgumentNullException(nameof(backend));
         _healthProbe = healthProbe ?? throw new ArgumentNullException(nameof(healthProbe));
@@ -111,6 +115,7 @@ internal sealed class TunTransactionCoordinator
         }
 
         _shouldRetryEnable = shouldRetryEnable ?? (() => true);
+        _logger = logger ?? NullLogger<TunTransactionCoordinator>.Instance;
     }
 
     public TunOperationPhase Phase => _phase;
@@ -120,6 +125,30 @@ internal sealed class TunTransactionCoordinator
         CancellationToken cancellationToken = default)
     {
         Guid operationId = Guid.NewGuid();
+        _logger.LogInformation("TUN transaction {OperationId} started (enable: {Enabled}).", operationId, enabled);
+        TunTransactionResult result = await ExecuteCoreAsync(enabled, operationId, cancellationToken).ConfigureAwait(false);
+        if (result.Succeeded)
+        {
+            _logger.LogInformation("TUN transaction {OperationId} succeeded: state {State}.", operationId, result.State);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "TUN transaction {OperationId} failed: state {State}, phase {Phase}, error: {Error}",
+                operationId,
+                result.State,
+                result.Phase,
+                result.Error);
+        }
+
+        return result;
+    }
+
+    private async Task<TunTransactionResult> ExecuteCoreAsync(
+        bool enabled,
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
         if (!enabled)
         {
             TunTransactionResult result = await ExecuteDisableAsync(operationId, cancellationToken).ConfigureAwait(false);
@@ -453,9 +482,7 @@ internal sealed class TunTransactionCoordinator
         }
         catch (Exception exception)
         {
-            System.Diagnostics.Trace.TraceWarning(
-                "ClashTray service: TUN disable convergence failed: {0}",
-                ErrorSanitizer.Sanitize(exception));
+            _logger.LogWarning("TUN disable convergence failed: {Error}", ErrorSanitizer.Sanitize(exception));
             return false;
         }
     }
@@ -476,9 +503,7 @@ internal sealed class TunTransactionCoordinator
         }
         catch (Exception exception)
         {
-            System.Diagnostics.Trace.TraceWarning(
-                "ClashTray service: TUN recovery restart failed: {0}",
-                ErrorSanitizer.Sanitize(exception));
+            _logger.LogWarning("TUN recovery restart failed: {Error}", ErrorSanitizer.Sanitize(exception));
             return false;
         }
     }
@@ -517,9 +542,7 @@ internal sealed class TunTransactionCoordinator
         }
         catch (Exception exception)
         {
-            System.Diagnostics.Trace.TraceWarning(
-                "ClashTray service: TUN post-restart confirmation failed: {0}",
-                ErrorSanitizer.Sanitize(exception));
+            _logger.LogWarning("TUN post-restart confirmation failed: {Error}", ErrorSanitizer.Sanitize(exception));
             return false;
         }
     }

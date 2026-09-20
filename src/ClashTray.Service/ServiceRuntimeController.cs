@@ -5,6 +5,8 @@ using System.Security.Cryptography;
 using System.Text;
 using ClashTray.Contracts;
 using ClashTray.Core;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClashTray.Service;
 
@@ -32,6 +34,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private readonly object _tunLogGate = new();
     private readonly ITunNetworkHealthProbe _tunHealthProbe;
     private readonly TunTransactionCoordinator _tunTransactions;
+    private readonly ILogger _logger;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly object _requestCacheGate = new();
     private readonly Dictionary<Guid, CachedRequest> _requestCache = [];
@@ -53,23 +56,26 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         public DateTimeOffset ExpiresAt { get; set; }
     }
 
-    public ServiceRuntimeController(AppPaths? paths = null, string? managedUserSid = null)
-        : this(paths, managedUserSid, null)
+    public ServiceRuntimeController(AppPaths? paths = null, string? managedUserSid = null, ILoggerFactory? loggerFactory = null)
+        : this(paths, managedUserSid, null, loggerFactory)
     {
     }
 
     internal ServiceRuntimeController(
         AppPaths? paths,
         string? managedUserSid,
-        ITunNetworkHealthProbe? tunHealthProbe)
+        ITunNetworkHealthProbe? tunHealthProbe,
+        ILoggerFactory? loggerFactory = null)
     {
         _paths = paths ?? new AppPaths();
+        _logger = loggerFactory?.CreateLogger<ServiceRuntimeController>() ?? NullLogger<ServiceRuntimeController>.Instance;
         _coreUpdater = new CoreUpdater(_paths, _coreUpdateHttpClient, managedUserSid);
         _tunHealthProbe = tunHealthProbe ?? new WindowsTunNetworkHealthProbe();
         _tunTransactions = new TunTransactionCoordinator(
             new ControllerTunTransactionBackend(this),
             _tunHealthProbe,
-            shouldRetryEnable: () => Volatile.Read(ref _tunDesired) != 0);
+            shouldRetryEnable: () => Volatile.Read(ref _tunDesired) != 0,
+            logger: loggerFactory?.CreateLogger<TunTransactionCoordinator>());
         _processManager.LogLineReceived += OnProcessLogLine;
     }
 
@@ -87,6 +93,10 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     {
         if (request.ProtocolVersion != ServiceProtocol.CurrentVersion)
         {
+            _logger.LogWarning(
+                "Rejected service request {RequestId}: unsupported protocol version {ProtocolVersion}.",
+                request.RequestId,
+                request.ProtocolVersion);
             return Failure(
                 request,
                 $"不支持的 ClashTray 服务协议版本：{request.ProtocolVersion}。",
@@ -108,6 +118,9 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             {
                 if (!string.Equals(existing.Fingerprint, fingerprint, StringComparison.Ordinal))
                 {
+                    _logger.LogWarning(
+                        "Rejected service request {RequestId}: request ID reused with a different command.",
+                        request.RequestId);
                     return Failure(
                         request,
                         "服务请求 ID 已用于不同的命令，拒绝重复执行。",
@@ -134,6 +147,9 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
                 if (_requestCache.Count >= MaxCachedRequests)
                 {
+                    _logger.LogWarning(
+                        "Rejected service request {RequestId}: request cache is saturated.",
+                        request.RequestId);
                     return Failure(
                         request,
                         "服务请求缓存已被执行中的操作占满，请稍后重试。",
@@ -185,6 +201,11 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
         catch (Exception exception)
         {
+            _logger.LogWarning(
+                "Service command {Command} ({RequestId}) failed: {Error}",
+                request.Command,
+                request.RequestId,
+                ErrorSanitizer.Sanitize(exception));
             MarkCachedRequestCompleting(cached);
             cached.Completion.TrySetResult(
                 Failure(request, ErrorSanitizer.Sanitize(exception), _processManager.State));
@@ -213,6 +234,18 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The command dispatch boundary converts any handler failure into a failure ServiceResponse instead of throwing across the IPC boundary.")]
     private async Task<ServiceResponse> HandleCoreAsync(ServiceRequest request, CancellationToken cancellationToken)
     {
+        if (!Enum.IsDefined(request.Command))
+        {
+            _logger.LogWarning(
+                "Rejected unknown service command {Command} ({RequestId}).",
+                request.Command,
+                request.RequestId);
+        }
+        else if (request.Command != ServiceCommand.GetStatus)
+        {
+            _logger.LogInformation("Executing service command {Command} ({RequestId}).", request.Command, request.RequestId);
+        }
+
         try
         {
             return request.Command switch
@@ -732,6 +765,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             || payload.ControllerSecret is null
             || payload.Enabled != enabled)
         {
+            _logger.LogWarning("Rejected TUN request {RequestId}: invalid payload parameters.", request.RequestId);
             return Failure(request, "TUN 请求参数无效。", _processManager.State);
         }
 
@@ -986,8 +1020,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             }
             catch (Exception exception)
             {
-                System.Diagnostics.Trace.TraceWarning(
-                    "ClashTray service: recovery restart after TUN shutdown failed: {0}",
+                _controller._logger.LogWarning(
+                    "Recovery restart after TUN shutdown failed: {Error}",
                     ErrorSanitizer.Sanitize(exception));
                 return false;
             }
@@ -1004,6 +1038,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             || payload.ControllerPort is < 1 or > 65535
             || payload.ControllerSecret is null)
         {
+            _logger.LogWarning("Rejected core payload: untrusted runtime path or parameters.");
             throw new InvalidOperationException("服务拒绝了不受信任的核心路径或参数。");
         }
     }

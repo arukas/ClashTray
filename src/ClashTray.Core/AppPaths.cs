@@ -32,6 +32,8 @@ public sealed class AppPaths
 
     public string RuntimeRoot => Path.Combine(ProgramRoot, "runtime");
 
+    public string ServiceLogsRoot => Path.Combine(ProgramRoot, "logs");
+
     public string LogsRoot => Path.Combine(LocalRoot, "logs");
 
     public string SettingsFile => Path.Combine(LocalRoot, "settings.json");
@@ -71,7 +73,9 @@ public sealed class AppPaths
         Directory.CreateDirectory(ProgramRoot);
         Directory.CreateDirectory(CoreRoot);
         Directory.CreateDirectory(RuntimeRoot);
+        Directory.CreateDirectory(ServiceLogsRoot);
         WindowsPathSecurity.ProtectRuntimeDirectory(RuntimeRoot);
+        WindowsPathSecurity.ProtectServiceLogDirectory(ServiceLogsRoot);
         if (!string.IsNullOrWhiteSpace(managedUserSid))
         {
             WindowsPathSecurity.ProtectManagedCoreDirectory(CoreRoot, managedUserSid);

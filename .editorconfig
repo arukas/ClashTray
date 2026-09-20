@@ -50,10 +50,19 @@ dotnet_diagnostic.CA1308.severity = none
 [src/ClashTray.Core/ConfigurationStore.cs]
 dotnet_diagnostic.CA1308.severity = none
 
+# Service logging volume is a handful of entries per lifecycle/TUN operation; the
+# LoggerMessage source-generator ceremony costs more review surface than it saves here.
+[src/ClashTray.Service/*.cs]
+dotnet_diagnostic.CA1848.severity = none
+dotnet_diagnostic.CA1873.severity = none
+
 # Test classes must remain public for MSTest discovery; native interop declarations are
-# public because the App test-linking surface consumes them directly.
+# public because the App test-linking surface consumes them directly. Logger perf rules
+# add no value in tests.
 [tests/**/*.cs]
 dotnet_diagnostic.CA1515.severity = none
+dotnet_diagnostic.CA1848.severity = none
+dotnet_diagnostic.CA1873.severity = none
 
 [src/ClashTray.App/NativeMethods.cs]
 dotnet_diagnostic.CA1515.severity = none

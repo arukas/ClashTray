@@ -7,6 +7,8 @@ using System.Text;
 using System.Text.Json;
 using ClashTray.Contracts;
 using ClashTray.Core;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClashTray.Service;
 
@@ -19,19 +21,25 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
     private readonly string _userSid;
     private readonly CancellationTokenSource _cts = new();
     private readonly ServiceRuntimeController _controller;
+    private readonly ILogger _logger;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ConcurrentDictionary<int, Task> _clientTasks = new();
     private readonly SemaphoreSlim _clientSlots = new(MaxServerInstances, MaxServerInstances);
     private Task? _serverTask;
     private int _nextClientId;
 
-    public ServiceCommandHost(string userSid)
+    public ServiceCommandHost(string userSid, ILoggerFactory? loggerFactory = null)
     {
         _userSid = userSid;
-        _controller = new ServiceRuntimeController(managedUserSid: userSid);
+        _logger = loggerFactory?.CreateLogger<ServiceCommandHost>() ?? NullLogger<ServiceCommandHost>.Instance;
+        _controller = new ServiceRuntimeController(managedUserSid: userSid, loggerFactory: loggerFactory);
     }
 
-    public void Start() => _serverTask = Task.Run(RunAsync);
+    public void Start()
+    {
+        _logger.LogInformation("Named pipe command listener starting.");
+        _serverTask = Task.Run(RunAsync);
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -50,6 +58,7 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
         await _controller.DisposeAsync();
         _clientSlots.Dispose();
         _cts.Dispose();
+        _logger.LogInformation("Named pipe command host disposed.");
     }
 
     [SuppressMessage(
@@ -158,6 +167,7 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                 }
                 catch (InvalidDataException)
                 {
+                    _logger.LogWarning("Rejected service request exceeding the size limit.");
                     await WriteResponseAsync(
                         writer,
                         new ServiceResponse(
@@ -186,6 +196,9 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                 }
                 catch (Exception exception)
                 {
+                    _logger.LogWarning(
+                        "Service request handling failed: {Error}",
+                        ErrorSanitizer.Sanitize(exception));
                     response = new ServiceResponse(
                         request?.RequestId ?? Guid.Empty,
                         false,

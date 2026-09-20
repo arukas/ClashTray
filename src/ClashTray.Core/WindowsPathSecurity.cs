@@ -79,6 +79,24 @@ internal static class WindowsPathSecurity
         new FileInfo(path).SetAccessControl(security);
     }
 
+    public static void ProtectServiceLogDirectory(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        SecurityIdentifier administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+        SecurityIdentifier localSystem = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+        SecurityIdentifier users = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+        DirectorySecurity security = new DirectorySecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        AddFullControlRule(security, administrators);
+        AddFullControlRule(security, localSystem);
+        AddReadExecuteRule(security, users);
+        new DirectoryInfo(path).SetAccessControl(security);
+    }
+
     private static SecurityIdentifier ResolveUser(string? userSid)
     {
         if (!string.IsNullOrWhiteSpace(userSid))

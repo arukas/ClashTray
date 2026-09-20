@@ -1,4 +1,5 @@
 using ClashTray.Core;
+using Microsoft.Extensions.Logging;
 
 namespace ClashTray.Service;
 
@@ -16,14 +17,38 @@ internal static class Program
             ?? System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value
             ?? throw new InvalidOperationException("Unable to resolve the service user SID.");
 
-        if (!Environment.UserInteractive && !args.Contains("--console", StringComparer.OrdinalIgnoreCase))
+        AppPaths paths = new();
+        try
         {
-            using WindowsServiceHost serviceHost = new WindowsServiceHost(userSid);
+            paths.EnsureProgramDataDirectories(userSid);
+        }
+        catch (IOException)
+        {
+            // Directory/ACL setup failure must not block service start; the log
+            // provider recreates the log directory without ACL hardening.
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+
+        // LoggerFactory does not dispose provider instances handed to AddProvider;
+        // keep ownership explicit so the log handle is released on shutdown.
+        using RollingFileLoggerProvider loggerProvider = new(paths.ServiceLogsRoot);
+        using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
+            builder.AddProvider(loggerProvider));
+        ILogger logger = loggerFactory.CreateLogger("ClashTray.Service");
+        bool serviceMode = !Environment.UserInteractive && !args.Contains("--console", StringComparer.OrdinalIgnoreCase);
+        logger.LogInformation("ClashTray service starting (mode: {Mode}).", serviceMode ? "service" : "console");
+
+        if (serviceMode)
+        {
+            using WindowsServiceHost serviceHost = new WindowsServiceHost(userSid, loggerFactory);
             System.ServiceProcess.ServiceBase.Run(serviceHost);
+            logger.LogInformation("ClashTray service stopped.");
             return;
         }
 
-        await using ServiceCommandHost commandHost = new ServiceCommandHost(userSid);
+        await using ServiceCommandHost commandHost = new ServiceCommandHost(userSid, loggerFactory);
         commandHost.Start();
 
         // Console mode must still run the full cleanup path on Ctrl+C /
@@ -42,5 +67,7 @@ internal static class Program
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
         {
         }
+
+        logger.LogInformation("ClashTray service stopped.");
     }
 }
