@@ -10,15 +10,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly BooleanSingleFlight<TunState> _tunOperation = new(
         "TUN",
         cancelWhenNoWaiters: false);
-    private readonly LatestWinsOperation<ModeIntent> _modeOperation = new("模式");
-    private readonly object _proxyOperationGate = new();
-    private readonly Dictionary<string, LatestWinsOperation<ProxySelectionIntent>> _proxyOperations =
-        new(StringComparer.Ordinal);
-    private readonly object _delayOperationGate = new();
-    private readonly Dictionary<string, SingleFlightOperation<int?>> _proxyDelayOperations =
-        new(StringComparer.Ordinal);
-    private readonly Dictionary<string, SingleFlightOperation<IReadOnlyDictionary<string, int?>>> _proxyGroupDelayOperations =
-        new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _subscriptionOperationLock = new(1, 1);
     private readonly SemaphoreSlim _dataRefreshLock = new(1, 1);
     private readonly CancellationTokenSource _runtimeCts = new();
@@ -58,6 +49,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private string? _endpointStoreMessage;
     private readonly RemoteControllerRefreshCoordinator _remoteRefresh;
     private readonly RuntimeLogCoordinator _logs;
+    private readonly ControllerSessionGuard _controllerGuard;
+    private readonly ProxyOperationCoordinator _proxyOps;
     private readonly Func<MihomoApiClient>? _controllerApiFactory;
     private bool _usingServiceCore;
     private long _confirmedCoreLifecycleEpoch = long.MinValue;
@@ -81,10 +74,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly record struct TrafficDataResult(bool Succeeded, TrafficSnapshot? Value);
 
     private readonly record struct MemoryDataResult(bool Succeeded, long Value);
-
-    private sealed record ProxySelectionIntent(string Group, string Proxy);
-
-    private sealed record ModeIntent(ProxyMode Mode, bool RouteToRemote);
 
     private readonly record struct CoreLossContext(
         long LifecycleEpoch,
@@ -198,6 +187,19 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             (phase, path, exception, retryCount) => LogControllerFailure(phase, path, exception, retryCount),
             remoteRefreshDelayAsync,
             remoteLogStreamRunner,
+            _runtimeCts.Token);
+        _controllerGuard = new ControllerSessionGuard(_controllerSessions);
+        _proxyOps = new ProxyOperationCoordinator(
+            _operationLock,
+            _stateStore,
+            _endpointSessions,
+            _remoteRefresh,
+            _logs,
+            _controllerGuard,
+            () => _settings,
+            ExecuteControllerMutationAndRefreshAsync,
+            CommitGroupDelayResultsAsync,
+            Publish,
             _runtimeCts.Token);
         _endpointSessions.StatusChanged += _remoteRefresh.HandleSessionStatusChanged;
         _processManager.StateChanged += OnProcessStateChanged;
@@ -1539,383 +1541,34 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    private LatestWinsOperation<ProxySelectionIntent> GetProxySelectionOperation(string group)
-    {
-        lock (_proxyOperationGate)
-        {
-            if (!_proxyOperations.TryGetValue(group, out LatestWinsOperation<ProxySelectionIntent>? operation))
-            {
-                // Keep the intent table bounded even if a remote endpoint
-                // returns attacker-controlled group names over time.
-                if (!TrimIdleLatestOperations(_proxyOperations))
-                {
-                    throw new OperationBusyException("节点");
-                }
+    public Task SetModeAsync(ProxyMode mode, CancellationToken cancellationToken = default) =>
+        _proxyOps.SetModeAsync(mode, cancellationToken);
 
-                operation = new LatestWinsOperation<ProxySelectionIntent>("节点");
-                _proxyOperations[group] = operation;
-            }
+    public Task SetLocalModeAsync(ProxyMode mode, CancellationToken cancellationToken = default) =>
+        _proxyOps.SetLocalModeAsync(mode, cancellationToken);
 
-            return operation;
-        }
-    }
+    public Task SelectProxyAsync(string group, string proxy, CancellationToken cancellationToken = default) =>
+        _proxyOps.SelectProxyAsync(group, proxy, cancellationToken);
 
-    public async Task SetModeAsync(ProxyMode mode, CancellationToken cancellationToken = default)
-    {
-        await _modeOperation.RequestAsync(
-                new ModeIntent(mode, RouteToRemote: true),
-                (intent, token) => SetModeIntentCoreAsync(
-                    intent,
-                    token),
-                cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    public async Task SetLocalModeAsync(ProxyMode mode, CancellationToken cancellationToken = default)
-    {
-        await _modeOperation.RequestAsync(
-                new ModeIntent(mode, RouteToRemote: false),
-                (intent, token) => SetModeIntentCoreAsync(
-                    intent,
-                    token),
-                cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private async Task<ModeIntent> SetModeIntentCoreAsync(
-        ModeIntent intent,
-        CancellationToken cancellationToken)
-    {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
-        {
-            await ExecuteControllerMutationAndRefreshAsync(
-                EndpointCommand.SwitchMode,
-                "模式切换期间核心会话已切换，请重试。",
-                "远程端点模式切换结果无法确认，请重试。",
-                (api, _, token) => api.SetModeAsync(intent.Mode, token),
-                (session, token) => session.Api.SetModeAsync(intent.Mode, token),
-                cancellationToken,
-                intent.RouteToRemote,
-                refreshScope: MutationRefreshScope.Mode);
-        }
-
-        return intent;
-    }
-
-    public Task SelectProxyAsync(string group, string proxy, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(group);
-        ArgumentException.ThrowIfNullOrWhiteSpace(proxy);
-        LatestWinsOperation<ProxySelectionIntent> operation = GetProxySelectionOperation(group);
-        ProxySelectionIntent intent = new(group, proxy);
-        return SelectProxyLatestAsync(operation, intent, cancellationToken);
-    }
-
-    private async Task SelectProxyLatestAsync(
-        LatestWinsOperation<ProxySelectionIntent> operation,
-        ProxySelectionIntent intent,
-        CancellationToken cancellationToken)
-    {
-        await operation.RequestAsync(
-                intent,
-                (requested, token) => SelectProxyIntentCoreAsync(requested, token),
-                cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private async Task<ProxySelectionIntent> SelectProxyIntentCoreAsync(
-        ProxySelectionIntent intent,
-        CancellationToken cancellationToken)
-    {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
-        {
-            string? previousProxy = Snapshot.ProxyGroups
-                .FirstOrDefault(item => string.Equals(item.Name, intent.Group, StringComparison.Ordinal))
-                ?.Current;
-            Exception? disconnectException = null;
-            bool selectionChanged = previousProxy is not null
-                && !string.Equals(previousProxy, intent.Proxy, StringComparison.Ordinal);
-
-            await ExecuteControllerMutationAndRefreshAsync(
-                EndpointCommand.SwitchProxy,
-                "节点切换期间核心会话已切换，请重新选择节点。",
-                "远程端点节点切换结果无法确认，请重试。",
-                async (api, generation, token) =>
-                {
-                    await api.SelectProxyAsync(intent.Group, intent.Proxy, token);
-                    EnsureControllerSession(
-                        api,
-                        generation,
-                        "节点切换期间核心会话已切换，请重新选择节点。");
-                    if (_settings.DisconnectConnectionsAfterProxySwitch && selectionChanged)
-                    {
-                        try
-                        {
-                            EnsureControllerCommand(
-                                api,
-                                generation,
-                                EndpointCommand.CloseConnection,
-                                "节点切换期间核心会话已切换，请重新选择节点。");
-                            await api.CloseAllConnectionsAsync(token);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            throw;
-                        }
-                        catch (Exception exception)
-                        {
-                            EnsureControllerSession(
-                                api,
-                                generation,
-                                "节点切换期间核心会话已切换，请重新选择节点。");
-                            disconnectException = exception;
-                            _logs.AddApplicationLog(new LogEntry(
-                                DateTimeOffset.UtcNow,
-                                "ClashTray",
-                                "error",
-                                $"节点已切换，但未能断开旧连接：{ErrorSanitizer.Sanitize(exception)}"));
-                        }
-                    }
-                },
-                (session, token) => session.Api.SelectProxyAsync(intent.Group, intent.Proxy, token),
-                cancellationToken,
-                refreshScope: MutationRefreshScope.ProxySelection);
-
-            if (disconnectException is not null)
-            {
-                const string message = "节点已切换，但未能断开旧连接。";
-                _stateStore.Update(snapshot => snapshot with
-                {
-                    ErrorMessage = message,
-                    Logs = _logs.Snapshot()
-                });
-                Publish();
-                throw new InvalidOperationException(message, disconnectException);
-            }
-        }
-
-        return intent;
-    }
-
-    private SingleFlightOperation<int?> GetProxyDelayOperation(string proxy)
-    {
-        lock (_delayOperationGate)
-        {
-            if (!_proxyDelayOperations.TryGetValue(proxy, out SingleFlightOperation<int?>? operation))
-            {
-                if (!TrimIdleOperations(_proxyDelayOperations))
-                {
-                    throw new OperationBusyException("节点测速");
-                }
-
-                operation = new SingleFlightOperation<int?>("节点测速");
-                _proxyDelayOperations[proxy] = operation;
-            }
-
-            return operation;
-        }
-    }
-
-    private SingleFlightOperation<IReadOnlyDictionary<string, int?>> GetProxyGroupDelayOperation(string group)
-    {
-        lock (_delayOperationGate)
-        {
-            if (!_proxyGroupDelayOperations.TryGetValue(group, out SingleFlightOperation<IReadOnlyDictionary<string, int?>>? operation))
-            {
-                if (!TrimIdleOperations(_proxyGroupDelayOperations))
-                {
-                    throw new OperationBusyException("代理组测速");
-                }
-
-                operation = new SingleFlightOperation<IReadOnlyDictionary<string, int?>>("代理组测速");
-                _proxyGroupDelayOperations[group] = operation;
-            }
-
-            return operation;
-        }
-    }
-
-    private static bool TrimIdleOperations<T>(Dictionary<string, SingleFlightOperation<T>> operations)
-    {
-        const int MaxRetainedOperations = 256;
-        if (operations.Count < MaxRetainedOperations)
-        {
-            return true;
-        }
-
-        string? idleKey = operations
-            .FirstOrDefault(entry => !entry.Value.IsBusy)
-            .Key;
-        if (idleKey is not null)
-        {
-            operations.Remove(idleKey);
-            return true;
-        }
-
-        return false;
-    }
-
-    private static bool TrimIdleLatestOperations(
-        Dictionary<string, LatestWinsOperation<ProxySelectionIntent>> operations)
-    {
-        const int MaxRetainedOperations = 256;
-        if (operations.Count < MaxRetainedOperations)
-        {
-            return true;
-        }
-
-        string? idleKey = operations
-            .FirstOrDefault(entry => !entry.Value.IsBusy)
-            .Key;
-        if (idleKey is not null)
-        {
-            operations.Remove(idleKey);
-            return true;
-        }
-
-        return false;
-    }
-
-    public Task<int?> TestProxyDelayAsync(string proxy, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(proxy);
-        SingleFlightOperation<int?> operation = GetProxyDelayOperation(proxy);
-        return operation.RequestAsync(
-            token => TestProxyDelayCoreAsync(proxy, token),
-            cancellationToken);
-    }
-
-    private async Task<int?> TestProxyDelayCoreAsync(
-        string proxy,
-        CancellationToken operationCancellationToken)
-    {
-        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
-            operationCancellationToken,
-            _runtimeCts.Token);
-        CancellationToken cancellationToken = linked.Token;
-        ThrowIfRuntimeQuiescing();
-        EndpointSession? remoteSession = _remoteRefresh.CaptureActiveRemoteSession(
-            EndpointCommand.TestDelay,
-            "测速期间远程端点会话已切换，请重新测速。");
-        if (remoteSession is not null)
-        {
-            EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-            using JsonDocument remoteResponse = await remoteSession.Api.TestDelayAsync(
-                proxy,
-                new Uri("https://www.gstatic.com/generate_204"),
-                5000,
-                cancellationToken);
-            if (!_remoteRefresh.IsCurrentRemoteSession(remoteSession, remoteStatus))
-            {
-                throw new InvalidOperationException(
-                    "测速期间远程端点会话已切换，请重新测速。");
-            }
-
-            int? remoteDelay = remoteResponse.RootElement.TryGetProperty(
-                    "delay",
-                    out JsonElement remoteDelayElement)
-                && remoteDelayElement.TryGetInt32(out int remoteMilliseconds)
-                ? remoteMilliseconds
-                : null;
-            if (!await _remoteRefresh.RefreshSnapshotAsync(
-                    remoteSession,
-                    remoteStatus,
-                    cancellationToken)
-                .ConfigureAwait(false))
-            {
-                throw new InvalidOperationException(
-                    "远程节点测速结果无法确认，请重试。");
-            }
-
-            return remoteDelay;
-        }
-
-        (MihomoApiClient api, long generation) = CaptureControllerSession();
-        EnsureControllerCommand(
-            api,
-            generation,
-            EndpointCommand.TestDelay,
-            "测速期间核心会话已切换，请重新测速。");
-
-        using JsonDocument response = await api.TestDelayAsync(
-            proxy,
-            new Uri("https://www.gstatic.com/generate_204"),
-            5000,
-            cancellationToken);
-        EnsureControllerSession(api, generation, "测速期间核心会话已切换，请重新测速。");
-        if (response.RootElement.TryGetProperty("delay", out JsonElement delay)
-            && delay.TryGetInt32(out int milliseconds))
-        {
-            return milliseconds;
-        }
-
-        return null;
-    }
+    public Task<int?> TestProxyDelayAsync(string proxy, CancellationToken cancellationToken = default) =>
+        _proxyOps.TestProxyDelayAsync(proxy, cancellationToken);
 
     public Task<IReadOnlyDictionary<string, int?>> TestProxyGroupDelayAsync(
-        string group, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(group);
-        SingleFlightOperation<IReadOnlyDictionary<string, int?>> operation = GetProxyGroupDelayOperation(group);
-        return operation.RequestAsync(
-            token => TestProxyGroupDelayCoreAsync(group, token),
-            cancellationToken);
-    }
-
-    private async Task<IReadOnlyDictionary<string, int?>> TestProxyGroupDelayCoreAsync(
         string group,
-        CancellationToken operationCancellationToken)
+        CancellationToken cancellationToken = default) =>
+        _proxyOps.TestProxyGroupDelayAsync(group, cancellationToken);
+
+    private async Task CommitGroupDelayResultsAsync(
+        MihomoApiClient api,
+        long generation,
+        IReadOnlyDictionary<string, int?> delays,
+        CancellationToken cancellationToken)
     {
-        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
-            operationCancellationToken,
-            _runtimeCts.Token);
-        CancellationToken token = linked.Token;
-        ThrowIfRuntimeQuiescing();
-        EndpointSession? remoteSession = _remoteRefresh.CaptureActiveRemoteSession(
-            EndpointCommand.TestDelay,
-            "测速期间远程端点会话已切换，请重新测速。");
-        if (remoteSession is not null)
-        {
-            EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
-            using JsonDocument remoteResponse = await remoteSession.Api.TestGroupDelayAsync(
-                group,
-                new Uri("https://www.gstatic.com/generate_204"),
-                5000,
-                token);
-            IReadOnlyDictionary<string, int?> remoteDelays =
-                MihomoDataParser.ParseGroupDelays(remoteResponse);
-            if (!_remoteRefresh.IsCurrentRemoteSession(remoteSession, remoteStatus))
-            {
-                throw new InvalidOperationException(
-                    "测速期间远程端点会话已切换，请重新测速。");
-            }
-
-            if (!await _remoteRefresh.RefreshSnapshotAsync(
-                    remoteSession,
-                    remoteStatus,
-                    token)
-                .ConfigureAwait(false))
-            {
-                throw new InvalidOperationException(
-                    "远程代理组测速结果无法确认，请重试。");
-            }
-
-            return remoteDelays;
-        }
-
-        (MihomoApiClient api, long generation) = CaptureControllerSession();
-        EnsureControllerCommand(
-            api,
-            generation,
-            EndpointCommand.TestDelay,
-            "测速期间核心会话已切换，请重新测速。");
-        using JsonDocument response = await api.TestGroupDelayAsync(group, new Uri("https://www.gstatic.com/generate_204"), 5000, token);
-        IReadOnlyDictionary<string, int?> delays = MihomoDataParser.ParseGroupDelays(response);
-        await _dataRefreshLock.WaitAsync(token);
+        await _dataRefreshLock.WaitAsync(cancellationToken);
         try
         {
             // Refresh now/history from the core and apply the confirmed batch result atomically.
-            ProxyDataResult proxies = await TryGetProxyDataAsync(api, token);
+            ProxyDataResult proxies = await TryGetProxyDataAsync(api, cancellationToken);
             EnsureControllerSession(api, generation, "测速期间核心会话已切换，请重新测速。");
 
             string? LatestDelay(string name, string? previous) => delays.TryGetValue(name, out int? delay)
@@ -1928,7 +1581,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             Publish();
         }
         finally { _dataRefreshLock.Release(); }
-        return delays;
     }
 
     public async Task CloseConnectionAsync(string id, CancellationToken cancellationToken = default)
@@ -3446,36 +3098,21 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             EndpointCapabilityDefaults.Local);
     }
 
-    private (MihomoApiClient Api, long Generation) CaptureControllerSession()
-    {
-        MihomoControllerSession session = _controllerSessions.Capture();
-        return (session.Api, session.Generation);
-    }
+    private (MihomoApiClient Api, long Generation) CaptureControllerSession() =>
+        _controllerGuard.Capture();
 
     private void EnsureControllerSession(
         MihomoApiClient api,
         long generation,
-        string message)
-    {
-        if (!_controllerSessions.IsCurrent(api, generation))
-        {
-            throw new InvalidOperationException(message);
-        }
-    }
+        string message) =>
+        _controllerGuard.EnsureSession(api, generation, message);
 
     private void EnsureControllerCommand(
         MihomoApiClient api,
         long generation,
         EndpointCommand command,
-        string staleSessionMessage)
-    {
-        EndpointId endpointId = _controllerSessions.Current?.Endpoint.Id ?? EndpointId.Local;
-        TargetCommand targetCommand = new(endpointId, generation, command);
-        _controllerSessions.EnsureTargetCommandAllowed(
-            api,
-            targetCommand,
-            staleSessionMessage);
-    }
+        string staleSessionMessage) =>
+        _controllerGuard.EnsureCommand(api, generation, command, staleSessionMessage);
 
     private async Task ApplyProgramOverridesAsync(
         bool coreRunning,
