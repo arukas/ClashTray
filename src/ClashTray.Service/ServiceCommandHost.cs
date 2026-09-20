@@ -174,17 +174,18 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                     return;
                 }
 
+                ServiceRequest? request = null;
                 ServiceResponse response;
                 try
                 {
-                    ServiceRequest request = JsonSerializer.Deserialize<ServiceRequest>(line, _jsonOptions)
+                    request = JsonSerializer.Deserialize<ServiceRequest>(line, _jsonOptions)
                         ?? throw new InvalidDataException("Invalid service request.");
                     response = await _controller.HandleAsync(request, _cts.Token);
                 }
                 catch (Exception exception)
                 {
                     response = new ServiceResponse(
-                        Guid.Empty,
+                        request?.RequestId ?? Guid.Empty,
                         false,
                         TunState.Failed,
                         Error: ErrorSanitizer.Sanitize(exception),
