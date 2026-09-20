@@ -107,7 +107,8 @@ public sealed class OfficialMihomoServiceInteropTests
                 new ServiceRequest(
                     Guid.NewGuid(),
                     ServiceCommand.RestartCore,
-                    JsonSerializer.Serialize(payload)),
+                    JsonSerializer.Serialize(payload),
+                    ProtocolVersion: ServiceProtocol.CurrentVersion),
                 CancellationToken.None);
             Assert.IsTrue(restartResponse.Succeeded, restartResponse.Error);
             Assert.AreEqual(CoreState.Running, restartResponse.Core);
@@ -120,7 +121,7 @@ public sealed class OfficialMihomoServiceInteropTests
             Assert.AreEqual(BundledMihomo.Version, restartedVersion);
 
             ServiceResponse stopResponse = await controller.HandleAsync(
-                new ServiceRequest(Guid.NewGuid(), ServiceCommand.StopCore),
+                new ServiceRequest(Guid.NewGuid(), ServiceCommand.StopCore, ProtocolVersion: ServiceProtocol.CurrentVersion),
                 CancellationToken.None);
             Assert.IsTrue(stopResponse.Succeeded, stopResponse.Error);
             Assert.AreEqual(CoreState.Stopped, stopResponse.Core);
@@ -145,7 +146,7 @@ public sealed class OfficialMihomoServiceInteropTests
         while (!timeout.IsCancellationRequested)
         {
             lastResponse = await controller.HandleAsync(
-                new ServiceRequest(Guid.NewGuid(), ServiceCommand.GetStatus),
+                new ServiceRequest(Guid.NewGuid(), ServiceCommand.GetStatus, ProtocolVersion: ServiceProtocol.CurrentVersion),
                 timeout.Token);
             if (lastResponse.Succeeded
                 && lastResponse.Core == CoreState.Running

@@ -25,7 +25,7 @@ public sealed class ServicePipeClient : IServicePipeClient
         string? payload = null,
         CancellationToken cancellationToken = default)
     {
-        ServiceRequest request = new(Guid.NewGuid(), command, payload);
+        ServiceRequest request = new(Guid.NewGuid(), command, payload, ServiceProtocol.CurrentVersion);
         await using NamedPipeClientStream pipe = new(
             ".",
             PipeName,
@@ -96,10 +96,17 @@ public sealed class ServicePipeClient : IServicePipeClient
                 throw Unknown(request, "ClashTray service returned a mismatched response.");
             }
 
-            if (response.ProtocolVersion != ServiceProtocol.CurrentVersion
-                || response.DispatchState != ServiceDispatchState.Completed)
+            if (response.ProtocolVersion != ServiceProtocol.CurrentVersion)
             {
-                throw Unknown(request, "ClashTray service protocol version or dispatch state is incompatible.");
+                throw new ServiceProtocolVersionMismatchException(
+                    $"ClashTray 服务协议版本不兼容：期望 {ServiceProtocol.CurrentVersion}，实际 {response.ProtocolVersion}。请同步升级或重装 ClashTray 服务。",
+                    request.RequestId,
+                    response.ProtocolVersion);
+            }
+
+            if (response.DispatchState != ServiceDispatchState.Completed)
+            {
+                throw Unknown(request, "ClashTray service returned an incomplete dispatch state.");
             }
 
             return response;
@@ -201,6 +208,35 @@ internal sealed class ServiceUnavailableException : IOException
     public Guid RequestId { get; }
 
     public ServiceDispatchState DispatchState { get; }
+}
+
+internal sealed class ServiceProtocolVersionMismatchException : IOException
+{
+    public ServiceProtocolVersionMismatchException()
+        : this("ClashTray 服务协议版本不兼容。", Guid.Empty, 0)
+    {
+    }
+
+    public ServiceProtocolVersionMismatchException(string message)
+        : this(message, Guid.Empty, 0)
+    {
+    }
+
+    public ServiceProtocolVersionMismatchException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+
+    public ServiceProtocolVersionMismatchException(string message, Guid requestId, int actualVersion)
+        : base(message)
+    {
+        RequestId = requestId;
+        ActualVersion = actualVersion;
+    }
+
+    public Guid RequestId { get; }
+
+    public int ActualVersion { get; }
 }
 
 internal sealed class ServiceRequestUnknownException : IOException

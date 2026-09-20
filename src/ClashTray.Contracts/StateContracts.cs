@@ -200,7 +200,10 @@ public sealed record ServiceRequest(
     Guid RequestId,
     ServiceCommand Command,
     string? Payload = null,
-    int ProtocolVersion = ServiceProtocol.CurrentVersion);
+    // 0 means the peer did not state a version (legacy payload); both sides
+    // must send ServiceProtocol.CurrentVersion explicitly so a version skew
+    // can never masquerade as the current protocol.
+    int ProtocolVersion = 0);
 
 public enum ServiceErrorCode
 {
@@ -220,7 +223,7 @@ public sealed record ServiceResponse(
     CoreState Core = CoreState.Stopped,
     ServiceErrorCode ErrorCode = ServiceErrorCode.None,
     ServiceDispatchState DispatchState = ServiceDispatchState.Completed,
-    int ProtocolVersion = ServiceProtocol.CurrentVersion);
+    int ProtocolVersion = 0);
 
 public sealed record ServiceCorePayload(
     string ConfigurationPath,

@@ -776,6 +776,12 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                     return;
                 }
             }
+            catch (ServiceProtocolVersionMismatchException)
+            {
+                // An incompatible service must fail explicitly; reconciling it
+                // as an unknown outcome would disguise a deployment error.
+                throw;
+            }
             catch (IOException exception)
             {
                 serviceResponse = await ReconcileUnknownServiceStartAsync(exception).ConfigureAwait(false);

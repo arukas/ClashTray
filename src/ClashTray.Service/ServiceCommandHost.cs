@@ -158,7 +158,13 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                 {
                     await WriteResponseAsync(
                         writer,
-                        new ServiceResponse(Guid.Empty, false, TunState.Failed, Error: "服务请求超过大小限制。", Core: _controller.CoreState),
+                        new ServiceResponse(
+                            Guid.Empty,
+                            false,
+                            TunState.Failed,
+                            Error: "服务请求超过大小限制。",
+                            Core: _controller.CoreState,
+                            ProtocolVersion: ServiceProtocol.CurrentVersion),
                         _cts.Token);
                     return;
                 }
@@ -185,7 +191,8 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
                         Core: _controller.CoreState,
                         ErrorCode: exception is OperationBusyException
                             ? ServiceErrorCode.OperationBusy
-                            : ServiceErrorCode.None);
+                            : ServiceErrorCode.None,
+                        ProtocolVersion: ServiceProtocol.CurrentVersion);
                 }
 
                 await WriteResponseAsync(writer, response, _cts.Token);

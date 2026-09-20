@@ -21,7 +21,7 @@ public sealed class BoundaryTests
     {
         await using ServiceRuntimeController controller = new ServiceRuntimeController();
         Guid requestId = Guid.NewGuid();
-        ServiceRequest request = new(requestId, ServiceCommand.GetStatus);
+        ServiceRequest request = new(requestId, ServiceCommand.GetStatus, ProtocolVersion: ServiceProtocol.CurrentVersion);
 
         Task<ServiceResponse> firstTask = controller.HandleAsync(request, CancellationToken.None);
         Task<ServiceResponse> secondTask = controller.HandleAsync(request, CancellationToken.None);
@@ -34,11 +34,26 @@ public sealed class BoundaryTests
         Assert.IsTrue(responses[0].Succeeded);
 
         ServiceResponse conflict = await controller.HandleAsync(
-            new ServiceRequest(requestId, ServiceCommand.GetStatus, "{}"),
+            new ServiceRequest(requestId, ServiceCommand.GetStatus, "{}", ProtocolVersion: ServiceProtocol.CurrentVersion),
             CancellationToken.None);
 
         Assert.IsFalse(conflict.Succeeded);
         StringAssert.Contains(conflict.Error, "请求 ID 已用于不同的命令", StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ServiceRejectsRequestWithoutProtocolVersion()
+    {
+        await using ServiceRuntimeController controller = new ServiceRuntimeController();
+        // A legacy peer omits the version field, which deserializes to 0; the
+        // service must reject it explicitly instead of assuming compatibility.
+        ServiceResponse response = await controller.HandleAsync(
+            new ServiceRequest(Guid.NewGuid(), ServiceCommand.GetStatus),
+            CancellationToken.None);
+
+        Assert.IsFalse(response.Succeeded);
+        StringAssert.Contains(response.Error, "协议版本", StringComparison.Ordinal);
+        Assert.AreEqual(ServiceProtocol.CurrentVersion, response.ProtocolVersion);
     }
 
     [TestMethod]
@@ -50,7 +65,8 @@ public sealed class BoundaryTests
         ServiceRequest request = new ServiceRequest(
             Guid.NewGuid(),
             ServiceCommand.EnableTun,
-            JsonSerializer.Serialize(new ServiceTunPayload(9090, secret, true)));
+            JsonSerializer.Serialize(new ServiceTunPayload(9090, secret, true)),
+            ProtocolVersion: ServiceProtocol.CurrentVersion);
 
         ServiceResponse response = await controller.HandleAsync(request, CancellationToken.None);
 
@@ -83,7 +99,8 @@ public sealed class BoundaryTests
                     configurationPath,
                     runtimeDirectory,
                     9090,
-                    string.Empty)));
+                    string.Empty)),
+                ProtocolVersion: ServiceProtocol.CurrentVersion);
 
             ServiceResponse response = await controller.HandleAsync(request, CancellationToken.None);
 
@@ -127,7 +144,8 @@ public sealed class BoundaryTests
                     configurationPath,
                     runtimeDirectory,
                     9090,
-                    string.Empty)));
+                    string.Empty)),
+                ProtocolVersion: ServiceProtocol.CurrentVersion);
 
             ServiceResponse response = await controller.HandleAsync(request, CancellationToken.None);
 

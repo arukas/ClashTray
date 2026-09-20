@@ -529,7 +529,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 true,
                 _tunState,
                 Payload: path,
-                Core: _processManager.State);
+                Core: _processManager.State,
+                ProtocolVersion: ServiceProtocol.CurrentVersion);
         }
         catch (OperationCanceledException exception)
         {
@@ -581,7 +582,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 true,
                 _tunState,
                 Payload: path,
-                Core: _processManager.State);
+                Core: _processManager.State,
+                ProtocolVersion: ServiceProtocol.CurrentVersion);
         }
         catch (Exception exception) when (exception is InvalidOperationException
             or InvalidDataException
@@ -927,7 +929,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 ServiceRequest request = new(
                     Guid.NewGuid(),
                     ServiceCommand.StartCore,
-                    JsonSerializer.Serialize(payload, _controller._jsonOptions));
+                    JsonSerializer.Serialize(payload, _controller._jsonOptions),
+                    ProtocolVersion: ServiceProtocol.CurrentVersion);
                 ServiceResponse response = await _controller.StartCoreAsync(request, cancellationToken)
                     .ConfigureAwait(false);
                 return response.Succeeded && _controller._processManager.State == CoreState.Running;
@@ -970,7 +973,13 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     }
 
     private ServiceResponse Success(ServiceRequest request, string? error = null) =>
-        new(request.RequestId, true, _tunState, Error: error, Core: CoreState);
+        new(
+            request.RequestId,
+            true,
+            _tunState,
+            Error: error,
+            Core: CoreState,
+            ProtocolVersion: ServiceProtocol.CurrentVersion);
 
     private ServiceResponse Failure(
         ServiceRequest request,
@@ -983,7 +992,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             _tunState,
             Error: error,
             Core: core ?? CoreState,
-            ErrorCode: errorCode);
+            ErrorCode: errorCode,
+            ProtocolVersion: ServiceProtocol.CurrentVersion);
 
     private T Deserialize<T>(string? payload) where T : class =>
         string.IsNullOrWhiteSpace(payload)
