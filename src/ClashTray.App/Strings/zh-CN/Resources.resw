@@ -188,9 +188,9 @@
   <data name="CoreVersionBox.Header" xml:space="preserve"><value>版本</value></data>
   <data name="CoreVersionBox.PlaceholderText" xml:space="preserve"><value>例如 v1.19.31</value></data>
   <data name="CoreDownloadUriBox.Header" xml:space="preserve"><value>官方 GitHub 下载地址</value></data>
-  <data name="CoreSha256Box.Header" xml:space="preserve"><value>ZIP SHA-256</value></data>
-  <data name="CoreSha256Box.PlaceholderText" xml:space="preserve"><value>64 位十六进制校验值</value></data>
-  <data name="InstallCoreButton.Content" xml:space="preserve"><value>校验并安装核心</value></data>
+  <data name="CoreSha256Box.Header" xml:space="preserve"><value>ZIP SHA-256（可选）</value></data>
+  <data name="CoreSha256Box.PlaceholderText" xml:space="preserve"><value>64 位十六进制校验值；留空则不校验</value></data>
+  <data name="InstallCoreButton.Content" xml:space="preserve"><value>下载并安装核心</value></data>
   <data name="NetworkSwitchNoDefault" xml:space="preserve"><value>不设置默认配置</value></data>
   <data name="NetworkSwitchSsidHeader" xml:space="preserve"><value>Wi-Fi 名称</value></data>
   <data name="NetworkSwitchSsidPlaceholder" xml:space="preserve"><value>精确 SSID</value></data>

@@ -81,8 +81,9 @@ public sealed class CoreUpdater : IDisposable
             response.EnsureSuccessStatusCode();
             await DownloadToFileAsync(response.Content, archivePath, cancellationToken);
 
-            await using (FileStream hashStream = File.OpenRead(archivePath))
+            if (!string.IsNullOrEmpty(manifest.Sha256))
             {
+                await using FileStream hashStream = File.OpenRead(archivePath);
                 string archiveHash = Convert.ToHexString(await SHA256.HashDataAsync(hashStream, cancellationToken));
                 if (!archiveHash.Equals(manifest.Sha256, StringComparison.OrdinalIgnoreCase))
                 {
@@ -221,15 +222,15 @@ public sealed class CoreUpdater : IDisposable
         ArgumentNullException.ThrowIfNull(manifest);
         Uri? downloadUri = manifest.DownloadUri;
         string path = downloadUri?.AbsolutePath ?? string.Empty;
+        bool checksumValid = string.IsNullOrEmpty(manifest.Sha256)
+            || (manifest.Sha256.Length == 64 && manifest.Sha256.All(Uri.IsHexDigit));
         if (string.IsNullOrWhiteSpace(manifest.Version)
             || downloadUri is null
             || downloadUri.Scheme != Uri.UriSchemeHttps
             || !downloadUri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
             || !path.Contains("/MetaCubeX/mihomo/releases/download/", StringComparison.OrdinalIgnoreCase)
             || !path.Contains("windows-amd64", StringComparison.OrdinalIgnoreCase)
-            || string.IsNullOrWhiteSpace(manifest.Sha256)
-            || manifest.Sha256.Length != 64
-            || manifest.Sha256.Any(character => !Uri.IsHexDigit(character)))
+            || !checksumValid)
         {
             throw new ArgumentException("Mihomo update manifest is not an approved official release manifest.", nameof(manifest));
         }

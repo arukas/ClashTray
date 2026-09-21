@@ -185,6 +185,119 @@ public sealed class CoreUpdaterTests
         }
     }
 
+    [TestMethod]
+    public async Task CoreUpdaterInstallsWithoutChecksumWhenManifestOmitsIt()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        string archivePath = Path.Combine(root, "mihomo.zip");
+
+        try
+        {
+            string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
+            using (ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Create))
+            {
+                await archive.CreateEntryFromFileAsync(executablePath, "mihomo.exe");
+            }
+
+            byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
+            using ArchiveHandler handler = new ArchiveHandler(archiveBytes);
+            using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
+
+            string installedPath = await updater.DownloadAndInstallAsync(CreateManifest(archiveBytes) with { Sha256 = "" });
+
+            Assert.IsTrue(File.Exists(installedPath));
+            ManagedCoreMetadata metadata = JsonSerializer.Deserialize<ManagedCoreMetadata>(
+                await File.ReadAllTextAsync(paths.ManagedCoreMetadata),
+                JsonOptions)
+                ?? throw new InvalidDataException("Installed metadata is missing.");
+            Assert.AreEqual(string.Empty, metadata.ArchiveSha256);
+            await ManagedCoreVerifier.ValidateAsync(paths);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task CoreUpdaterRejectsChecksumMismatchWhenProvided()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        string archivePath = Path.Combine(root, "mihomo.zip");
+
+        try
+        {
+            string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
+            using (ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Create))
+            {
+                await archive.CreateEntryFromFileAsync(executablePath, "mihomo.exe");
+            }
+
+            byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
+            using ArchiveHandler handler = new ArchiveHandler(archiveBytes);
+            using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
+
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(
+                CreateManifest(archiveBytes) with { Sha256 = new string('0', 64) }));
+            Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ManagedCoreVerifierIgnoresExecutableHashDrift()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        Directory.CreateDirectory(paths.CoreRoot);
+
+        try
+        {
+            string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
+            File.Copy(executablePath, paths.ManagedCoreExecutable);
+            ManagedCoreMetadata metadata = new(
+                "v0.0.0-test",
+                new Uri("https://github.com/MetaCubeX/mihomo/releases/download/v0.0.0-test/mihomo-windows-amd64-v0.0.0-test.zip"),
+                string.Empty,
+                new string('0', 64));
+            await File.WriteAllTextAsync(paths.ManagedCoreMetadata, JsonSerializer.Serialize(metadata, JsonOptions));
+
+            await ManagedCoreVerifier.ValidateAsync(paths);
+            Assert.AreEqual("v0.0.0-test", ManagedCoreVerifier.TryReadInstalledVersion(paths));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ManagedCoreVersionFallsBackToNullWithoutMetadata()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+
+        try
+        {
+            Assert.IsNull(ManagedCoreVerifier.TryReadInstalledVersion(paths));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static CoreUpdateManifest CreateManifest(byte[] archiveBytes) =>
         new(
             "v0.0.0-test",

@@ -824,12 +824,12 @@ public sealed partial class SettingsPage : UserControl
 
     private async void InstallCoreButton_Click(object sender, RoutedEventArgs e)
     {
+        string sha256 = CoreSha256Box.Text.Trim();
         if (!Uri.TryCreate(CoreDownloadUriBox.Text.Trim(), UriKind.Absolute, out Uri? uri)
             || uri is null
             || !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
             || string.IsNullOrWhiteSpace(CoreVersionBox.Text)
-            || CoreSha256Box.Text.Trim().Length != 64
-            || CoreSha256Box.Text.Trim().Any(character => !Uri.IsHexDigit(character)))
+            || (sha256.Length > 0 && (sha256.Length != 64 || sha256.Any(character => !Uri.IsHexDigit(character)))))
         {
             StatusText.Text = LocalizationService.Get("CoreUpdateFieldsRequired");
             return;
@@ -837,7 +837,7 @@ public sealed partial class SettingsPage : UserControl
 
         try
         {
-            await _runtime.InstallCoreUpdateAsync(new CoreUpdateManifest(CoreVersionBox.Text.Trim(), uri, CoreSha256Box.Text.Trim()));
+            await _runtime.InstallCoreUpdateAsync(new CoreUpdateManifest(CoreVersionBox.Text.Trim(), uri, sha256));
             StatusText.Text = LocalizationService.Get("CoreUpdateDone");
         }
         catch (Exception exception)

@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace ClashTray.Core;
@@ -79,18 +78,8 @@ public static class ManagedCoreVerifier
         {
             throw new InvalidDataException("受管 Mihomo 核心安装清单的来源未经批准。", exception);
         }
-        if (!IsSha256(metadata.ExecutableSha256))
-        {
-            throw new InvalidDataException("受管 Mihomo 核心安装清单中的可执行文件哈希无效。");
-        }
 
         ValidateWindowsAmd64Executable(executablePath);
-        await using FileStream executable = File.OpenRead(executablePath);
-        string actualHash = Convert.ToHexString(await SHA256.HashDataAsync(executable, cancellationToken));
-        if (!actualHash.Equals(metadata.ExecutableSha256, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException("受管 Mihomo 核心哈希校验失败。");
-        }
     }
 
     public static void ValidateWindowsAmd64Executable(string path)
@@ -132,8 +121,26 @@ public static class ManagedCoreVerifier
         }
     }
 
-    private static bool IsSha256(string value) =>
-        value.Length == 64 && value.All(Uri.IsHexDigit);
+    public static string? TryReadInstalledVersion(AppPaths paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        try
+        {
+            string metadataPath = paths.ManagedCoreMetadata;
+            if (!File.Exists(metadataPath) || File.GetAttributes(metadataPath).HasFlag(FileAttributes.ReparsePoint))
+            {
+                return null;
+            }
+
+            using FileStream stream = File.OpenRead(metadataPath);
+            ManagedCoreMetadata? metadata = JsonSerializer.Deserialize<ManagedCoreMetadata>(stream, JsonOptions);
+            return string.IsNullOrWhiteSpace(metadata?.Version) ? null : metadata.Version;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 
     private static bool IsCoreArtifactPath(AppPaths paths, string path)
     {

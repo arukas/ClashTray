@@ -139,7 +139,7 @@ Unless the user explicitly selects a smaller prototype or the advanced scope, im
 - Clear DNS and FakeIP cache actions.
 - Geo database update action.
 - Scheduled subscription refresh.
-- Mihomo core update with verified provenance, checksum validation, atomic replacement, and rollback.
+- Mihomo core update with verified provenance (official release source only), optional checksum validation (verified when a SHA-256 is supplied), atomic replacement, and rollback.
 - Clean install, upgrade, and uninstall behavior.
 
 ### P2: deferred unless explicitly requested
@@ -210,7 +210,7 @@ Security requirements:
 
 - Download cores only from the official MetaCubeX/Mihomo release source.
 - Pin an explicitly tested Mihomo version for releases; do not consume an unpinned `latest` asset at runtime.
-- Verify download status, architecture, archive contents, and SHA-256 before replacement.
+- Verify download status, architecture, and archive contents before replacement; verify SHA-256 when a checksum is supplied. Do not re-verify the installed core's hash at startup.
 - Validate configuration using Mihomo before starting it.
 - Reconnect REST/WebSocket consumers after core restart or endpoint change with bounded exponential backoff.
 - Use structured logs when available.
