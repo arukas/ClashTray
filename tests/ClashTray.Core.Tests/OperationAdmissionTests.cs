@@ -167,7 +167,7 @@ public sealed class OperationAdmissionTests
 
         release.TrySetResult(true);
         Assert.AreEqual(1, await first);
-        Assert.IsFalse(latest.IsBusy);
+        Assert.IsTrue(SpinWait.SpinUntil(() => !latest.IsBusy, TimeSpan.FromSeconds(2)));
     }
 
     [TestMethod]
@@ -201,7 +201,7 @@ public sealed class OperationAdmissionTests
         await Assert.ThrowsAsync<OperationCanceledException>(() => first);
         Assert.AreEqual(2, await pending);
         CollectionAssert.AreEqual(LatestWinsExpectedExecutionOrder, executed);
-        Assert.IsFalse(latest.IsBusy);
+        Assert.IsTrue(SpinWait.SpinUntil(() => !latest.IsBusy, TimeSpan.FromSeconds(2)));
     }
 
     [TestMethod]
@@ -242,7 +242,9 @@ public sealed class OperationAdmissionTests
             Assert.AreEqual(1, await first.WaitAsync(TimeSpan.FromSeconds(2)));
             await Assert.ThrowsAsync<OperationCanceledException>(() => canceledPending);
             Assert.AreEqual(3, await newest.WaitAsync(TimeSpan.FromSeconds(2)));
-            Assert.IsFalse(latest.IsBusy);
+            // The caller task completes before the operation teardown clears
+            // _running; wait for the teardown instead of asserting instantly.
+            Assert.IsTrue(SpinWait.SpinUntil(() => !latest.IsBusy, TimeSpan.FromSeconds(2)));
         }
     }
 
