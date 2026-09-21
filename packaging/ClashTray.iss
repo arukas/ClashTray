@@ -229,7 +229,10 @@ begin
   Result := '';
   PowerShellPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
   if not FileExists(PowerShellPath) then
+  begin
+    Log('Mini prerequisite: PowerShell not found; cannot resolve the active-session user SID.');
     exit;
+  end;
 
   // The spawned PowerShell shares the installer's session. Resolving the user
   // through the session's explorer.exe owner yields the interactive account
@@ -253,9 +256,15 @@ begin
     ewWaitUntilTerminated,
     ResultCode,
     Output) then
+  begin
+    Log('Mini prerequisite: failed to run the active-session SID probe.');
     exit;
+  end;
   if ResultCode <> 0 then
+  begin
+    Log(Format('Mini prerequisite: active-session SID probe exited with code %d.', [ResultCode]));
     exit;
+  end;
 
   for I := 0 to GetArrayLength(Output.StdOut) - 1 do
   begin
@@ -263,9 +272,12 @@ begin
     if Pos('S-1-', Line) = 1 then
     begin
       Result := Line;
+      Log('Mini prerequisite: active-session user SID is ' + Result + '.');
       exit;
     end;
   end;
+
+  Log('Mini prerequisite: active-session SID probe returned no SID line.');
 end;
 
 function GetCurrentUserSid(): string; forward;
@@ -277,7 +289,10 @@ begin
   // anchored to the account that will actually run ClashTray.
   Result := GetActiveSessionUserSid();
   if Result = '' then
+  begin
+    Log('Mini prerequisite: falling back to the installer identity (whoami) for the user SID.');
     Result := GetCurrentUserSid();
+  end;
 end;
 
 function GetCurrentUserSid(): string;
@@ -298,9 +313,15 @@ begin
     ewWaitUntilTerminated,
     ResultCode,
     Output) then
+  begin
+    Log('Mini prerequisite: failed to run whoami for the installer identity SID.');
     exit;
+  end;
   if ResultCode <> 0 then
+  begin
+    Log(Format('Mini prerequisite: whoami exited with code %d.', [ResultCode]));
     exit;
+  end;
 
   for I := 0 to GetArrayLength(Output.StdOut) - 1 do
   begin
@@ -313,19 +334,31 @@ begin
     while (EndIndex <= Length(Line)) and (Line[EndIndex] <> '"') and (Line[EndIndex] <> ',') and (Line[EndIndex] <> ' ') do
       Inc(EndIndex);
     Result := Copy(Line, StartIndex, EndIndex - StartIndex);
+    Log('Mini prerequisite: installer identity (whoami) user SID is ' + Result + '.');
     exit;
   end;
+
+  Log('Mini prerequisite: whoami output contained no SID.');
 end;
 
 function GetX64DotNetHostPath(): string;
 begin
   Result := '';
   if not IsWin64 then
+  begin
+    Log('Mini prerequisite: not a 64-bit Windows; x64 .NET host is unavailable.');
     exit;
+  end;
 
   Result := ExpandConstant('{autopf64}\dotnet\dotnet.exe');
   if not FileExists(Result) then
+  begin
+    Log('Mini prerequisite: x64 .NET host not found at ' + Result + '.');
     Result := '';
+    exit;
+  end;
+
+  Log('Mini prerequisite: x64 .NET host found at ' + Result + '.');
 end;
 
 function HasDotNetRuntime(const RuntimeName: string; var DetectedLine: string): Boolean;
@@ -350,21 +383,34 @@ begin
     ewWaitUntilTerminated,
     ResultCode,
     Output) then
+  begin
+    Log('Mini prerequisite: failed to run "' + DotNetPath + '" --list-runtimes.');
     exit;
+  end;
   if ResultCode <> 0 then
+  begin
+    Log(Format('Mini prerequisite: "%s" --list-runtimes exited with code %d.', [DotNetPath, ResultCode]));
     exit;
+  end;
 
   Prefix := Uppercase(RuntimeName + ' ' + RequiredDotNetMajorVersion + '.');
   for I := 0 to GetArrayLength(Output.StdOut) - 1 do
   begin
     Line := Trim(Output.StdOut[I]);
-    if Pos(Prefix, Uppercase(Line)) = 1 then
+    if Line = '' then
+      continue;
+    Log('Mini prerequisite: dotnet reports runtime: ' + Line);
+    if (not Result) and (Pos(Prefix, Uppercase(Line)) = 1) then
     begin
       DetectedLine := Line;
       Result := True;
-      exit;
     end;
   end;
+
+  if Result then
+    Log('Mini prerequisite: required runtime satisfied by: ' + DetectedLine)
+  else
+    Log('Mini prerequisite: no listed runtime matches required prefix "' + Prefix + '".');
 end;
 
 function HasWindowsAppRuntime(var DetectedVersion: string): Boolean;
@@ -380,15 +426,21 @@ begin
   DetectedVersion := '';
   UserSid := ResolveInstallUserSid();
   if UserSid = '' then
+  begin
+    Log('Mini prerequisite: no user SID available; Windows App Runtime detection cannot run.');
     exit;
+  end;
 
   PowerShellPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
   if not FileExists(PowerShellPath) then
+  begin
+    Log('Mini prerequisite: PowerShell not found; Windows App Runtime detection cannot run.');
     exit;
+  end;
 
   Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "'
     + '$ErrorActionPreference = ''Stop''; '
-    + '$packages = @(Get-AppxPackage -User ''' + UserSid + ''' -Name ''Microsoft.WindowsAppRuntime.2'' -PackageTypeFilter Framework '
+    + '$packages = @(Get-AppxPackage -User ''' + UserSid + ''' -Name ''Microsoft.WindowsAppRuntime.2*'' -PackageTypeFilter Framework '
     + '| Where-Object { $_.Architecture.ToString() -eq ''X64'' -and $_.IsFramework '
     + '-and $_.Version -ge [version]''' + RequiredWinAppRuntimeMajorMinor + '.0.0'' '
     + '-and (Test-Path -LiteralPath $_.InstallLocation) } '
@@ -403,33 +455,53 @@ begin
     ewWaitUntilTerminated,
     ResultCode,
     Output) then
+  begin
+    Log('Mini prerequisite: failed to run the Windows App Runtime detection probe.');
     exit;
+  end;
   if ResultCode <> 0 then
+  begin
+    Log(Format('Mini prerequisite: Windows App Runtime detection probe exited with code %d for user SID %s.', [ResultCode, UserSid]));
+    for I := 0 to GetArrayLength(Output.StdErr) - 1 do
+      if Trim(Output.StdErr[I]) <> '' then
+        Log('Mini prerequisite: Windows App Runtime detection stderr: ' + Trim(Output.StdErr[I]));
     exit;
+  end;
 
   for I := 0 to GetArrayLength(Output.StdOut) - 1 do
     if Trim(Output.StdOut[I]) <> '' then
     begin
       DetectedVersion := Trim(Output.StdOut[I]);
       Result := True;
+      Log('Mini prerequisite: Windows App Runtime framework ' + DetectedVersion + ' (x64) is registered for user SID ' + UserSid + '.');
       exit;
     end;
+
+  Log('Mini prerequisite: Windows App Runtime detection probe returned no version.');
 end;
 
 function CheckMiniPrerequisites(): Boolean;
 var
   Missing: string;
+  Links: string;
   DotNetPath: string;
   CoreRuntimeLine: string;
   WindowsAppRuntimeVersion: string;
+  DotNetHostMissing: Boolean;
+  DotNetRuntimeMissing: Boolean;
+  WinAppRuntimeMissing: Boolean;
 begin
-  Missing := '';
   DotNetPath := GetX64DotNetHostPath();
-  if DotNetPath = '' then
+  DotNetHostMissing := DotNetPath = '';
+  DotNetRuntimeMissing := not HasDotNetRuntime('Microsoft.NETCore.App', CoreRuntimeLine);
+  WinAppRuntimeMissing := not HasWindowsAppRuntime(WindowsAppRuntimeVersion);
+
+  Missing := '';
+  if DotNetHostMissing then
     Missing := Missing + #13#10 + '- x64 .NET host（C:\Program Files\dotnet\dotnet.exe）';
-  if not HasDotNetRuntime('Microsoft.NETCore.App', CoreRuntimeLine) then
+  if DotNetRuntimeMissing then
     Missing := Missing + #13#10 + '- Microsoft.NETCore.App ' + RequiredDotNetMajorVersion + '.x（x64）';
-  if not HasWindowsAppRuntime(WindowsAppRuntimeVersion) then
+  if WinAppRuntimeMissing then
     Missing := Missing + #13#10 + '- 当前用户已注册且可访问的 Windows App Runtime ' + RequiredWinAppRuntimeMajorMinor + '+ framework（x64）';
 
   if Missing = '' then
@@ -439,13 +511,18 @@ begin
     exit;
   end;
 
+  Links := '';
+  if DotNetHostMissing or DotNetRuntimeMissing then
+    Links := Links + #13#10 + '- .NET ' + RequiredDotNetMajorVersion + ' 运行时（x64）：https://aka.ms/dotnet/' + RequiredDotNetMajorVersion + '.0/dotnet-runtime-win-x64.exe';
+  if WinAppRuntimeMissing then
+    Links := Links + #13#10 + '- Windows App Runtime ' + RequiredWinAppRuntimeMajorMinor + '+（x64）：https://aka.ms/windowsappsdk/' + RequiredWinAppRuntimeMajorMinor + '/latest/windowsappruntimeinstall-x64.exe';
+
   Log('Mini prerequisite check failed: ' + Missing);
-  LastInstallerError := 'Mini 版本安装前检查未通过：' + Missing
-    + #13#10#13#10 + '请先安装对应的 x64 运行时，并使用同一个 Windows 用户重新运行安装程序。'
-    + #13#10#13#10 + '官方下载地址：'
-    + #13#10 + '- .NET ' + RequiredDotNetMajorVersion + ' 运行时（x64）：https://aka.ms/dotnet/' + RequiredDotNetMajorVersion + '.0/dotnet-runtime-win-x64.exe'
-    + #13#10 + '- Windows App Runtime ' + RequiredWinAppRuntimeMajorMinor + '+（x64）：https://aka.ms/windowsappsdk/' + RequiredWinAppRuntimeMajorMinor + '/latest/windowsappruntimeinstall-x64.exe'
+  LastInstallerError := 'Mini 版本安装前检查未通过，缺少以下组件：' + Missing
+    + #13#10#13#10 + '请只安装上面列出的缺失项（已经装好的组件不需要重复安装），然后使用同一个 Windows 用户重新运行安装程序。'
+    + #13#10#13#10 + '缺失项的官方下载地址：' + Links
     + #13#10#13#10 + 'Windows App Runtime 按用户注册：安装运行时时必须使用将要运行 ClashTray 的同一个 Windows 用户。'
+    + #13#10 + '如果确认上面列出的组件已经安装，请把 %TEMP% 目录下最新的 Setup Log 日志文件发给项目仓库以便排查。'
     + #13#10 + '安装器会停止，不会创建或启动不兼容的服务。';
   Result := False;
 end;
