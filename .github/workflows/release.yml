@@ -178,8 +178,8 @@ jobs:
 
           $files = Get-ChildItem -LiteralPath $outputRoot -Recurse -File -Include '*.exe', '*.sha256'
 
-          if ($files.Count -ne 6) {
-            throw "Expected three installers and three checksum files, found $($files.Count)."
+          if ($files.Count -ne 4) {
+            throw "Expected two installers and two checksum files, found $($files.Count)."
           }
 
           $checksumFiles = Get-ChildItem -LiteralPath $outputRoot -Recurse -File |
