@@ -3211,7 +3211,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private string? FindCoreVersion()
     {
         string? path = _coreDiscovery.FindExecutable();
-        return path is null ? null : CoreDiscovery.GetVersion(path);
+        if (path is null)
+        {
+            return null;
+        }
+
+        string? version = CoreDiscovery.GetVersion(path);
+        return string.IsNullOrWhiteSpace(version)
+            ? ManagedCoreVerifier.TryReadInstalledVersion(_paths)
+            : version;
     }
 
     private void SetCoreRunningPendingHealth(TunState tunState)
