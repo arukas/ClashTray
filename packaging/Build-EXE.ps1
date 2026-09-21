@@ -6,7 +6,7 @@ param(
     # Resolved from Directory.Build.props when omitted; an explicit value must stay compatible with it.
     [string]$PackageVersion,
 
-    [ValidateSet('Full', 'NoCET', 'Mini')]
+    [ValidateSet('Full', 'NoCET')]
     [string]$Variant = 'Full',
 
     [string]$OutputDirectory
@@ -30,21 +30,11 @@ $packageFileVersion = if (($packageCoreVersion -split '\.').Count -eq 3) {
 } else {
     $packageCoreVersion
 }
-$includeCore = $Variant -in @('Full', 'NoCET')
-$selfContained = $Variant -ne 'Mini'
 $disableCet = $Variant -eq 'NoCET'
-$miniPrerequisites = & (Join-Path $PSScriptRoot 'Get-MiniPrerequisiteVersions.ps1')
-$miniDotNetMajorVersion = $miniPrerequisites.DotNetMajorVersion
-$miniWinAppRuntimeMajorMinor = $miniPrerequisites.WinAppRuntimeMajorMinor
-$miniRollForwardPolicy = 'LatestMinor'
-$mihomoRelease = $null
-$mihomoVersion = $null
-if ($includeCore) {
-    $mihomoRelease = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'mihomo-release.json') -Raw | ConvertFrom-Json
-    $mihomoVersion = $mihomoRelease.version
-    if ($mihomoVersion -notmatch '^v\d+\.\d+\.\d+$' -or $mihomoRelease.windowsAmd64Sha256 -notmatch '^[a-fA-F0-9]{64}$') {
-        throw 'Invalid pinned Mihomo release metadata.'
-    }
+$mihomoRelease = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'mihomo-release.json') -Raw | ConvertFrom-Json
+$mihomoVersion = $mihomoRelease.version
+if ($mihomoVersion -notmatch '^v\d+\.\d+\.\d+$' -or $mihomoRelease.windowsAmd64Sha256 -notmatch '^[a-fA-F0-9]{64}$') {
+    throw 'Invalid pinned Mihomo release metadata.'
 }
 $dotnet = (Get-Command dotnet.exe -ErrorAction Stop).Source
 $innoCandidates = @(
@@ -83,16 +73,16 @@ $corePayload = Join-Path $payloadRoot 'Core'
 $appPublish = Join-Path $stageRoot 'app'
 $servicePublish = Join-Path $stageRoot 'service'
 $appBuildOutput = Join-Path $repoRoot "src\ClashTray.App\bin\x64\$Configuration\net10.0-windows10.0.19041.0\win-x64"
-$mihomoBinaryArchivePath = if ($mihomoVersion) { Join-Path $stageRoot "mihomo-windows-amd64-$mihomoVersion.zip" } else { $null }
+$mihomoBinaryArchivePath = Join-Path $stageRoot "mihomo-windows-amd64-$mihomoVersion.zip"
 $coreExtract = Join-Path $stageRoot 'mihomo-extract'
 $dashboardExtract = Join-Path $stageRoot 'metacubexd-extract'
 $dashboardPayload = Join-Path $payloadRoot 'Dashboard'
 
-$mihomoBinaryArchiveUri = if ($mihomoVersion) { "https://github.com/MetaCubeX/mihomo/releases/download/$mihomoVersion/mihomo-windows-amd64-$mihomoVersion.zip" } else { $null }
-$mihomoBinaryArchiveSha256 = if ($mihomoRelease) { $mihomoRelease.windowsAmd64Sha256 } else { $null }
-$mihomoSourceUri = if ($mihomoVersion) { "https://github.com/MetaCubeX/mihomo/tree/$mihomoVersion" } else { $null }
-$mihomoSourceArchiveUri = if ($mihomoVersion) { "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/$mihomoVersion" } else { $null }
-$mihomoLicenseUri = if ($mihomoVersion) { "https://raw.githubusercontent.com/MetaCubeX/mihomo/$mihomoVersion/LICENSE" } else { $null }
+$mihomoBinaryArchiveUri = "https://github.com/MetaCubeX/mihomo/releases/download/$mihomoVersion/mihomo-windows-amd64-$mihomoVersion.zip"
+$mihomoBinaryArchiveSha256 = $mihomoRelease.windowsAmd64Sha256
+$mihomoSourceUri = "https://github.com/MetaCubeX/mihomo/tree/$mihomoVersion"
+$mihomoSourceArchiveUri = "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/$mihomoVersion"
+$mihomoLicenseUri = "https://raw.githubusercontent.com/MetaCubeX/mihomo/$mihomoVersion/LICENSE"
 
 $dashboardRelease = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'metacubexd-release.json') -Raw | ConvertFrom-Json
 $dashboardVersion = $dashboardRelease.version
@@ -174,10 +164,6 @@ function Assert-WindowsAmd64Pe {
 }
 
 function Prepare-MihomoPayload {
-    if (-not $includeCore) {
-        return
-    }
-
     New-Item -ItemType Directory -Path $corePayload, $coreExtract -Force | Out-Null
     Write-Host "Downloading official Mihomo $mihomoVersion core..."
     Invoke-WebRequest -Uri $mihomoBinaryArchiveUri -OutFile $mihomoBinaryArchivePath
@@ -380,7 +366,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'LICENSE') -PathType Leaf)
 }
 
 Write-Host "Publishing ClashTray Inno Setup installer ($Configuration, win-x64, version $PackageVersion)..."
-Write-Host "Variant: $Variant (core bundled: $includeCore; self-contained: $selfContained)"
+Write-Host "Variant: $Variant (self-contained, core bundled)"
 
 # This is a generated staging directory owned by this script.
 if (Test-Path -LiteralPath $stageRoot) {
@@ -394,17 +380,14 @@ $appPublishArguments = @(
     '--configuration', $Configuration,
     '--framework', 'net10.0-windows10.0.19041.0',
     '--runtime', 'win-x64',
-    '--self-contained', $selfContained.ToString().ToLowerInvariant(),
+    '--self-contained', 'true',
     '--output', $appPublish,
     '--property:Platform=x64',
     "--property:Version=$PackageVersion",
     '--property:WindowsPackageType=None',
-    "--property:WindowsAppSDKSelfContained=$($selfContained.ToString().ToLowerInvariant())",
+    "--property:WindowsAppSDKSelfContained=true",
     '--property:PublishReadyToRun=false'
 )
-if (-not $selfContained) {
-    $appPublishArguments += "--property:RollForward=$miniRollForwardPolicy"
-}
 if ($disableCet) {
     $appPublishArguments += '--property:CETCompat=false'
 }
@@ -420,14 +403,11 @@ $servicePublishArguments = @(
     '--configuration', $Configuration,
     '--framework', 'net10.0-windows10.0.19041.0',
     '--runtime', 'win-x64',
-    '--self-contained', $selfContained.ToString().ToLowerInvariant(),
+    '--self-contained', 'true',
     '--output', $servicePublish,
     '--property:Platform=x64',
     "--property:Version=$PackageVersion"
 )
-if (-not $selfContained) {
-    $servicePublishArguments += "--property:RollForward=$miniRollForwardPolicy"
-}
 if ($disableCet) {
     $servicePublishArguments += '--property:CETCompat=false'
 }
@@ -449,14 +429,12 @@ $requiredPayloadFiles = @(
     (Join-Path $dashboardPayload 'MetaCubeXD-LICENSE.txt'),
     (Join-Path $dashboardPayload 'MetaCubeXD-Release.txt')
 )
-if ($includeCore) {
-    $requiredPayloadFiles += @(
+$requiredPayloadFiles += @(
     (Join-Path $corePayload 'mihomo.exe'),
     (Join-Path $corePayload 'mihomo.manifest.json'),
     (Join-Path $corePayload 'Mihomo-LICENSE.txt'),
-        (Join-Path $corePayload 'Mihomo-Release.txt')
-    )
-}
+    (Join-Path $corePayload 'Mihomo-Release.txt')
+)
 foreach ($requiredFile in $requiredPayloadFiles) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "Published payload is missing required file: $requiredFile"
@@ -472,17 +450,13 @@ if (Test-Path -LiteralPath $installerPath) {
 if (Test-Path -LiteralPath $hashPath) {
     Remove-Item -LiteralPath $hashPath -Force
 }
-$includeCoreDefine = if ($includeCore) { '1' } else { '0' }
 $innoArguments = @(
     "/DPackageVersion=$PackageVersion",
     "/DPackageFileVersion=$packageFileVersion",
     "/DVariant=$Variant",
-    "/DMiniDotNetMajorVersion=$miniDotNetMajorVersion",
-    "/DMiniWinAppRuntimeMajorMinor=$miniWinAppRuntimeMajorMinor",
     "/DPayloadRoot=$payloadRoot",
     "/DOutputDirectory=$outputRoot",
     "/DRepoRoot=$repoRoot",
-    "/DIncludeCore=$includeCoreDefine",
     $innoScript
 )
 & $inno @innoArguments

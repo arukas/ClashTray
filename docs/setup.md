@@ -43,12 +43,11 @@ The Settings page keeps changes as an editable draft until **保存设置** is p
 The isolated WinUI smoke flow verifies both startup switches, port/text drafts, repeated snapshots, external theme changes, validation failure and saved-core-startup reload without modifying the real Windows startup registry. Actual sign-in startup still requires manual Windows verification.
 ## EXE installer (current distribution path)
 
-The current release path is a set of Windows x64 EXE installers built by Inno Setup 7; Full is the recommended self-contained variant, NoCET is the compatibility variant for older-patched Windows 10 22H2 systems, and Mini is the smaller framework-dependent variant. x86 and ARM64 packages are not provided. App, Service, and Setup all target x64; App and Service are staged into one shared self-contained directory for self-contained builds. Mini requires x64 .NET Runtime 10.x and Windows App Runtime 2.4+; its installer checks both before copying files and exits with a clear message if either is missing. Mini explicitly rolls forward within .NET major version 10. It does not use MSIX, AppX signing, or the Windows Store. Build it from the repository root:
+The current release path is a set of Windows x64 EXE installers built by Inno Setup 7; Full is the recommended self-contained variant and NoCET is the compatibility variant for older-patched Windows 10 22H2 systems. x86 and ARM64 packages are not provided. App, Service, and Setup all target x64; App and Service are staged into one shared self-contained directory, so the target machine needs no preinstalled .NET or Windows App Runtime. It does not use MSIX, AppX signing, or the Windows Store. Build it from the repository root:
 
 ```powershell
 & .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.1 -Variant Full
 & .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.1 -Variant NoCET
-& .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.1 -Variant Mini
 ```
 
 The output is:
@@ -57,8 +56,6 @@ The output is:
 - `packaging\out\ClashTray-0.3.1-win-x64-Full.sha256`: SHA-256 sidecar file.
 - `packaging\out\ClashTray-0.3.1-win-x64-NoCET.exe`: a self-contained Full-equivalent installer built with `CETCompat=false` for older-patched Windows 10 22H2.
 - `packaging\out\ClashTray-0.3.1-win-x64-NoCET.sha256`: SHA-256 sidecar file for the compatibility installer.
-- `packaging\out\ClashTray-0.3.1-win-x64-Mini.exe`: a framework-dependent installer without the Mihomo core; the installer checks for x64 .NET Runtime 10.x and Windows App Runtime 2.4+.
-- `packaging\out\ClashTray-0.3.1-win-x64-Mini.sha256`: SHA-256 sidecar file for the Mini installer.
 
 The Inno Setup installer requests administrator approval. Double-clicking it should show the UAC prompt; the installed desktop app subsequently runs with ordinary user permissions. If Explorer does not show a “Run as administrator” context-menu item, launch it from any PowerShell window with:
 
@@ -71,8 +68,7 @@ After approving UAC, the installer places files under `C:\Program Files\ClashTra
 Installer user-identity support matrix:
 
 - **Standard elevation** (the installing user approves UAC with their own admin-capable account): the installer's account and the desktop session account are the same; all per-user decisions apply to that account.
-- **Over-the-shoulder (OTS) elevation** (a standard user runs the installer with a *different* administrator's credentials): the installer resolves the interactive session user through the session's `explorer.exe` owner, so the Mini runtime check and the service `--user-sid` ACL anchor to the account that will actually run ClashTray, not to the administrator whose credentials were used. If the session user cannot be resolved (for example no shell is running in the session), the installer falls back to the elevating account (the pre-0.3.2 `whoami` behavior).
-- **Unattended/service-session installation** (no interactive session) is not a supported install scenario for the Mini runtime check, because Windows App Runtime is registered per user; use Full/NoCET there.
+- **Over-the-shoulder (OTS) elevation** (a standard user runs the installer with a *different* administrator's credentials): the installer resolves the interactive session user through the session's `explorer.exe` owner, so the service `--user-sid` ACL anchors to the account that will actually run ClashTray, not to the administrator whose credentials were used. If the session user cannot be resolved (for example no shell is running in the session), the installer falls back to the elevating account (the pre-0.3.2 `whoami` behavior).
 
 For a first manual verification:
 
@@ -106,7 +102,6 @@ The recommended release path is `packaging/Build-EXE.ps1`. It publishes App and 
 ```powershell
 .\packaging\Build-EXE.ps1 -Variant Full -PackageVersion 0.3.1
 .\packaging\Build-EXE.ps1 -Variant NoCET -PackageVersion 0.3.1
-.\packaging\Build-EXE.ps1 -Variant Mini -PackageVersion 0.3.1
 ```
 
-`Full` is self-contained and includes the pinned, SHA-256 verified Mihomo core. `NoCET` is the same bundled-core shape with `CETCompat=false` for older-patched Windows 10 22H2. `Mini` omits the core and uses framework-dependent App and Service payloads; its installer requires x64 .NET Runtime 10.x and Windows App Runtime 2.4+, explicitly rolls forward within .NET major version 10, and aborts before installation when either dependency is missing. Outputs are named `ClashTray-<version>-win-x64-Full.exe`, `ClashTray-<version>-win-x64-NoCET.exe`, and `ClashTray-<version>-win-x64-Mini.exe`, with a matching `.sha256` sidecar; pre-release suffixes remain in the file name. See [release.md](release.md) for the release matrix and checks.
+`Full` is self-contained and includes the pinned, SHA-256 verified Mihomo core. `NoCET` is the same bundled-core shape with `CETCompat=false` for older-patched Windows 10 22H2. Outputs are named `ClashTray-<version>-win-x64-Full.exe` and `ClashTray-<version>-win-x64-NoCET.exe`, with a matching `.sha256` sidecar; pre-release suffixes remain in the file name. See [release.md](release.md) for the release matrix and checks.

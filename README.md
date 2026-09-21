@@ -27,21 +27,20 @@ ClashTray 是使用 C#、.NET 10 和 WinUI 3 独立实现的 Windows Mihomo 客�
 
 ## 体积与发布版本
 
-GitHub Actions 会在 Windows runner 上构建并发布三种 Windows x64 产物：Full、NoCET 和 Mini。Full、NoCET 使用 Inno Setup 7 的 LZMA2 solid 压缩安装器；App、Service 和 Setup 都是 x64，App 与 Service 合并到同一个自包含发布目录，共用一套 .NET runtime。Mini 使用 framework-dependent 发布，不内置 Mihomo；安装时会检查 x64 .NET Runtime 10.x 和 Windows App Runtime 2.4+，并在 .NET 主版本 10 内滚动到已安装的最新运行时。
+GitHub Actions 会在 Windows runner 上构建并发布两种 Windows x64 产物：Full 和 NoCET。两者都使用 Inno Setup 7 的 LZMA2 solid 压缩安装器；App、Service 和 Setup 都是 x64，App 与 Service 合并到同一个自包含发布目录，共用一套 .NET runtime，不需要目标机器预装任何 .NET 或 Windows App Runtime。
 
 | 版本 | 内容 | 适合谁 |
 | --- | --- | --- |
 | `ClashTray-Setup-Full.exe` | 自包含 App + Service + 已验证的 Mihomo 核心 | 下载后直接使用 |
 | `ClashTray-Setup-NoCET.exe` | 自包含 App + Service + 已验证的 Mihomo 核心，关闭 CET 兼容标志 | 补丁较旧、无法启动 .NET 10 的 Windows 10 22H2 |
-| `ClashTray-Setup-Mini.exe` | Framework-dependent App + Service，不内置核心 | 已安装 x64 .NET Runtime 10.x 和 Windows App Runtime 2.4+，追求最小下载体积 |
 
-Full 和 NoCET 使用 `packaging/mihomo-release.json` 中固定的官方版本和校验值。NoCET 只作为旧补丁 Windows 10 的兼容包，关闭 .NET 进程的 CET 兼容标志，会减少一层硬件控制流防护；普通用户优先选择 Full。Mini 安装时不会删除已有的 `%PROGRAMDATA%\ClashTray\core`，但它不内置核心，首次运行后可通过经过验证的核心更新流程补齐。Mini 版本需要目标机器已具备 x64 .NET 10 host、`Microsoft.NETCore.App` 10.x 和当前用户已注册的 x64 Windows App Runtime 2.4+ framework；App 与 Service 会在主版本 10 内选择最新的已安装运行时。安装器会在启动时及复制文件前精确检查这些条件，任一项缺失或无法读取都会提示并退出，不会创建服务。WinUI 3 是桌面 UI 所需的组件，Mini 只是把 .NET / Windows App SDK runtime 改为外置，因此体积更小但安装前提更多。
+Full 和 NoCET 使用 `packaging/mihomo-release.json` 中固定的官方版本和校验值。NoCET 只作为旧补丁 Windows 10 的兼容包，关闭 .NET 进程的 CET 兼容标志，会减少一层硬件控制流防护；普通用户优先选择 Full。
 
 每个 EXE 旁边都会生成同名 `.sha256` 校验文件。发布页还会提供 `SHA256SUMS.txt`，不要从不明镜像下载核心或安装器。
 
 ## 安装与快速上手
 
-系统要求：Windows 11 x64，或受支持的 Windows 10 22H2 x64；当前只有 Windows x64 版本，不提供 x86 或 ARM64 版本。Full 和 NoCET 版本自带 .NET 运行时；Mini 需要已安装 x64 .NET Runtime 10.x 和 Windows App Runtime 2.4+，安装器会自动检查。补丁较旧的 Windows 10 22H2 可优先尝试 NoCET；正常情况下请使用 Full 并安装所有可用的 Windows 更新。首次安装会请求一次 UAC 权限，用于安装受限的 `ClashTrayService`；日常使用以普通用户权限运行。
+系统要求：Windows 11 x64，或受支持的 Windows 10 22H2 x64；当前只有 Windows x64 版本，不提供 x86 或 ARM64 版本。Full 和 NoCET 版本自带 .NET 运行时，无需预装任何运行时。补丁较旧的 Windows 10 22H2 可优先尝试 NoCET；正常情况下请使用 Full 并安装所有可用的 Windows 更新。首次安装会请求一次 UAC 权限，用于安装受限的 `ClashTrayService`；日常使用以普通用户权限运行。
 
 1. 从 [Releases](https://github.com/arukas/ClashTray/releases) 下载合适版本并核对 SHA-256。
 2. 运行安装器，完成服务注册后从托盘打开 ClashTray。
@@ -79,9 +78,6 @@ dotnet test ClashTray.sln --configuration Debug --property:Platform=x64 --no-bui
 
 # 旧版 Windows 10 兼容包：自包含、包含核心、关闭 CET
 .\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.1 -Variant NoCET
-
-# 更小的 framework-dependent 版本；安装时检查 x64 .NET Runtime 10.x 和 Windows App Runtime 2.4+
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.1 -Variant Mini
 ```
 
 详见 [docs/setup.md](docs/setup.md)、[docs/release.md](docs/release.md) 和 [docs/roadmap.md](docs/roadmap.md)。旧的 `Build-MSIX.ps1` 和 `packaging/ClashTray.Package` 保留作实验性 / 历史打包材料；当前发布路径是 Inno Setup LZMA2 solid 压缩的 EXE 安装器。
