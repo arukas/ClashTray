@@ -63,7 +63,7 @@ MinVersion=10.0.17763
 [Files]
 Source: "{#PayloadRoot}\App\*"; DestDir: "{app}\App"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#PayloadRoot}\Dashboard\*"; DestDir: "{commonappdata}\ClashTray\ui"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#PayloadRoot}\Core\*"; DestDir: "{commonappdata}\ClashTray\core"; Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist
+Source: "{#PayloadRoot}\Core\*"; DestDir: "{commonappdata}\ClashTray\core"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]
 Name: "{commonappdata}\ClashTray\core"; Permissions: users-readexec admins-full system-full
