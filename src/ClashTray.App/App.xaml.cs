@@ -13,6 +13,7 @@ public partial class App : Application, IAsyncDisposable
     private MainWindow? _mainWindow;
     private TrayIconService? _trayIcon;
     private readonly ClashTrayRuntime _runtime;
+    private readonly ShutdownCoordinator _shutdownCoordinator;
 #if DEBUG
     private readonly string? _smokeDirectory;
 #endif
@@ -42,6 +43,14 @@ public partial class App : Application, IAsyncDisposable
         // Keep the runtime seam available for a later release, but do not create
         // a production network context source that could read or monitor SSIDs.
         _runtime = new ClashTrayRuntime(runtimePaths, networkContextSource: null);
+        _shutdownCoordinator = new ShutdownCoordinator(
+            () => _mainWindow?.AllowClose(),
+            DisposeForQuitAsync,
+            () =>
+            {
+                _mainWindow?.Close();
+                Environment.Exit(0);
+            });
         UnhandledException += (_, e) =>
         {
 #if DEBUG
@@ -122,9 +131,10 @@ public partial class App : Application, IAsyncDisposable
     }
 #endif
 
-    public async Task RequestQuitAsync()
+    public Task RequestQuitAsync() => _shutdownCoordinator.RequestQuitAsync();
+
+    private async Task DisposeForQuitAsync()
     {
-        _mainWindow?.AllowClose();
         try
         {
             await DisposeAsync();
@@ -134,8 +144,6 @@ public partial class App : Application, IAsyncDisposable
             // An explicit quit must still complete when cleanup fails; the
             // runtime has already logged the individual cleanup failures.
         }
-        _mainWindow?.Close();
-        Environment.Exit(0);
     }
 
     public async ValueTask DisposeAsync()
