@@ -59,10 +59,25 @@ public sealed class EndpointRemovalCoordinator
         }
 
         bool sessionDisconnected = await DisconnectIfSelectedAsync(endpointId).ConfigureAwait(false);
-        EndpointRecord[] remaining = loaded.Endpoints
-            .Where(endpoint => endpoint.Descriptor.Id != endpointId)
-            .ToArray();
+        bool removed = await _endpointStore.DeleteAsync(endpointId, cancellationToken)
+            .ConfigureAwait(false);
+        if (!removed)
+        {
+            return new EndpointRemovalResult(
+                Removed: false,
+                SessionDisconnected: sessionDisconnected,
+                SecretRemoved: false,
+                CertificateRemoved: false);
+        }
 
+        EndpointStoreLoadResult remainingLoad = await _endpointStore.LoadAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (remainingLoad.Status is EndpointStoreLoadStatus.ReadFailed)
+        {
+            throw new IOException(remainingLoad.Message ?? "端点元数据无法读取。凭据清理已延后。");
+        }
+
+        IReadOnlyList<EndpointRecord> remaining = remainingLoad.Endpoints;
         bool secretRemoved = false;
         if (target.SecretReference is not null
             && !IsReferencedByAnotherEndpoint(target.SecretReference, remaining, static endpoint => endpoint.SecretReference))
@@ -85,9 +100,6 @@ public sealed class EndpointRemovalCoordinator
                     cancellationToken)
                 .ConfigureAwait(false);
         }
-
-        bool removed = await _endpointStore.DeleteAsync(endpointId, cancellationToken)
-            .ConfigureAwait(false);
         return new EndpointRemovalResult(
             removed,
             sessionDisconnected,
