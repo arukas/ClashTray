@@ -36,6 +36,9 @@ public static class SystemProxyRecovery
             catch (IOException)
             {
             }
+            catch (InvalidDataException)
+            {
+            }
             catch (UnauthorizedAccessException)
             {
             }
@@ -59,68 +62,63 @@ public static class SystemProxyRecovery
             string localRoot = Path.Combine(profilePath, "AppData", "Local", "ClashTray");
             string backupPath = Path.Combine(localRoot, "system-proxy-backup.json");
             string ownershipPath = Path.Combine(localRoot, "system-proxy-ownership.json");
-            if (!File.Exists(backupPath) || !File.Exists(ownershipPath))
-            {
-                return;
-            }
+            string transactionPath = Path.Combine(localRoot, "system-proxy-transaction.json");
 
-            ProxyRegistryState? backup = JsonSerializer.Deserialize<ProxyRegistryState>(File.ReadAllText(backupPath), JsonOptions);
-            ProxyOwnershipState? ownership = JsonSerializer.Deserialize<ProxyOwnershipState>(File.ReadAllText(ownershipPath), JsonOptions);
-            if (backup is null || ownership is null)
-            {
-                return;
-            }
-
-            using RegistryKey? internetSettings = Registry.Users.OpenSubKey($"{sid}\\{InternetSettingsPath}", writable: true);
+            using RegistryKey? internetSettings =
+                Registry.Users.OpenSubKey($"{sid}\\{InternetSettingsPath}", writable: true);
             if (internetSettings is null)
             {
                 return;
             }
 
-            ProxyRegistryState current = ReadState(internetSettings);
+            AppPaths paths = new(localRoot, localRoot);
+            WindowsSystemProxyRegistry registry = WindowsSystemProxyRegistry.ForUser(sid);
+            SystemProxyTransactionRecoveryResult transactionResult =
+                SystemProxyTransactionRecovery.RecoverAsync(paths, registry)
+                    .GetAwaiter()
+                    .GetResult();
+            if (transactionResult is SystemProxyTransactionRecoveryResult.Restored
+                or SystemProxyTransactionRecoveryResult.Conflict)
+            {
+                if (transactionResult == SystemProxyTransactionRecoveryResult.Restored)
+                {
+                    NotifyAllUsers();
+                }
+
+                return;
+            }
+
+            if (!File.Exists(backupPath) || !File.Exists(ownershipPath))
+            {
+                return;
+            }
+
+            ProxyRegistryState? backup =
+                JsonSerializer.Deserialize<ProxyRegistryState>(File.ReadAllText(backupPath), JsonOptions);
+            ProxyOwnershipState? ownership =
+                JsonSerializer.Deserialize<ProxyOwnershipState>(File.ReadAllText(ownershipPath), JsonOptions);
+            if (backup is null || ownership is null)
+            {
+                return;
+            }
+
+            ProxyRegistryState current = registry.ReadCurrentState();
             if (!SystemProxyOwnershipPolicy.CanRestore(current, backup, ownership))
             {
                 return;
             }
 
-            WriteState(internetSettings, backup);
+            registry.WriteState(backup);
             File.Delete(backupPath);
             File.Delete(ownershipPath);
+            if (File.Exists(transactionPath))
+            {
+                File.Delete(transactionPath);
+            }
+
             NotifyAllUsers();
         }
     }
-
-    private static ProxyRegistryState ReadState(RegistryKey key) =>
-        new(
-            GetDword(key, "ProxyEnable"),
-            key.GetValue("ProxyServer") as string,
-            key.GetValue("ProxyOverride") as string,
-            key.GetValue("AutoConfigURL") as string,
-            GetDword(key, "AutoDetect"));
-
-    private static void WriteState(RegistryKey key, ProxyRegistryState state)
-    {
-        key.SetValue("ProxyEnable", state.ProxyEnable, RegistryValueKind.DWord);
-        SetOrDelete(key, "ProxyServer", state.ProxyServer);
-        SetOrDelete(key, "ProxyOverride", state.ProxyOverride);
-        SetOrDelete(key, "AutoConfigURL", state.AutoConfigUrl);
-        key.SetValue("AutoDetect", state.AutoDetect, RegistryValueKind.DWord);
-    }
-
-    private static void SetOrDelete(RegistryKey key, string name, string? value)
-    {
-        if (value is null)
-        {
-            key.DeleteValue(name, throwOnMissingValue: false);
-        }
-        else
-        {
-            key.SetValue(name, value, RegistryValueKind.String);
-        }
-    }
-
-    private static int GetDword(RegistryKey key, string name) =>
-        key.GetValue(name) is int value ? value : 0;
 
     private static void NotifyAllUsers()
     {

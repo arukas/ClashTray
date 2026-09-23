@@ -43,6 +43,35 @@ public sealed class SystemProxyOwnershipPolicyTests
     }
 
     [TestMethod]
+    public void InterruptedPartialApplyCanRestoreOnlyWhenEveryValueMatchesOriginalOrIntendedState()
+    {
+        ProxyRegistryState backup = new(
+            ProxyEnable: 0,
+            ProxyServer: null,
+            ProxyOverride: null,
+            AutoConfigUrl: "https://pac.example.test/original.pac",
+            AutoDetect: 1);
+        ProxyRegistryState intended = backup with
+        {
+            ProxyEnable = 1,
+            ProxyServer = "127.0.0.1:7890",
+            ProxyOverride = "localhost;127.*"
+        };
+        ProxyOwnershipState ownership = SystemProxyOwnershipPolicy.Create(intended);
+        ProxyRegistryState partial = backup with
+        {
+            ProxyEnable = intended.ProxyEnable,
+            ProxyServer = intended.ProxyServer
+        };
+
+        Assert.IsTrue(SystemProxyOwnershipPolicy.CanRestore(partial, backup, ownership));
+        Assert.IsFalse(SystemProxyOwnershipPolicy.CanRestore(
+            partial with { ProxyOverride = "proxy-from-another-app" },
+            backup,
+            ownership));
+    }
+
+    [TestMethod]
     public void DisabledOrExternallyDisabledProxyIsNotOwned()
     {
         ProxyRegistryState applied = CreateAppliedState();

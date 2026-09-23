@@ -55,18 +55,35 @@ public static class SystemProxyOwnershipPolicy
         ArgumentNullException.ThrowIfNull(backupState);
         ArgumentNullException.ThrowIfNull(ownership);
 
-        if (!IsOwnedByClashTray(currentState, ownership))
+        // Older builds wrote ownership after all proxy values had been applied. Keep
+        // their strict check because they cannot prove which values were part of a
+        // partially completed transition.
+        if (ownership.AutoDetect is null)
         {
-            return false;
+            return IsOwnedByClashTray(currentState, ownership)
+                && currentState.AutoDetect == backupState.AutoDetect
+                && string.Equals(currentState.AutoConfigUrl, backupState.AutoConfigUrl, StringComparison.Ordinal);
         }
 
-        // A legacy ownership file cannot prove that AutoConfigURL or AutoDetect were
-        // untouched. Since enabling ClashTray never changes either value, only restore
-        // when they still equal the original backup.
-        return ownership.AutoDetect is not null
-            || currentState.AutoDetect == backupState.AutoDetect
-                && string.Equals(currentState.AutoConfigUrl, backupState.AutoConfigUrl, StringComparison.Ordinal);
+        // New ownership metadata is written before registry mutation. Each changed
+        // value must still be either the original value or ClashTray's intended value;
+        // any third value belongs to another application and blocks restoration.
+        return ownership.AutoDetect == backupState.AutoDetect
+            && string.Equals(ownership.AutoConfigUrl, backupState.AutoConfigUrl, StringComparison.Ordinal)
+            && currentState.AutoDetect == backupState.AutoDetect
+            && string.Equals(currentState.AutoConfigUrl, backupState.AutoConfigUrl, StringComparison.Ordinal)
+            && (currentState.ProxyEnable == backupState.ProxyEnable || currentState.ProxyEnable == 1)
+            && Matches(currentState.ProxyServer, backupState.ProxyServer, ownership.ProxyServer, StringComparison.OrdinalIgnoreCase)
+            && Matches(currentState.ProxyOverride, backupState.ProxyOverride, ownership.ProxyOverride, StringComparison.Ordinal);
     }
+
+    private static bool Matches(
+        string? current,
+        string? original,
+        string? intended,
+        StringComparison comparison) =>
+        string.Equals(current, original, comparison)
+        || string.Equals(current, intended, comparison);
 }
 
 [SuppressMessage(

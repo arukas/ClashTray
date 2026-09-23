@@ -50,6 +50,8 @@ public sealed class AppPaths
 
     public string ProxyOwnershipFile => Path.Combine(LocalRoot, "system-proxy-ownership.json");
 
+    public string ProxyTransactionFile => Path.Combine(LocalRoot, "system-proxy-transaction.json");
+
     public string EndpointStoreFile => Path.Combine(LocalRoot, "endpoints.json");
 
     public string EndpointSecretsFile => Path.Combine(LocalRoot, "endpoint-secrets.json");
