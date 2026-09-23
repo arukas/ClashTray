@@ -68,6 +68,7 @@ internal sealed class OperationGate : IDisposable
             await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
             acquired = true;
             await WaitForReadersToDrainAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch
         {
@@ -219,12 +220,20 @@ internal sealed class OperationGate : IDisposable
             throw new InvalidOperationException("Cleanup ownership is available only after quiescing begins.");
         }
 
-        if (!await _semaphore.WaitAsync(timeout, cancellationToken).ConfigureAwait(false))
+        using CancellationTokenSource timeoutSource = new(timeout);
+        using CancellationTokenSource linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutSource.Token);
+        try
+        {
+            await _semaphore.WaitAsync(linkedCancellation.Token).ConfigureAwait(false);
+            await CompleteCleanupAdmissionAsync(linkedCancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             throw new TimeoutException("Timed out waiting for runtime cleanup ownership.");
         }
-
-        await CompleteCleanupAdmissionAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task WaitForCleanupOwnershipAsync(CancellationToken cancellationToken = default)
@@ -383,6 +392,7 @@ internal sealed class OperationGate : IDisposable
         try
         {
             await WaitForReadersToDrainAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
         }
         catch
         {
@@ -440,6 +450,73 @@ internal sealed class OperationGate : IDisposable
 
     private void ThrowIfDisposed() =>
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+}
+
+internal readonly record struct BoundedCleanupStepResult(
+    Exception? Failure,
+    Task? IncompleteOperation)
+{
+    public bool IsSettled => IncompleteOperation is null;
+}
+
+/// <summary>
+/// Waits for one shutdown action only until the shared shutdown deadline. An
+/// incomplete action is returned to its owner so dependent resources stay
+/// alive until that action settles.
+/// </summary>
+internal static class BoundedCleanupStepRunner
+{
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Shutdown must record failures and preserve ownership when a cleanup action does not settle before its deadline.")]
+    public static async Task<BoundedCleanupStepResult> RunAsync(
+        Func<CancellationToken, Task> operation,
+        CancellationToken shutdownDeadline)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        if (shutdownDeadline.IsCancellationRequested)
+        {
+            return new BoundedCleanupStepResult(
+                new OperationCanceledException(shutdownDeadline),
+                null);
+        }
+
+        Task operationTask;
+        try
+        {
+            operationTask = operation(shutdownDeadline)
+                ?? throw new InvalidOperationException("A cleanup action returned no task.");
+        }
+        catch (Exception exception)
+        {
+            return new BoundedCleanupStepResult(exception, null);
+        }
+
+        try
+        {
+            await operationTask.WaitAsync(shutdownDeadline).ConfigureAwait(false);
+            return new BoundedCleanupStepResult(null, null);
+        }
+        catch (Exception exception)
+        {
+            if (!operationTask.IsCompleted)
+            {
+                return new BoundedCleanupStepResult(exception, operationTask);
+            }
+
+            try
+            {
+                await operationTask.ConfigureAwait(false);
+            }
+            catch (Exception operationException)
+            {
+                return new BoundedCleanupStepResult(operationException, null);
+            }
+
+            return new BoundedCleanupStepResult(exception, null);
+        }
+    }
 }
 
 /// <summary>

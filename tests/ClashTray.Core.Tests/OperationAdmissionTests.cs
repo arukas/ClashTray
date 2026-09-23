@@ -356,6 +356,119 @@ public sealed class OperationAdmissionTests
     }
 
     [TestMethod]
+    public async Task CleanupOwnershipTimeoutCoversSharedDrainAndReleasesAdmissionLane()
+    {
+        using OperationGate gate = new();
+        OperationGate.Lease shared = await gate.AcquireSharedAsync();
+        gate.BeginQuiescing();
+
+        Task<OperationGate.Lease> cleanup = gate.AcquireCleanupOwnershipAsync(
+            TimeSpan.FromMilliseconds(75));
+
+        try
+        {
+            Task completed = await Task.WhenAny(cleanup, Task.Delay(TimeSpan.FromSeconds(1)));
+            Assert.AreSame(cleanup, completed, "The deadline must include draining admitted readers.");
+            await Assert.ThrowsExactlyAsync<TimeoutException>(async () =>
+            {
+                using OperationGate.Lease unexpectedLease = await cleanup;
+            });
+        }
+        finally
+        {
+            shared.Dispose();
+
+            // On the pre-fix implementation the wait survives its advertised
+            // timeout and acquires ownership after this reader leaves. Release
+            // that late lease so the failing regression test does not strand
+            // the gate or poison the next assertion.
+            if (!cleanup.IsCompleted)
+            {
+                try
+                {
+                    using OperationGate.Lease lateLease = await cleanup.WaitAsync(TimeSpan.FromSeconds(2));
+                }
+                catch (TimeoutException)
+                {
+                    Assert.Fail("The cleanup waiter did not settle after its reader was released.");
+                }
+            }
+            else if (cleanup.IsCompletedSuccessfully)
+            {
+                (await cleanup).Dispose();
+            }
+        }
+
+        using OperationGate.Lease nextCleanup = await gate.AcquireCleanupOwnershipAsync(
+            TimeSpan.FromSeconds(1));
+    }
+    [TestMethod]
+    public async Task CleanupOwnershipTimeoutWhileWaitingForExclusiveHolderReleasesWaiter()
+    {
+        using OperationGate gate = new();
+        OperationGate.Lease exclusive = await gate.AcquireAsync();
+        gate.BeginQuiescing();
+
+        await Assert.ThrowsExactlyAsync<TimeoutException>(() => gate.AcquireCleanupOwnershipAsync(
+            TimeSpan.FromMilliseconds(75)));
+
+        exclusive.Dispose();
+        using OperationGate.Lease retry = await gate.AcquireCleanupOwnershipAsync(
+            TimeSpan.FromSeconds(1));
+    }
+
+    [TestMethod]
+    public async Task CleanupOwnershipExternalCancellationWhileDrainingReleasesAdmissionLane()
+    {
+        using OperationGate gate = new();
+        OperationGate.Lease shared = await gate.AcquireSharedAsync();
+        gate.BeginQuiescing();
+        using CancellationTokenSource cancellation = new();
+        Task<OperationGate.Lease> cleanup = gate.AcquireCleanupOwnershipAsync(
+            TimeSpan.FromSeconds(2),
+            cancellation.Token);
+
+        await Task.Delay(TimeSpan.FromMilliseconds(25));
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => cleanup);
+
+        shared.Dispose();
+        using OperationGate.Lease retry = await gate.AcquireCleanupOwnershipAsync(
+            TimeSpan.FromSeconds(1));
+    }
+
+    [TestMethod]
+    public async Task BoundedCleanupStepReportsUnresponsiveWorkWithoutReleasingItsResource()
+    {
+        using CancellationTokenSource deadline = new(TimeSpan.FromMilliseconds(75));
+        TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int resourceReleased = 0;
+
+        BoundedCleanupStepResult result = await BoundedCleanupStepRunner.RunAsync(
+            async _ =>
+            {
+                try
+                {
+                    await release.Task;
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref resourceReleased, 1);
+                }
+            },
+            deadline.Token);
+
+        Assert.IsFalse(result.IsSettled);
+        Assert.IsInstanceOfType<OperationCanceledException>(result.Failure);
+        Assert.IsFalse(result.IncompleteOperation!.IsCompleted);
+        Assert.AreEqual(0, Volatile.Read(ref resourceReleased));
+
+        release.TrySetResult(true);
+        await result.IncompleteOperation;
+        Assert.AreEqual(1, Volatile.Read(ref resourceReleased));
+    }
+
+    [TestMethod]
     public async Task WaitForIdleTracksSharedHolders()
     {
         using OperationGate gate = new();
