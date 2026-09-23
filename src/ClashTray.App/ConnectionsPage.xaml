@@ -1,7 +1,8 @@
 <UserControl
     x:Class="ClashTray.App.ConnectionsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:ClashTray.App">
     <UserControl.Resources>
         <Style TargetType="ListViewItem">
             <Setter Property="Padding" Value="8,7" />
@@ -9,7 +10,13 @@
         </Style>
     </UserControl.Resources>
 
-    <StackPanel Spacing="10" Padding="0,2,0,12">
+    <Grid RowSpacing="10" Padding="0,2,0,12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
@@ -24,7 +31,7 @@
             <Button Grid.Column="2" x:Name="CloseAllButton" x:Uid="CloseAllButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="CloseAllButton_Click" />
         </Grid>
 
-        <Border Style="{StaticResource ClashTrayCardStyle}">
+        <Border Grid.Row="1" Style="{StaticResource ClashTrayCardStyle}">
             <Grid ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -39,9 +46,26 @@
             </Grid>
         </Border>
 
-        <Border Style="{StaticResource ClashTrayCardStyle}" Padding="8"><Grid MinHeight="80"><ListView x:Name="ConnectionsListView" SelectionChanged="ConnectionsListView_SelectionChanged" ScrollViewer.VerticalScrollMode="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled" /><TextBlock x:Name="EmptyListText" x:Uid="ConnectionsEmptyListText" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></Grid></Border>
+        <Border Grid.Row="2" Style="{StaticResource ClashTrayCardStyle}" Padding="8">
+            <Grid MinHeight="80">
+                <ListView x:Name="ConnectionsListView"
+                          SelectionMode="Single"
+                          SelectionChanged="ConnectionsListView_SelectionChanged"
+                          ScrollViewer.VerticalScrollMode="Enabled"
+                          ScrollViewer.VerticalScrollBarVisibility="Auto"
+                          ScrollViewer.HorizontalScrollMode="Disabled"
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="local:ConnectionRowViewModel">
+                            <TextBlock Text="{x:Bind DisplayText, Mode=OneWay}" TextWrapping="Wrap" />
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+                <TextBlock x:Name="EmptyListText" x:Uid="ConnectionsEmptyListText" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </Grid>
+        </Border>
 
-        <Border Style="{StaticResource ClashTrayCardStyle}">
+        <Border Grid.Row="3" Style="{StaticResource ClashTrayCardStyle}">
             <StackPanel Spacing="8">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -56,5 +80,5 @@
                 <TextBlock x:Name="DetailsText" x:Uid="ConnectionDetailsText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
             </StackPanel>
         </Border>
-    </StackPanel>
+    </Grid>
 </UserControl>

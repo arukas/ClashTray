@@ -527,7 +527,7 @@ public sealed partial class MainWindow
             throw new InvalidOperationException("Live snapshots overwrote an unsaved settings field.");
         }
 
-        await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = "dark" });
+        await _runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set("dark")));
         page.UpdateSnapshot(_runtime.Snapshot);
         if (!windows.IsOn || !core.IsOn || port.Value != draftPort
             || (theme.SelectedItem as ComboBoxItem)?.Tag?.ToString() != "dark")
@@ -812,7 +812,7 @@ public sealed partial class MainWindow
         await SaveDiagnosticFrameAsync(directory, "nakhimov-unlocked");
         EasterEggTip.IsOpen = false;
         await SaveDiagnosticFrameAsync(directory, "nakhimov-panel");
-        await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = "light" });
+        await _runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set("light")));
         ApplyTheme(_runtime.Settings.Theme);
         if (NakhimovThemeOption.Visibility != Visibility.Visible || _logoAsset != "Light")
         {

@@ -21,6 +21,7 @@ public partial class App : Application, IAsyncDisposable
     private AppSnapshot? _pendingAppSnapshot;
     private bool _snapshotDispatchScheduled;
     private bool _disposed;
+    private RuntimeShutdownResult? _shutdownResult;
 
     [SuppressMessage(
         "Reliability",
@@ -44,22 +45,29 @@ public partial class App : Application, IAsyncDisposable
         // a production network context source that could read or monitor SSIDs.
         _runtime = new ClashTrayRuntime(runtimePaths, networkContextSource: null);
         _shutdownCoordinator = new ShutdownCoordinator(
+            DispatchUiActionAsync,
             () => _mainWindow?.AllowClose(),
             DisposeForQuitAsync,
             () =>
             {
                 _mainWindow?.Close();
-                Environment.Exit(0);
+                Environment.Exit(_shutdownResult?.IsFullyClean == true ? 0 : 2);
             });
         UnhandledException += (_, e) =>
         {
 #if DEBUG
-            string directory = _smokeDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClashTray", "logs");
+            string directory = _smokeDirectory
+                ?? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "ClashTray",
+                    "logs");
 #else
-            string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ClashTray", "logs");
+            string directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "ClashTray",
+                "logs");
 #endif
-            Directory.CreateDirectory(directory);
-            File.AppendAllText(Path.Combine(directory, "startup-error.log"), $"{DateTimeOffset.Now:O} {e.Exception}\n");
+            BoundedDiagnosticWriter.TryWriteException(directory, e.Exception);
         };
 
         // Set the Windows App SDK language override after the Application object
@@ -131,6 +139,40 @@ public partial class App : Application, IAsyncDisposable
     }
 #endif
 
+    private Task DispatchUiActionAsync(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        DispatcherQueue? dispatcher = _dispatcherQueue;
+        if (dispatcher is null)
+        {
+            return Task.FromException(new ShutdownUiDispatcherRejectedException());
+        }
+
+        if (dispatcher.HasThreadAccess)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!dispatcher.TryEnqueue(() =>
+        {
+            try
+            {
+                action();
+                completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        }))
+        {
+            completion.TrySetException(new ShutdownUiDispatcherRejectedException());
+        }
+
+        return completion.Task;
+    }
     public Task RequestQuitAsync() => _shutdownCoordinator.RequestQuitAsync();
 
     private async Task DisposeForQuitAsync()
@@ -168,6 +210,7 @@ public partial class App : Application, IAsyncDisposable
         }
 
         _trayIcon?.Dispose();
+        _shutdownResult = await _runtime.ShutdownAsync();
         await _runtime.DisposeAsync();
         _instanceCoordinator.Dispose();
         GC.SuppressFinalize(this);

@@ -12,6 +12,7 @@ public sealed class BoundedLogBuffer
     private readonly int _capacity;
     private IReadOnlyList<LogEntry> _snapshot = Array.Empty<LogEntry>();
     private bool _snapshotDirty;
+    private long _nextSequence;
 
     public BoundedLogBuffer(int capacity)
     {
@@ -40,7 +41,7 @@ public sealed class BoundedLogBuffer
             }
             else
             {
-                _items.AddLast(entry);
+                _items.AddLast(entry with { Sequence = ++_nextSequence });
             }
 
             while (_items.Count > _capacity)

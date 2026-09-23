@@ -129,9 +129,16 @@
                     <ContentControl x:Name="ProxyPageContent" HorizontalContentAlignment="Stretch"/>
                 </StackPanel>
             </ScrollViewer>
-            <ScrollViewer x:Name="OtherPageScrollViewer" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                <ContentControl x:Name="PageContent" HorizontalContentAlignment="Stretch" Padding="0,0,10,0"/>
-            </ScrollViewer>
+            <Grid x:Name="OtherPageHost" Visibility="Collapsed">
+                <ScrollViewer x:Name="OtherPageScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <ContentControl x:Name="PageContent" HorizontalContentAlignment="Stretch" Padding="0,0,10,0"/>
+                </ScrollViewer>
+                <ContentControl x:Name="ListPageContent"
+                                Visibility="Collapsed"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch"
+                                Padding="0,0,10,0"/>
+            </Grid>
         </Grid>
         <Grid Grid.Row="5" Margin="0,6,0,0" Height="28">
             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>

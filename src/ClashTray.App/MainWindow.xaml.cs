@@ -749,11 +749,23 @@ public sealed partial class MainWindow : Window
     {
         _activePage = target;
         bool isDashboard = page == _proxyPage;
+        bool isListPage = target is PanelPage.Connections or PanelPage.Logs;
         DashboardScrollViewer.Visibility = isDashboard ? Visibility.Visible : Visibility.Collapsed;
-        OtherPageScrollViewer.Visibility = isDashboard ? Visibility.Collapsed : Visibility.Visible;
+        OtherPageHost.Visibility = isDashboard ? Visibility.Collapsed : Visibility.Visible;
+        OtherPageScrollViewer.Visibility = isDashboard || isListPage
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        ListPageContent.Visibility = isListPage ? Visibility.Visible : Visibility.Collapsed;
         if (page is not null && !isDashboard)
         {
-            PageContent.Content = page;
+            if (isListPage)
+            {
+                ListPageContent.Content = page;
+            }
+            else
+            {
+                PageContent.Content = page;
+            }
         }
 
         ProxyPageButton.IsChecked = isDashboard;

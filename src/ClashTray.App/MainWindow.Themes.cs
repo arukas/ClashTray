@@ -182,7 +182,7 @@ public sealed partial class MainWindow
         try
         {
             bool wasUnlocked = _runtime.Settings.NakhimovUnlocked;
-            await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = "nakhimov", NakhimovUnlocked = true });
+            await _runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set("nakhimov"), NakhimovUnlocked: SettingPatchValue.Set(true)));
             ApplyTheme(_runtime.Settings.Theme);
             EasterEggTip.Title = wasUnlocked ? LocalizationService.Get("EasterEggWelcomeBack") : LocalizationService.Get("EasterEggUnlocked");
             EasterEggTip.Subtitle = LocalizationService.Get("EasterEggEnabledHint");
@@ -208,7 +208,7 @@ public sealed partial class MainWindow
         ThemeFlyout.Hide();
         try
         {
-            await _runtime.UpdateSettingsAsync(_runtime.Settings with { Theme = theme });
+            await _runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set(theme)));
             ApplyTheme(_runtime.Settings.Theme);
         }
         catch (Exception exception)

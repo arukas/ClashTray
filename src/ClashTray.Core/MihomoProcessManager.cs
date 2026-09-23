@@ -299,6 +299,28 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
     }
 
+    internal LocalCoreProcessIdentity? CaptureRunningProcessIdentity()
+    {
+        lock (_processGate)
+        {
+            Process? process = _process;
+            if (process is null || HasExited(process))
+            {
+                return null;
+            }
+
+            string? executablePath = process.MainModule?.FileName;
+            if (string.IsNullOrWhiteSpace(executablePath))
+            {
+                throw new InvalidOperationException("无法读取本地 Mihomo 进程路径。");
+            }
+
+            return new LocalCoreProcessIdentity(
+                process.Id,
+                process.StartTime.ToUniversalTime().Ticks,
+                Path.GetFullPath(executablePath));
+        }
+    }
     private void StartProcess(
         string executablePath,
         string configurationPath,

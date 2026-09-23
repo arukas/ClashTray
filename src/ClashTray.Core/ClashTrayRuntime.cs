@@ -18,8 +18,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly object _disposeGate = new();
     private readonly object _publishGate = new();
     private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(8) };
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "Released only after shutdown workers settle; timed out workers retain the runtime and its resources.")]
     private readonly SnapshotPublishThrottle _throttledPublisher;
     private readonly AppPaths _paths;
+    private readonly LocalCoreShutdownJournal _localCoreShutdownJournal;
     private readonly ConfigurationStore _configurationStore;
     private readonly EndpointTransportOptionsResolver _endpointTransportOptionsResolver;
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "The session manager is released only after admitted work drains; an unresponsive shutdown intentionally retains it.")]
@@ -27,6 +29,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly EndpointCatalogCoordinator _endpointCatalog;
     private readonly NetworkRuleStore _networkRuleStore;
     private readonly ConfigurationSwitchJournalStore _configurationSwitchJournalStore;
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "Released only after shutdown workers settle; timed out workers retain the runtime and its resources.")]
     private readonly ConfigurationSwitchCoordinator _configurationSwitchCoordinator;
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "The controller is released only after admitted work drains; an unresponsive shutdown intentionally retains it.")]
     private readonly NetworkSwitchRuntimeController _networkSwitchRuntimeController;
@@ -35,6 +38,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly ISettingsStore _settingsStore;
     private readonly CoreDiscovery _coreDiscovery;
     private readonly LocalDeviceCoordinator _localDevice;
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "Disposed by the bounded shutdown sequence; an incomplete dispose retains the runtime.")]
     private readonly SubscriptionScheduler _subscriptionScheduler;
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "The process manager is released only after shutdown actions settle; an unresponsive shutdown intentionally retains it.")]
     private readonly MihomoProcessManager _processManager = new();
@@ -61,7 +65,10 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private long _proxyIntentRevision;
     private readonly object _proxyRecoveryGate = new();
     private Task? _proxyRecoveryTask;
-    private Task? _disposeTask;
+    private Task<RuntimeShutdownResult>? _shutdownTask;
+    private readonly Func<string, CancellationToken, Task>? _shutdownStepTestHook;
+    private readonly Func<LocalCoreProcessIdentity?>? _localCoreProcessIdentityProvider;
+    private readonly Func<LocalCoreProcessIdentity, CancellationToken, Task<LocalCoreShutdownJournalResult>>? _localCoreRecoveryAction;
 
     private static readonly TimeSpan DisposeCleanupTimeout = TimeSpan.FromSeconds(30);
     private readonly TimeSpan _disposeCleanupTimeout;
@@ -96,13 +103,20 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         Func<TimeSpan, CancellationToken, Task>? remoteRefreshDelayAsync = null,
         Func<EndpointSession, EndpointSessionStatusEventArgs, CancellationToken, Task>? remoteLogStreamRunner = null,
         Func<MihomoApiClient>? controllerApiFactory = null,
-        TimeSpan? disposeCleanupTimeout = null)
+        TimeSpan? disposeCleanupTimeout = null,
+        Func<string, CancellationToken, Task>? shutdownStepTestHook = null,
+        Func<LocalCoreProcessIdentity?>? localCoreProcessIdentityProvider = null,
+        Func<LocalCoreProcessIdentity, CancellationToken, Task<LocalCoreShutdownJournalResult>>? localCoreRecoveryAction = null)
     {
         bool useDefaultEnvironment = paths is null;
         _disposeCleanupTimeout = disposeCleanupTimeout ?? DisposeCleanupTimeout;
+        _shutdownStepTestHook = shutdownStepTestHook;
+        _localCoreProcessIdentityProvider = localCoreProcessIdentityProvider;
+        _localCoreRecoveryAction = localCoreRecoveryAction;
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_disposeCleanupTimeout, TimeSpan.Zero);
         _paths = paths ?? new AppPaths();
         _paths.EnsureDirectories();
+        _localCoreShutdownJournal = new LocalCoreShutdownJournal(_paths);
         EndpointStore endpointStore = new(_paths);
         EndpointSecretStore endpointSecretStore = new(_paths);
         EndpointCertificateStore endpointCertificateStore = new(_paths);
@@ -243,6 +257,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Startup recovery converts journal cleanup, backup restore, and health-confirmation failures into degraded-state messages so initialization always completes.")]
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
+        LocalCoreShutdownJournalResult localCoreRecovery = await _localCoreShutdownJournal.RecoverPendingStopAsync(
+            _localCoreRecoveryAction,
+            cancellationToken);
         SettingsLoadResult settingsLoad = await _settingsStore.LoadWithStatusAsync(cancellationToken);
         _settings = settingsLoad.Settings;
         await LoadEndpointCatalogAsync(cancellationToken);
@@ -442,7 +459,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         Publish();
         _subscriptionScheduler.Start();
 
-        if (recoveryJournal is null
+        if (localCoreRecovery.Succeeded
+            && recoveryJournal is null
             && ShouldAutomaticallyStartCore(
                 _settings,
                 configurations.Any(configuration => configuration.IsActive),
@@ -458,6 +476,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             or SettingsLoadStatus.RecoveryFailed)
         {
             _stateStore.Update(snapshot => snapshot with { ErrorMessage = settingsLoad.Message });
+            Publish();
+        }
+
+        if (!localCoreRecovery.Succeeded)
+        {
+            string message = $"上次退出后的本地核心恢复未确认：{localCoreRecovery.Detail ?? "原因未知"}；本次启动已跳过自动启动。";
+            _stateStore.Update(snapshot => snapshot with { ErrorMessage = message });
             Publish();
         }
 
@@ -1559,12 +1584,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     }
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Settings application rolls back to the previously persisted settings on any failure, so the rollback must run regardless of failure type.")]
-    public async Task UpdateSettingsAsync(AppSettings settings, bool reconcileStartup = false, CancellationToken cancellationToken = default)
+    public async Task UpdateSettingsAsync(AppSettingsPatch patch, bool reconcileStartup = false, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(settings);
-        ValidateSettings(settings);
+        ArgumentNullException.ThrowIfNull(patch);
         using OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken);
         AppSettings previousSettings = _settings;
+        AppSettings settings = patch.Apply(previousSettings);
+        ValidateSettings(settings);
         bool networkSettingsChanged = settings.AllowLan != previousSettings.AllowLan
             || settings.Ipv6 != previousSettings.Ipv6;
         bool coreRestartRequired = RequiresCoreRestart(previousSettings, settings);
@@ -2159,6 +2185,21 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         _stateStore.Update(snapshot => snapshot with { Core = snapshot.Core with { State = CoreState.Running } });
     }
 
+    internal void SetShutdownStateForTesting(
+        bool serviceOwnsCore,
+        CoreState core,
+        TunState tun,
+        SystemProxyState systemProxy)
+    {
+        _usingServiceCore = serviceOwnsCore;
+        _confirmedTunState = tun;
+        _stateStore.Update(snapshot => snapshot with
+        {
+            Core = snapshot.Core with { State = core },
+            Tun = tun,
+            SystemProxy = systemProxy
+        });
+    }
     internal bool IsCoreHealthConfirmedForTesting => CoreHealthConfirmed;
 
     internal Task<OperationGate.Lease> AcquireSharedOperationForTestingAsync() =>
@@ -2180,76 +2221,192 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await RevokeSystemProxyForCoreLossAsync(operationLease);
     }
 
-    public ValueTask DisposeAsync()
+    public Task<RuntimeShutdownResult> ShutdownAsync()
     {
         lock (_disposeGate)
         {
-            _disposeTask ??= DisposeCoreAsync();
-            return new ValueTask(_disposeTask);
+            _shutdownTask ??= DisposeCoreAsync();
+            return _shutdownTask;
         }
     }
+
+    public ValueTask DisposeAsync() => new(ShutdownAsync());
 
     [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "The deadline and cleanup lease are released by a finally block or transferred to the continuation that observes an abandoned cleanup task.")]
     [SuppressMessage("Reliability", "CA2025:Ensure that tasks are completed before disposing of instances", Justification = "An unresponsive cleanup task retains its dependent resources and operation lease until the task completes.")]
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Shutdown must be bounded and must retain resources while an incomplete cleanup action can still use them.")]
-    private async Task DisposeCoreAsync()
+    private async Task<RuntimeShutdownResult> DisposeCoreAsync()
     {
+        RuntimeSnapshot initialSnapshot = Snapshot;
+        bool usingServiceCore = _usingServiceCore;
+        bool managerOwnsLocalProcess = !usingServiceCore
+            && _processManager.State is (CoreState.Starting or CoreState.Running or CoreState.Stopping or CoreState.Restarting);
+        LocalCoreProcessIdentity? localCoreIdentity = null;
+        Exception? localCoreIdentityFailure = null;
+        try
+        {
+            localCoreIdentity = _localCoreProcessIdentityProvider is null
+                ? _processManager.CaptureRunningProcessIdentity()
+                : _localCoreProcessIdentityProvider() ?? _processManager.CaptureRunningProcessIdentity();
+        }
+        catch (Exception exception)
+        {
+            localCoreIdentityFailure = exception;
+        }
+
+        bool hasLocalCoreRecovery = !usingServiceCore
+            && (managerOwnsLocalProcess || localCoreIdentity is not null || localCoreIdentityFailure is not null);
+        bool hasTunCleanup = usingServiceCore
+            && initialSnapshot.Tun is not (TunState.Off or TunState.Unavailable);
+        bool hasProxyCleanup = initialSnapshot.SystemProxy is SystemProxyState.On or SystemProxyState.RestoreRequired;
+        bool hasCoreCleanup = usingServiceCore
+            || hasLocalCoreRecovery
+            || initialSnapshot.Core.State is CoreState.Running
+                or CoreState.Starting
+                or CoreState.Stopping
+                or CoreState.Restarting
+            || _api is not null;
+        RuntimeShutdownResultBuilder resultBuilder = new(
+            _paths,
+            usingServiceCore,
+            hasTunCleanup,
+            hasProxyCleanup,
+            hasCoreCleanup,
+            hasLocalCoreRecovery);
+        if (localCoreIdentityFailure is not null)
+        {
+            resultBuilder.SetLocalCoreRecovery(new ShutdownCleanupStepResult(
+                "本地核心退出恢复记录",
+                ShutdownCleanupStatus.Failed,
+                ErrorSanitizer.Sanitize(localCoreIdentityFailure)));
+        }
+        else if (hasLocalCoreRecovery && localCoreIdentity is null)
+        {
+            resultBuilder.SetLocalCoreRecovery(new ShutdownCleanupStepResult(
+                "本地核心退出恢复记录",
+                ShutdownCleanupStatus.Failed,
+                "无法读取本地核心进程身份，未能创建持久退出恢复记录。"));
+        }
+
         List<Exception> cleanupFailures = [];
         CancellationTokenSource shutdownDeadline = new(_disposeCleanupTimeout);
+        TimeSpan preNetworkBudget = TimeSpan.FromTicks(Math.Max(
+            1,
+            Math.Min(_disposeCleanupTimeout.Ticks / 3, TimeSpan.FromSeconds(5).Ticks)));
+        CancellationTokenSource preNetworkDeadline = new(preNetworkBudget);
         bool shutdownDeadlineTransferred = false;
+        bool preNetworkDeadlineTransferred = false;
         bool cleanupLeaseTransferred = false;
         OperationGate.Lease? cleanupLease = null;
 
-        async Task<bool> RunStepAsync(string operationName, Func<CancellationToken, Task> operation)
+        async Task<bool> RunStepAsync(
+            string operationName,
+            Func<CancellationToken, Task> operation,
+            CancellationToken cancellationToken,
+            Action<ShutdownCleanupStepResult>? record = null)
         {
-            BoundedCleanupStepResult result = await BoundedCleanupStepRunner.RunAsync(
-                    operation,
-                    shutdownDeadline.Token)
-                .ConfigureAwait(false);
-
-            if (result.Failure is not null)
+            async Task ExecuteAsync(CancellationToken token)
             {
-                Exception failure = shutdownDeadline.IsCancellationRequested
-                    && result.Failure is OperationCanceledException
-                    ? new TimeoutException("ClashTray 退出清理达到总时限。", result.Failure)
-                    : result.Failure;
-                RecordCleanupFailure(cleanupFailures, operationName, failure);
-            }
-            else if (shutdownDeadline.IsCancellationRequested)
-            {
-                RecordCleanupFailure(
-                    cleanupFailures,
-                    operationName,
-                    new TimeoutException("ClashTray 退出清理达到总时限。"));
-            }
-
-            if (shutdownDeadline.IsCancellationRequested || !result.IsSettled)
-            {
-                if (result.IncompleteOperation is Task pendingOperation)
+                if (_shutdownStepTestHook is not null)
                 {
-                    shutdownDeadlineTransferred = true;
-                    cleanupLeaseTransferred = cleanupLease is not null;
-                    _ = CompleteAbandonedCleanupAsync(
-                        pendingOperation,
-                        cleanupLease,
-                        shutdownDeadline);
+                    await _shutdownStepTestHook(operationName, token).ConfigureAwait(false);
                 }
 
+                await operation(token).ConfigureAwait(false);
+            }
+
+            BoundedCleanupStepResult runResult = await BoundedCleanupStepRunner.RunAsync(
+                    ExecuteAsync,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            ShutdownCleanupStatus status;
+            string? detail = null;
+            if (runResult.IncompleteOperation is not null
+                || (cancellationToken.IsCancellationRequested && runResult.Failure is OperationCanceledException))
+            {
+                status = ShutdownCleanupStatus.TimedOutUnknown;
+                detail = $"{operationName} 未在对应退出阶段期限内完成，结果未确认。";
+            }
+            else if (runResult.Failure is not null)
+            {
+                status = ShutdownCleanupStatus.Failed;
+                detail = $"{operationName} 失败：{ErrorSanitizer.Sanitize(runResult.Failure)}";
+            }
+            else
+            {
+                status = ShutdownCleanupStatus.Completed;
+            }
+
+            ShutdownCleanupStepResult stepResult = new(operationName, status, detail);
+            if (record is null)
+            {
+                resultBuilder.AddAdditional(stepResult);
+            }
+            else
+            {
+                record(stepResult);
+            }
+
+            if (runResult.Failure is not null)
+            {
+                Exception failure = cancellationToken.IsCancellationRequested
+                    && runResult.Failure is OperationCanceledException
+                    ? new TimeoutException($"{operationName} 达到退出阶段期限。", runResult.Failure)
+                    : runResult.Failure;
+                RecordCleanupFailure(cleanupFailures, operationName, failure);
+            }
+
+            if (runResult.IncompleteOperation is Task pendingOperation)
+            {
+                shutdownDeadlineTransferred = true;
+                preNetworkDeadlineTransferred = true;
+                cleanupLeaseTransferred = cleanupLease is not null;
+                _ = CompleteAbandonedCleanupAsync(
+                    pendingOperation,
+                    cleanupLease,
+                    shutdownDeadline,
+                    preNetworkDeadline);
                 return false;
             }
 
-            return true;
+            return !cancellationToken.IsCancellationRequested
+                || runResult.Failure is not OperationCanceledException;
         }
 
         try
         {
+            if (hasLocalCoreRecovery && localCoreIdentity is not null)
+            {
+                bool journalWriteContinues = await RunStepAsync(
+                    "写入本地核心退出恢复记录",
+                    async token =>
+                    {
+                        LocalCoreShutdownJournalResult result = await _localCoreShutdownJournal.SavePendingStopAsync(
+                            localCoreIdentity,
+                            token).ConfigureAwait(false);
+                        if (!result.Succeeded)
+                        {
+                            throw new IOException(result.Detail ?? "无法写入本地核心退出恢复记录。");
+                        }
+                    },
+                    preNetworkDeadline.Token,
+                    resultBuilder.SetLocalCoreRecovery).ConfigureAwait(false);
+                if (!journalWriteContinues)
+                {
+                    return resultBuilder.Build();
+                }
+            }
+
             _operationLock.BeginQuiescing();
             Interlocked.Increment(ref _coreLifecycleEpoch);
+
             if (!await RunStepAsync(
                     "取消运行时工作",
-                    _ => _runtimeCts.CancelAsync()).ConfigureAwait(false))
+                    _ => _runtimeCts.CancelAsync(),
+                    preNetworkDeadline.Token).ConfigureAwait(false))
             {
-                return;
+                return resultBuilder.Build();
             }
 
             _endpointSessions.StatusChanged -= _remoteRefresh.HandleSessionStatusChanged;
@@ -2259,127 +2416,272 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             if (!await RunStepAsync(
                     "停止远程端点刷新",
-                    _ => _remoteRefresh.StopRefreshAsync()).ConfigureAwait(false)
+                    _ => _remoteRefresh.StopRefreshAsync(),
+                    preNetworkDeadline.Token).ConfigureAwait(false)
                 || !await RunStepAsync(
                     "停止订阅调度器",
-                    _ => _subscriptionScheduler.DisposeAsync().AsTask()).ConfigureAwait(false))
+                    _ => _subscriptionScheduler.DisposeAsync().AsTask(),
+                    preNetworkDeadline.Token).ConfigureAwait(false))
             {
-                return;
+                return resultBuilder.Build();
             }
 
             OperationGate.Lease cleanupOwnership;
             try
             {
-                cleanupOwnership = await _operationLock.AcquireCleanupOwnershipAsync(shutdownDeadline.Token)
+                cleanupOwnership = await _operationLock.AcquireCleanupOwnershipAsync(preNetworkDeadline.Token)
                     .ConfigureAwait(false);
                 cleanupLease = cleanupOwnership;
+                resultBuilder.SetOperationGate(new ShutdownCleanupStepResult(
+                    "运行时操作安全点",
+                    ShutdownCleanupStatus.Completed));
             }
-            catch (OperationCanceledException exception) when (shutdownDeadline.IsCancellationRequested)
+            catch (OperationCanceledException exception) when (preNetworkDeadline.IsCancellationRequested)
             {
+                ShutdownCleanupStepResult step = new(
+                    "运行时操作安全点",
+                    ShutdownCleanupStatus.TimedOutUnknown,
+                    "等待已准入操作结束时达到网络清理前置期限；TUN、代理和核心状态均未宣称已清理。");
+                resultBuilder.SetOperationGate(step);
                 RecordCleanupFailure(
                     cleanupFailures,
                     "等待运行时操作安全点",
-                    new TimeoutException("等待已准入操作结束时达到退出清理总时限。", exception));
-                return;
+                    new TimeoutException("等待已准入操作结束时达到退出清理前置期限。", exception));
+                return resultBuilder.Build();
             }
             catch (Exception exception)
             {
+                resultBuilder.SetOperationGate(new ShutdownCleanupStepResult(
+                    "运行时操作安全点",
+                    ShutdownCleanupStatus.Failed,
+                    ErrorSanitizer.Sanitize(exception)));
                 RecordCleanupFailure(cleanupFailures, "等待运行时操作安全点", exception);
-                return;
+                return resultBuilder.Build();
             }
 
             if (!await RunStepAsync(
-                    "释放端点会话",
-                    _ => _endpointSessions.DisposeAsync().AsTask()).ConfigureAwait(false)
-                || !await RunStepAsync(
-                    "释放网络切换运行时",
-                    _ => _networkSwitchRuntimeController.DisposeAsync().AsTask()).ConfigureAwait(false)
-                || !await RunStepAsync(
                     "等待 TUN 操作安全点",
-                    token => _tunOperation.WaitForIdleAsync(_disposeCleanupTimeout, token)).ConfigureAwait(false))
+                    token => _tunOperation.WaitForIdleAsync(_disposeCleanupTimeout, token),
+                    preNetworkDeadline.Token).ConfigureAwait(false))
             {
-                return;
+                return resultBuilder.Build();
             }
 
-            bool usingServiceCore = _usingServiceCore;
-            if (!await RunStepAsync(
+            if (hasTunCleanup)
+            {
+                bool stepContinues = await RunStepAsync(
                     "关闭 TUN",
                     async token =>
                     {
-                        if (!usingServiceCore || Snapshot.Tun is TunState.Off or TunState.Unavailable)
-                        {
-                            return;
-                        }
-
                         await RequestTunOperationAsync(
                                 enabled: false,
                                 persistPreference: false,
                                 operationLease: cleanupOwnership,
-                                cancellationToken: token)
+                                cancellationToken: CancellationToken.None)
                             .ConfigureAwait(false);
-                    }).ConfigureAwait(false)
-                || !await RunStepAsync(
+                    },
+                    shutdownDeadline.Token,
+                    result =>
+                    {
+                        if (result.Status == ShutdownCleanupStatus.Completed)
+                        {
+                            resultBuilder.SetTun(Snapshot.Tun == TunState.Off
+                                ? result
+                                : result with
+                                {
+                                    Status = ShutdownCleanupStatus.Failed,
+                                    Detail = "服务未确认 TUN 已关闭。"
+                                });
+                        }
+                        else
+                        {
+                            resultBuilder.SetTun(result);
+                        }
+                    }).ConfigureAwait(false);
+                if (!stepContinues)
+                {
+                    return resultBuilder.Build();
+                }
+            }
+
+            bool coreStopWillHandleProxy = hasCoreCleanup
+                && (!usingServiceCore || !hasTunCleanup || Snapshot.Tun == TunState.Off);
+            if (hasProxyCleanup && !coreStopWillHandleProxy)
+            {
+                bool stepContinues = await RunStepAsync(
                     "恢复系统代理",
                     async token =>
                     {
-                        if (Snapshot.SystemProxy is SystemProxyState.On or SystemProxyState.RestoreRequired)
+                        await SetSystemProxyCoreAsync(
+                                false,
+                                persistPreference: false,
+                                cancellationToken: CancellationToken.None,
+                                operationLease: cleanupOwnership)
+                            .ConfigureAwait(false);
+                    },
+                    shutdownDeadline.Token,
+                    result =>
+                    {
+                        if (result.Status == ShutdownCleanupStatus.Completed)
                         {
-                            await SetSystemProxyCoreAsync(
-                                    false,
-                                    persistPreference: false,
-                                    cancellationToken: token,
-                                    operationLease: cleanupOwnership)
-                                .ConfigureAwait(false);
+                            resultBuilder.SetSystemProxy(Snapshot.SystemProxy is SystemProxyState.Off
+                                ? result
+                                : result with
+                                {
+                                    Status = ShutdownCleanupStatus.Failed,
+                                    Detail = "系统代理仍要求恢复或状态未确认。"
+                                });
                         }
-                    }).ConfigureAwait(false)
-                || !await RunStepAsync(
+                        else
+                        {
+                            resultBuilder.SetSystemProxy(result);
+                        }
+                    }).ConfigureAwait(false);
+                if (!stepContinues)
+                {
+                    return resultBuilder.Build();
+                }
+            }
+
+            if (usingServiceCore && hasTunCleanup && Snapshot.Tun != TunState.Off)
+            {
+                resultBuilder.SetCore(new ShutdownCleanupStepResult(
+                    "停止核心",
+                    ShutdownCleanupStatus.TimedOutUnknown,
+                    "TUN 已关闭状态未确认，因此没有请求服务停止核心。"));
+                return resultBuilder.Build();
+            }
+            if (hasCoreCleanup)
+            {
+                bool stepContinues = await RunStepAsync(
                     "停止核心",
                     async token =>
                     {
-                        if (usingServiceCore
-                            || Snapshot.Core.State is CoreState.Running
-                                or CoreState.Starting
-                                or CoreState.Stopping
-                                or CoreState.Restarting
-                            || _api is not null)
+                        await StopCoreCoreAsync(cleanupOwnership, CancellationToken.None).ConfigureAwait(false);
+                    },
+                    shutdownDeadline.Token,
+                    result =>
+                    {
+                        if (result.Status == ShutdownCleanupStatus.Completed)
                         {
-                            await StopCoreCoreAsync(cleanupOwnership, token).ConfigureAwait(false);
+                            resultBuilder.SetCore(Snapshot.Core.State is CoreState.Stopped or CoreState.Missing
+                                ? result
+                                : result with
+                                {
+                                    Status = ShutdownCleanupStatus.Failed,
+                                    Detail = "核心停止操作结束，但状态未确认是已停止。"
+                                });
                         }
-                    }).ConfigureAwait(false))
+                        else
+                        {
+                            resultBuilder.SetCore(result);
+                        }
+                    }).ConfigureAwait(false);
+                if (hasProxyCleanup && coreStopWillHandleProxy)
+                {
+                    resultBuilder.SetSystemProxy(!stepContinues
+                        ? new ShutdownCleanupStepResult(
+                            "恢复系统代理",
+                            ShutdownCleanupStatus.TimedOutUnknown,
+                            "核心停止期间的系统代理恢复结果未确认。")
+                        : Snapshot.SystemProxy == SystemProxyState.Off
+                            ? new ShutdownCleanupStepResult(
+                                "恢复系统代理",
+                                ShutdownCleanupStatus.Completed)
+                            : new ShutdownCleanupStepResult(
+                                "恢复系统代理",
+                                ShutdownCleanupStatus.Failed,
+                                "核心停止后的系统代理仍要求恢复或状态未确认。"));
+                }
+                if (!stepContinues)
+                {
+                    return resultBuilder.Build();
+                }
+            }
+
+            if (hasLocalCoreRecovery
+                && resultBuilder.Core.Status == ShutdownCleanupStatus.Completed)
             {
-                return;
+                bool journalClearContinues = await RunStepAsync(
+                    "清理本地核心退出恢复记录",
+                    token => _localCoreShutdownJournal.ClearPendingStopAsync(token),
+                    shutdownDeadline.Token,
+                    resultBuilder.SetLocalCoreRecovery).ConfigureAwait(false);
+                if (!journalClearContinues)
+                {
+                    return resultBuilder.Build();
+                }
             }
 
             cleanupOwnership.Dispose();
             cleanupLease = null;
             SetController(null);
+
             if (!await RunStepAsync(
+                    "释放端点会话",
+                    _ => _endpointSessions.DisposeAsync().AsTask(),
+                    shutdownDeadline.Token).ConfigureAwait(false)
+                || !await RunStepAsync(
+                    "释放网络切换运行时",
+                    _ => _networkSwitchRuntimeController.DisposeAsync().AsTask(),
+                    shutdownDeadline.Token).ConfigureAwait(false)
+                || !await RunStepAsync(
                     "停止日志流",
-                    _ => _logs.StopLogStreamAsync()).ConfigureAwait(false)
+                    _ => _logs.StopLogStreamAsync(),
+                    shutdownDeadline.Token).ConfigureAwait(false)
                 || !await RunStepAsync(
                     "等待数据刷新",
-                    token => AwaitTaskBoundedAsync(_dataRefreshTask, token)).ConfigureAwait(false)
+                    token => AwaitTaskBoundedAsync(_dataRefreshTask, token),
+                    shutdownDeadline.Token).ConfigureAwait(false)
                 || !await RunStepAsync(
                     "等待轮询",
-                    token => AwaitTaskBoundedAsync(_pollingTask, token)).ConfigureAwait(false)
+                    token => AwaitTaskBoundedAsync(_pollingTask, token),
+                    shutdownDeadline.Token).ConfigureAwait(false)
                 || !await RunStepAsync(
                     "等待系统代理恢复",
-                    _ => AwaitQueuedProxyRecoveryAsync()).ConfigureAwait(false)
+                    _ => AwaitQueuedProxyRecoveryAsync(),
+                    shutdownDeadline.Token).ConfigureAwait(false)
                 || !await RunStepAsync(
                     "释放核心进程管理器",
-                    _ => _processManager.DisposeAsync().AsTask()).ConfigureAwait(false)
+                    _ => _processManager.DisposeAsync().AsTask(),
+                    shutdownDeadline.Token).ConfigureAwait(false)
                 || !await RunStepAsync(
                     "释放配置切换协调器",
-                    _ => _configurationSwitchCoordinator.DisposeAsync().AsTask()).ConfigureAwait(false)
+                    _ => _configurationSwitchCoordinator.DisposeAsync().AsTask(),
+                    shutdownDeadline.Token).ConfigureAwait(false)
                 || !await RunStepAsync(
                     "停止发布 worker",
-                    _ => _throttledPublisher.DisposeAsync().AsTask()).ConfigureAwait(false))
+                    _ => _throttledPublisher.DisposeAsync().AsTask(),
+                    shutdownDeadline.Token).ConfigureAwait(false))
             {
-                return;
+                resultBuilder.SetRuntimeResources(new ShutdownCleanupStepResult(
+                    "释放运行时资源",
+                    ShutdownCleanupStatus.TimedOutUnknown,
+                    "非网络运行时清理达到总期限；未释放仍可能被使用的资源。"));
+                return resultBuilder.Build();
             }
 
-            _logs.Dispose();
-            _remoteRefresh.Dispose();
+            try
+            {
+                _logs.Dispose();
+                _remoteRefresh.Dispose();
+                _httpClient.Dispose();
+                _subscriptionOperationLock.Dispose();
+                _dataRefreshLock.Dispose();
+                _operationLock.Dispose();
+                _runtimeCts.Dispose();
+                resultBuilder.SetRuntimeResources(new ShutdownCleanupStepResult(
+                    "释放运行时资源",
+                    ShutdownCleanupStatus.Completed));
+            }
+            catch (Exception exception)
+            {
+                resultBuilder.SetRuntimeResources(new ShutdownCleanupStepResult(
+                    "释放运行时资源",
+                    ShutdownCleanupStatus.Failed,
+                    ErrorSanitizer.Sanitize(exception)));
+                RecordCleanupFailure(cleanupFailures, "释放运行时资源", exception);
+            }
 
             if (cleanupFailures.Count > 0)
             {
@@ -2399,11 +2701,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 }
             }
 
-            _httpClient.Dispose();
-            _subscriptionOperationLock.Dispose();
-            _dataRefreshLock.Dispose();
-            _operationLock.Dispose();
-            _runtimeCts.Dispose();
+            return resultBuilder.Build();
         }
         finally
         {
@@ -2416,14 +2714,20 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             {
                 shutdownDeadline.Dispose();
             }
+
+            if (!preNetworkDeadlineTransferred)
+            {
+                preNetworkDeadline.Dispose();
+            }
         }
     }
 
-    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "A timed-out cleanup task must be observed before its operation gate and deadline token are released.")]
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "A timed-out cleanup task must be observed before its operation gate and deadline tokens are released.")]
     private static async Task CompleteAbandonedCleanupAsync(
         Task pendingOperation,
         OperationGate.Lease? cleanupLease,
-        CancellationTokenSource shutdownDeadline)
+        CancellationTokenSource shutdownDeadline,
+        CancellationTokenSource preNetworkDeadline)
     {
         try
         {
@@ -2432,12 +2736,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         catch (Exception)
         {
             // The initiating shutdown already recorded the timeout. This continuation
-            // exists to observe completion and release ownership only after the action ends.
+            // observes completion and retains ownership until the operation settles.
         }
         finally
         {
             cleanupLease?.Dispose();
             shutdownDeadline.Dispose();
+            preNetworkDeadline.Dispose();
         }
     }
     private void RecordCleanupFailure(
@@ -3778,4 +4083,3 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         [],
         null);
 }
-

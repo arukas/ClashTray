@@ -105,7 +105,7 @@ public sealed class RuntimeStateTests
         try
         {
             runtime.AttachControllerForTesting(api, usingServiceCore: false);
-            await runtime.UpdateSettingsAsync(runtime.Settings with { AllowLan = true, Ipv6 = false });
+            await runtime.UpdateSettingsAsync(new AppSettingsPatch(AllowLan: SettingPatchValue.Set(true), Ipv6: SettingPatchValue.Set(false)));
 
             Assert.IsTrue(handler.AllowLan);
             Assert.IsFalse(handler.Ipv6);
@@ -249,13 +249,13 @@ public sealed class RuntimeStateTests
             runtime.AttachControllerForTesting(api, usingServiceCore: false);
 
             InvalidOperationException exception = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-                () => runtime.UpdateSettingsAsync(previous with { HttpPort = previous.HttpPort + 1 }));
+                () => runtime.UpdateSettingsAsync(new AppSettingsPatch(HttpPort: SettingPatchValue.Set(previous.HttpPort + 1))));
 
             Assert.AreEqual(previous, runtime.Settings);
             Assert.AreEqual(previous, settings.Settings);
             StringAssert.Contains(exception.Message, "设置应用失败", StringComparison.Ordinal);
 
-            await runtime.UpdateSettingsAsync(previous with { Theme = "dark" });
+            await runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set("dark")));
             Assert.AreEqual("dark", runtime.Settings.Theme);
         }
         finally
@@ -267,6 +267,144 @@ public sealed class RuntimeStateTests
         }
     }
 
+    [TestMethod]
+    public async Task QueuedSettingsUpdatesPreserveChangesToDifferentFields()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        TestSettingsStore settings = new(new AppSettings());
+        await using ClashTrayRuntime runtime = new(paths, null, null, settings);
+        OperationGate.Lease blocker = await runtime.AcquireSharedOperationForTestingAsync();
+
+        try
+        {
+            AppSettings stale = runtime.Settings;
+            AppSettingsPatch settingsPagePatch = AppSettingsPatch.Diff(stale, stale with { SubscriptionRefreshHours = 37 });
+            Task refreshInterval = runtime.UpdateSettingsAsync(settingsPagePatch);
+            Task theme = runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set("dark")));
+
+            blocker.Dispose();
+            await Task.WhenAll(refreshInterval, theme);
+
+            Assert.AreEqual(37, runtime.Settings.SubscriptionRefreshHours);
+            Assert.AreEqual("dark", runtime.Settings.Theme);
+            Assert.AreEqual(runtime.Settings, settings.Settings);
+        }
+        finally
+        {
+            blocker.Dispose();
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+    [TestMethod]
+    public async Task QueuedUpdatesToSameFieldUseOperationOrder()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        TestSettingsStore settings = new(new AppSettings());
+        await using ClashTrayRuntime runtime = new(paths, null, null, settings);
+        OperationGate.Lease blocker = await runtime.AcquireSharedOperationForTestingAsync();
+
+        try
+        {
+            Task first = runtime.UpdateSettingsAsync(new AppSettingsPatch(
+                SubscriptionRefreshHours: SettingPatchValue.Set(31)));
+            Task second = runtime.UpdateSettingsAsync(new AppSettingsPatch(
+                SubscriptionRefreshHours: SettingPatchValue.Set(37)));
+
+            blocker.Dispose();
+            await Task.WhenAll(first, second);
+
+            Assert.AreEqual(37, runtime.Settings.SubscriptionRefreshHours);
+            Assert.AreEqual(37, settings.Settings.SubscriptionRefreshHours);
+        }
+        finally
+        {
+            blocker.Dispose();
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task ThemePatchPreservesActiveConfigurationProxyAndTunSettings()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        TestSettingsStore settings = new(new AppSettings());
+        FakeSystemProxyController proxy = new(SystemProxyState.Off);
+        await using ClashTrayRuntime runtime = new(paths, null, null, settings, proxy);
+
+        try
+        {
+            await runtime.UpdateSettingsAsync(new AppSettingsPatch(
+                ActiveConfigurationId: SettingPatchValue.Set<string?>("profile"),
+                SystemProxyEnabled: SettingPatchValue.Set(true),
+                TunEnabled: SettingPatchValue.Set(true)));
+
+            await runtime.UpdateSettingsAsync(new AppSettingsPatch(
+                Theme: SettingPatchValue.Set("dark")));
+
+            Assert.AreEqual("dark", runtime.Settings.Theme);
+            Assert.AreEqual("profile", runtime.Settings.ActiveConfigurationId);
+            Assert.IsTrue(runtime.Settings.SystemProxyEnabled);
+            Assert.IsTrue(runtime.Settings.TunEnabled);
+            Assert.AreEqual(runtime.Settings, settings.Settings);
+            Assert.AreEqual(0, proxy.EnableCount);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task FailedQueuedSettingsApplicationRollsBackToLatestSettings()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        TestSettingsStore settings = new(new AppSettings());
+        using RuntimeControllerHandler handler = new() { FailNextAllowLanEnable = true };
+        using HttpClient httpClient = new(handler);
+        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new(paths, null, null, settings);
+        await runtime.InitializeAsync();
+        runtime.AttachControllerForTesting(api, usingServiceCore: false);
+        OperationGate.Lease blocker = await runtime.AcquireSharedOperationForTestingAsync();
+
+        try
+        {
+            Task theme = runtime.UpdateSettingsAsync(new AppSettingsPatch(
+                Theme: SettingPatchValue.Set("dark")));
+            Task allowLan = runtime.UpdateSettingsAsync(new AppSettingsPatch(
+                AllowLan: SettingPatchValue.Set(true)));
+
+            blocker.Dispose();
+            await theme;
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => allowLan);
+
+            Assert.AreEqual("dark", runtime.Settings.Theme);
+            Assert.IsFalse(runtime.Settings.AllowLan);
+            Assert.AreEqual(runtime.Settings, settings.Settings);
+            Assert.IsTrue(handler.RequestedPaths.Contains("/configs"));
+        }
+        finally
+        {
+            blocker.Dispose();
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
     [TestMethod]
     public async Task ChangingProxyBindingRestoresAndReappliesOwnedSystemProxy()
     {
@@ -288,7 +426,7 @@ public sealed class RuntimeStateTests
             int disableCountBeforeChange = proxy.DisableCount;
             runtime.AttachControllerForTesting(api, usingServiceCore: false);
 
-            await runtime.UpdateSettingsAsync(runtime.Settings with { BypassList = "new" });
+            await runtime.UpdateSettingsAsync(new AppSettingsPatch(BypassList: SettingPatchValue.Set("new")));
 
             Assert.AreEqual("new", runtime.Settings.BypassList);
             Assert.AreEqual(disableCountBeforeChange + 1, proxy.DisableCount);
@@ -397,10 +535,7 @@ public sealed class RuntimeStateTests
 
         try
         {
-            await runtime.UpdateSettingsAsync(runtime.Settings with
-            {
-                DisconnectConnectionsAfterProxySwitch = true
-            });
+            await runtime.UpdateSettingsAsync(new AppSettingsPatch(DisconnectConnectionsAfterProxySwitch: SettingPatchValue.Set(true)));
             runtime.AttachControllerForTesting(api, usingServiceCore: false);
             await runtime.RefreshControllerDataForTestingAsync();
 
@@ -430,10 +565,7 @@ public sealed class RuntimeStateTests
 
         try
         {
-            await runtime.UpdateSettingsAsync(runtime.Settings with
-            {
-                DisconnectConnectionsAfterProxySwitch = true
-            });
+            await runtime.UpdateSettingsAsync(new AppSettingsPatch(DisconnectConnectionsAfterProxySwitch: SettingPatchValue.Set(true)));
             runtime.AttachControllerForTesting(api, usingServiceCore: false);
             await runtime.RefreshControllerDataForTestingAsync();
 
@@ -817,7 +949,7 @@ public sealed class RuntimeStateTests
         {
             await runtime.InitializeAsync();
             settings.BlockNextSave();
-            settingsUpdate = runtime.UpdateSettingsAsync(runtime.Settings with { Theme = "dark" });
+            settingsUpdate = runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set("dark")));
             await settings.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             rulesUpdate = runtime.UpdateNetworkSwitchRulesAsync(
@@ -863,7 +995,7 @@ public sealed class RuntimeStateTests
         {
             await runtime.InitializeAsync();
             settings.BlockNextSave();
-            settingsUpdate = runtime.UpdateSettingsAsync(runtime.Settings with { Theme = "dark" });
+            settingsUpdate = runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set("dark")));
             await settings.SaveEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             clearOverride = runtime.ClearNetworkSwitchManualOverrideAsync();
@@ -1218,8 +1350,7 @@ public sealed class RuntimeStateTests
 
         try
         {
-            await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() => runtime.UpdateSettingsAsync(
-                runtime.Settings with { SubscriptionRefreshHours = 0 }));
+            await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() => runtime.UpdateSettingsAsync(new AppSettingsPatch(SubscriptionRefreshHours: SettingPatchValue.Set(0))));
         }
         finally
         {
@@ -1236,8 +1367,7 @@ public sealed class RuntimeStateTests
 
         try
         {
-            await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() => runtime.UpdateSettingsAsync(
-                runtime.Settings with { HttpPort = 0 }));
+            await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(() => runtime.UpdateSettingsAsync(new AppSettingsPatch(HttpPort: SettingPatchValue.Set(0))));
         }
         finally
         {
@@ -1254,8 +1384,7 @@ public sealed class RuntimeStateTests
 
         try
         {
-            await Assert.ThrowsExactlyAsync<ArgumentException>(() => runtime.UpdateSettingsAsync(
-                runtime.Settings with { HttpPort = runtime.Settings.MixedPort }));
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => runtime.UpdateSettingsAsync(new AppSettingsPatch(HttpPort: SettingPatchValue.Set(runtime.Settings.MixedPort))));
         }
         finally
         {
@@ -1272,8 +1401,7 @@ public sealed class RuntimeStateTests
 
         try
         {
-            await Assert.ThrowsExactlyAsync<ArgumentException>(() => runtime.UpdateSettingsAsync(
-                runtime.Settings with { LogLevel = "trace" }));
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => runtime.UpdateSettingsAsync(new AppSettingsPatch(LogLevel: SettingPatchValue.Set("trace"))));
         }
         finally
         {
@@ -1776,6 +1904,8 @@ public sealed class RuntimeStateTests
 
         public bool FailMetrics { get; set; }
 
+        public bool FailNextAllowLanEnable { get; set; }
+
         public bool HoldFirstVersionRequest { get; set; }
 
         public TaskCompletionSource<bool> FirstVersionRequestEntered { get; } =
@@ -1828,6 +1958,15 @@ public sealed class RuntimeStateTests
                 using JsonDocument payload = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
                 if (payload.RootElement.TryGetProperty("allow-lan", out JsonElement allowLan))
                 {
+                    if (FailNextAllowLanEnable && allowLan.GetBoolean())
+                    {
+                        FailNextAllowLanEnable = false;
+                        return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                        {
+                            Content = new StringContent("simulated network settings failure")
+                        };
+                    }
+
                     AllowLan = allowLan.GetBoolean();
                 }
 

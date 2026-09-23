@@ -30,4 +30,17 @@ public sealed class ErrorSanitizerTests
         Assert.IsNull(ErrorSanitizer.SanitizeNullable(null));
         Assert.AreEqual("发生未知错误。", ErrorSanitizer.Sanitize((string?)null));
     }
-}
+    [TestMethod]
+    public void UrlUserInfoCredentialsAreRedactedWithTheQuery()
+    {
+        string sanitized = ErrorSanitizer.Sanitize(
+            "https://alice:url-password@subscription.invalid/config?token=url-token failed");
+
+        Assert.IsFalse(sanitized.Contains("alice", StringComparison.Ordinal));
+        Assert.IsFalse(sanitized.Contains("url-password", StringComparison.Ordinal));
+        Assert.IsFalse(sanitized.Contains("url-token", StringComparison.Ordinal));
+        StringAssert.Contains(
+            sanitized,
+            "https://[已隐藏]@subscription.invalid/config?[已隐藏]",
+            StringComparison.Ordinal);
+    }}

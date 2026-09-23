@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Text;
 using ClashTray.Contracts;
 using ClashTray.Core;
@@ -10,6 +12,8 @@ namespace ClashTray.App;
 public sealed partial class LogsPage : UserControl
 {
     private readonly ClashTrayRuntime _runtime;
+    private readonly StableRowReconciler<long, LogEntry, LogRowViewModel> _rows = new(
+        log => log.Sequence);
     private IReadOnlyList<LogEntry> _logs = [];
     private bool _controllerWritable = true;
 
@@ -18,6 +22,7 @@ public sealed partial class LogsPage : UserControl
         ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
         InitializeComponent();
+        LogsListView.ItemsSource = _rows.Rows;
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
@@ -64,30 +69,30 @@ public sealed partial class LogsPage : UserControl
             return;
         }
 
-        string search = SearchBox.Text.Trim();
         string? level = (LevelBox.SelectedItem as ComboBoxItem)?.Tag as string;
         string? source = (SourceBox.SelectedItem as ComboBoxItem)?.Tag as string;
-        LogsListView.Items.Clear();
-        foreach (LogEntry log in _logs.Where(log =>
-                     (string.IsNullOrWhiteSpace(search) || log.Message.Contains(search, StringComparison.OrdinalIgnoreCase))
-                     && (level is "all" or null || string.Equals(log.Level, level, StringComparison.OrdinalIgnoreCase))
-                     && (source is "all" or null || string.Equals(log.Source, source, StringComparison.OrdinalIgnoreCase))))
-        {
-            string folded = log.RepeatCount > 1 ? $" ×{log.RepeatCount}" : string.Empty;
-            LogsListView.Items.Add(new ListViewItem { Content = $"{log.Timestamp:HH:mm:ss} [{log.Source}/{log.Level}] {log.Message}{folded}", Tag = log });
-        }
-        EmptyListText.Visibility = LogsListView.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        IReadOnlyList<LogEntry> filtered = RuntimeListProjection.FilterLogs(
+            _logs,
+            SearchBox.Text,
+            level,
+            source);
+        _rows.Reconcile(
+            _logs,
+            filtered.Select(log => log.Sequence).ToArray(),
+            log => new LogRowViewModel(log),
+            (row, log) => row.Update(log));
+        EmptyListText.Visibility = _rows.Rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void CopyButton_Click(object sender, RoutedEventArgs e)
     {
-        StringBuilder text = new StringBuilder();
-        foreach (ListViewItem item in LogsListView.Items.OfType<ListViewItem>())
+        StringBuilder text = new();
+        foreach (LogRowViewModel row in _rows.Rows)
         {
-            text.AppendLine(item.Content?.ToString());
+            text.AppendLine(row.DisplayText);
         }
 
-        DataPackage package = new DataPackage();
+        DataPackage package = new();
         package.SetText(text.ToString());
         Clipboard.SetContent(package);
     }
@@ -99,4 +104,45 @@ public sealed partial class LogsPage : UserControl
             _runtime.ClearLogs();
         }
     }
+}
+
+public sealed class LogRowViewModel : INotifyPropertyChanged
+{
+    public LogRowViewModel(LogEntry log)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        Log = log;
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public long Sequence => Log.Sequence;
+
+    public LogEntry Log { get; private set; }
+
+    public string DisplayText
+    {
+        get
+        {
+            string folded = Log.RepeatCount > 1 ? $" ×{Log.RepeatCount}" : string.Empty;
+            return $"{Log.Timestamp:HH:mm:ss} [{Log.Source}/{Log.Level}] {Log.Message}{folded}";
+        }
+    }
+
+    internal bool Update(LogEntry log)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        if (Log == log)
+        {
+            return false;
+        }
+
+        Log = log;
+        OnPropertyChanged(nameof(Log));
+        OnPropertyChanged(nameof(DisplayText));
+        return true;
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }

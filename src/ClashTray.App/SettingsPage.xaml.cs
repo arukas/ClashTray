@@ -562,38 +562,49 @@ public sealed partial class SettingsPage : UserControl
         }
 
         AppSettings current = _runtime.Settings;
+        AppSettings baseline = _loadedSettings ?? current;
         string logLevel = (LogLevelBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.LogLevel;
         string theme = (ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Theme;
         string language = (LanguageBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Language;
         string tunStack = (TunStackBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.TunStack;
+        AppSettings proposed = baseline with
+        {
+            StartWithWindows = StartWithWindowsSwitch.IsOn,
+            StartCoreAutomatically = StartCoreSwitch.IsOn,
+            AllowLan = AllowLanSwitch.IsOn,
+            Ipv6 = Ipv6Switch.IsOn,
+            TcpConcurrent = TcpConcurrentSwitch.IsOn,
+            DisconnectConnectionsAfterProxySwitch = DisconnectAfterProxySwitch.IsOn,
+            HttpPort = httpPort,
+            SocksPort = socksPort,
+            MixedPort = mixedPort,
+            ControllerPort = controllerPort,
+            LogLevel = logLevel,
+            Theme = theme,
+            Language = language,
+            TunStack = tunStack,
+            BypassList = BypassListBox.Text.Trim(),
+            SubscriptionRefreshHours = subscriptionRefreshHours
+        };
+        AppSettingsPatch patch = AppSettingsPatch.Diff(baseline, proposed) with
+        {
+            // These are controlled by Proxy/configuration actions outside this form.
+            ActiveConfigurationId = default,
+            SystemProxyEnabled = default,
+            TunEnabled = default
+        };
+        bool languageChanged = patch.Language.IsSpecified
+            && !string.Equals(patch.Language.Value, current.Language, StringComparison.OrdinalIgnoreCase);
         _saving = true;
         SaveSettingsButton.IsEnabled = false;
         SaveNetworkSettingsButton.IsEnabled = false;
         try
         {
-            await _runtime.UpdateSettingsAsync(current with
-            {
-                StartWithWindows = StartWithWindowsSwitch.IsOn,
-                StartCoreAutomatically = StartCoreSwitch.IsOn,
-                AllowLan = AllowLanSwitch.IsOn,
-                Ipv6 = Ipv6Switch.IsOn,
-                TcpConcurrent = TcpConcurrentSwitch.IsOn,
-                DisconnectConnectionsAfterProxySwitch = DisconnectAfterProxySwitch.IsOn,
-                HttpPort = httpPort,
-                SocksPort = socksPort,
-                MixedPort = mixedPort,
-                ControllerPort = controllerPort,
-                LogLevel = logLevel,
-                Theme = theme,
-                Language = language,
-                TunStack = tunStack,
-                BypassList = BypassListBox.Text.Trim(),
-                SubscriptionRefreshHours = subscriptionRefreshHours
-            }, reconcileStartup: true);
+            await _runtime.UpdateSettingsAsync(patch, reconcileStartup: true);
             UpdateStartupStatus(_runtime.Settings);
             // The language override is applied before the first window exists, so
             // changing it only takes effect on the next app start; the core keeps running.
-            StatusText.Text = string.Equals(language, current.Language, StringComparison.OrdinalIgnoreCase)
+            StatusText.Text = !languageChanged
                 ? LocalizationService.Get("SettingsSaved")
                 : $"{LocalizationService.Get("SettingsSaved")} {LocalizationService.Get("LanguageRestartPrompt")}";
         }
@@ -1424,6 +1435,3 @@ public sealed partial class SettingsPage : UserControl
             Tag = (provider, rules)
         };
 }
-
-
-

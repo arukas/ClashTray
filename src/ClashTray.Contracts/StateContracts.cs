@@ -132,7 +132,8 @@ public sealed record LogEntry(
     string Source,
     string Level,
     string Message,
-    int RepeatCount = 1);
+    int RepeatCount = 1,
+    long Sequence = 0);
 
 public sealed record RuntimeSnapshot(
     CoreStatus Core,

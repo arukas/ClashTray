@@ -111,6 +111,7 @@ public static class RuntimeConfigBuilder
         List<string> result = new List<string>(source.Length + 4);
         bool inTunBlock = false;
         int tunIndent = -1;
+        int tunChildIndent = -1;
         bool tunHasEnable = false;
         bool tunHasStack = false;
         bool foundTunBlock = false;
@@ -123,15 +124,17 @@ public static class RuntimeConfigBuilder
                 {
                     AppendMissingTunProperties(
                         result,
-                        tunIndent + 2,
+                        GetTunChildIndent(tunIndent, tunChildIndent),
                         enabled,
                         tunHasEnable,
                         managedStack,
                         tunHasStack);
                 }
 
+                EnsureSupportedTunRootValue(line);
                 foundTunBlock = true;
                 tunIndent = GetIndent(line);
+                tunChildIndent = -1;
                 tunHasEnable = false;
                 tunHasStack = false;
                 inTunBlock = !TryOverrideInlineTun(
@@ -149,7 +152,7 @@ public static class RuntimeConfigBuilder
             {
                 AppendMissingTunProperties(
                     result,
-                    tunIndent + 2,
+                    GetTunChildIndent(tunIndent, tunChildIndent),
                     enabled,
                     tunHasEnable,
                     managedStack,
@@ -158,18 +161,23 @@ public static class RuntimeConfigBuilder
                 inTunBlock = false;
             }
 
-            if (inTunBlock && IsTunPropertyLine(line, tunIndent, "enable"))
+            if (inTunBlock && tunChildIndent < 0 && IsTunChildContent(line, tunIndent))
             {
-                result.Add(CreateTunPropertyLine(GetIndent(line), "enable", enabled ? "true" : "false"));
+                tunChildIndent = GetIndent(line);
+            }
+
+            if (inTunBlock && IsTunPropertyLine(line, tunChildIndent, "enable"))
+            {
+                result.Add(ReplaceTunPropertyLine(line, "enable", enabled ? "true" : "false"));
                 tunHasEnable = true;
                 continue;
             }
 
             if (inTunBlock
                 && managedStack is not null
-                && IsTunPropertyLine(line, tunIndent, "stack"))
+                && IsTunPropertyLine(line, tunChildIndent, "stack"))
             {
-                result.Add(CreateTunPropertyLine(GetIndent(line), "stack", managedStack));
+                result.Add(ReplaceTunPropertyLine(line, "stack", managedStack));
                 tunHasStack = true;
                 continue;
             }
@@ -181,7 +189,7 @@ public static class RuntimeConfigBuilder
         {
             AppendMissingTunProperties(
                 result,
-                tunIndent + 2,
+                GetTunChildIndent(tunIndent, tunChildIndent),
                 enabled,
                 tunHasEnable,
                 managedStack,
@@ -229,15 +237,25 @@ public static class RuntimeConfigBuilder
         out bool hasEnable,
         out bool hasStack)
     {
-        int keySeparator = line.IndexOf(':', StringComparison.Ordinal);
-        int valueStart = keySeparator < 0 ? -1 : line.IndexOf('{', keySeparator + 1);
-        int valueEnd = valueStart < 0 ? -1 : line.LastIndexOf('}');
-        if (valueStart < 0 || valueEnd <= valueStart)
+        int keySeparator = FindYamlKeySeparator(line);
+        int valueStart = keySeparator < 0 ? -1 : keySeparator + 1;
+        while (valueStart >= 0 && valueStart < line.Length && char.IsWhiteSpace(line[valueStart]))
+        {
+            valueStart++;
+        }
+
+        if (valueStart < 0 || valueStart >= line.Length || line[valueStart] != '{')
         {
             result = line;
             hasEnable = false;
             hasStack = false;
             return false;
+        }
+
+        int valueEnd = FindMatchingFlowMapEnd(line, valueStart);
+        if (valueEnd < 0)
+        {
+            throw new InvalidDataException("TUN inline mapping is not balanced; use a valid flow mapping or block mapping.");
         }
 
         string inlineValue = line[valueStart..(valueEnd + 1)];
@@ -258,7 +276,6 @@ public static class RuntimeConfigBuilder
         result = line[..valueStart] + inlineValue + line[(valueEnd + 1)..];
         return true;
     }
-
     private static string SetInlineScalar(
         string inlineValue,
         string property,
@@ -274,11 +291,10 @@ public static class RuntimeConfigBuilder
                 valueIndex++;
             }
 
-            int valueEndIndex = valueIndex;
-            while (valueEndIndex < inlineValue.Length
-                && inlineValue[valueEndIndex] is not (',' or '}'))
+            int valueEndIndex = FindInlineEntryEnd(inlineValue, valueIndex);
+            while (valueEndIndex > valueIndex && char.IsWhiteSpace(inlineValue[valueEndIndex - 1]))
             {
-                valueEndIndex++;
+                valueEndIndex--;
             }
 
             hasProperty = true;
@@ -299,37 +315,178 @@ public static class RuntimeConfigBuilder
                 position++;
             }
 
-            int keyStart = position;
-            while (position < value.Length && value[position] is not (':' or ',' or '}'))
-            {
-                position++;
-            }
-
-            if (position >= value.Length || value[position] != ':')
+            int entryEnd = FindInlineEntryEnd(value, position);
+            if (entryEnd <= position)
             {
                 break;
             }
 
-            string key = value[keyStart..position].Trim().Trim('\'', '"');
-            if (key.Equals(expectedKey, StringComparison.OrdinalIgnoreCase))
+            string entry = value[position..entryEnd];
+            int separator = FindYamlKeySeparator(entry);
+            if (separator <= 0)
             {
-                return position;
+                break;
             }
 
-            position++;
-            while (position < value.Length && value[position] is not (',' or '}'))
+            string key = entry[..separator].Trim().Trim('\'', '"');
+            if (key.Equals(expectedKey, StringComparison.OrdinalIgnoreCase))
             {
-                position++;
+                return position + separator;
             }
+
+            if (entryEnd >= value.Length || value[entryEnd] == '}')
+            {
+                break;
+            }
+
+            position = entryEnd + 1;
         }
 
         return -1;
     }
 
-    private static bool IsTunPropertyLine(string line, int tunIndent, string property)
+    private static int FindInlineEntryEnd(string value, int start)
     {
-        int indent = GetIndent(line);
-        if (indent <= tunIndent)
+        char quote = '\0';
+        bool escaped = false;
+        List<char> delimiters = [];
+        for (int index = start; index < value.Length; index++)
+        {
+            char current = value[index];
+            if (quote == '"')
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (current == '\\')
+                {
+                    escaped = true;
+                }
+                else if (current == '"')
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (quote == '\'')
+            {
+                if (current == '\'' && index + 1 < value.Length && value[index + 1] == '\'')
+                {
+                    index++;
+                }
+                else if (current == '\'')
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (current is '"' or '\'')
+            {
+                quote = current;
+                continue;
+            }
+
+            if (current is '{' or '[' or '(')
+            {
+                delimiters.Add(current);
+                continue;
+            }
+
+            if (current is '}' or ']' or ')')
+            {
+                if (delimiters.Count == 0)
+                {
+                    return current == '}' ? index : value.Length;
+                }
+
+                char expectedOpening = current switch
+                {
+                    '}' => '{',
+                    ']' => '[',
+                    _ => '('
+                };
+                if (delimiters[^1] != expectedOpening)
+                {
+                    return value.Length;
+                }
+
+                delimiters.RemoveAt(delimiters.Count - 1);
+                continue;
+            }
+
+            if (current == ',' && delimiters.Count == 0)
+            {
+                return index;
+            }
+        }
+
+        return value.Length;
+    }
+
+    private static int FindMatchingFlowMapEnd(string value, int start)
+    {
+        char quote = '\0';
+        bool escaped = false;
+        int depth = 0;
+        for (int index = start; index < value.Length; index++)
+        {
+            char current = value[index];
+            if (quote == '"')
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (current == '\\')
+                {
+                    escaped = true;
+                }
+                else if (current == '"')
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (quote == '\'')
+            {
+                if (current == '\'' && index + 1 < value.Length && value[index + 1] == '\'')
+                {
+                    index++;
+                }
+                else if (current == '\'')
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (current is '"' or '\'')
+            {
+                quote = current;
+            }
+            else if (current == '{')
+            {
+                depth++;
+            }
+            else if (current == '}' && --depth == 0)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+    private static bool IsTunPropertyLine(string line, int childIndent, string property)
+    {
+        if (childIndent < 0 || GetIndent(line) != childIndent)
         {
             return false;
         }
@@ -340,11 +497,92 @@ public static class RuntimeConfigBuilder
             return false;
         }
 
-        int separator = trimmed.IndexOf(':', StringComparison.Ordinal);
+        int separator = FindYamlKeySeparator(trimmed);
         return separator > 0
             && trimmed[..separator].Trim().Trim('\'', '"').Equals(property, StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool IsTunChildContent(string line, int tunIndent)
+    {
+        string trimmed = line.TrimStart();
+        return trimmed.Length > 0
+            && !trimmed.StartsWith('#')
+            && GetIndent(line) > tunIndent;
+    }
+
+    private static int GetTunChildIndent(int tunIndent, int childIndent) =>
+        childIndent > tunIndent ? childIndent : tunIndent + 2;
+
+    private static string ReplaceTunPropertyLine(string line, string property, string value)
+    {
+        string replacement = CreateTunPropertyLine(GetIndent(line), property, value);
+        int commentStart = FindInlineCommentStart(line);
+        if (commentStart < 0)
+        {
+            return replacement;
+        }
+
+        int suffixStart = commentStart;
+        while (suffixStart > 0 && char.IsWhiteSpace(line[suffixStart - 1]))
+        {
+            suffixStart--;
+        }
+
+        return replacement + line[suffixStart..];
+    }
+
+    private static int FindInlineCommentStart(string line)
+    {
+        char quote = '\0';
+        bool escaped = false;
+        for (int index = 0; index < line.Length; index++)
+        {
+            char current = line[index];
+            if (quote == '"')
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (current == '\\')
+                {
+                    escaped = true;
+                }
+                else if (current == '"')
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (quote == '\'')
+            {
+                if (current == '\'' && index + 1 < line.Length && line[index + 1] == '\'')
+                {
+                    index++;
+                }
+                else if (current == '\'')
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (current is '"' or '\'')
+            {
+                quote = current;
+            }
+            else if (current == '#'
+                && (index == 0 || char.IsWhiteSpace(line[index - 1])))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
     private static bool IsRootBoundary(string line, int tunIndent)
     {
         string trimmed = line.TrimStart();
@@ -362,8 +600,13 @@ public static class RuntimeConfigBuilder
         }
 
         string trimmed = line.Trim();
-        int separator = trimmed.IndexOf(':', StringComparison.Ordinal);
-        if (separator <= 0 || trimmed.StartsWith('#') || trimmed is "---" or "...")
+        if (trimmed.Length == 0 || trimmed.StartsWith('#') || trimmed is "---" or "...")
+        {
+            return false;
+        }
+
+        int separator = FindYamlKeySeparator(trimmed);
+        if (separator <= 0)
         {
             return false;
         }
@@ -372,6 +615,78 @@ public static class RuntimeConfigBuilder
         return key.Length > 0;
     }
 
+    private static int FindYamlKeySeparator(string value)
+    {
+        char quote = '\0';
+        bool escaped = false;
+        for (int index = 0; index < value.Length; index++)
+        {
+            char current = value[index];
+            if (quote == '"')
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (current == '\\')
+                {
+                    escaped = true;
+                }
+                else if (current == '"')
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (quote == '\'')
+            {
+                if (current == '\'' && index + 1 < value.Length && value[index + 1] == '\'')
+                {
+                    index++;
+                }
+                else if (current == '\'')
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (current is '"' or '\'')
+            {
+                quote = current;
+            }
+            else if (current == ':')
+            {
+                return index;
+            }
+            else if (current is ',' or '}' or ']')
+            {
+                return -1;
+            }
+        }
+
+        return -1;
+    }
+
+    private static void EnsureSupportedTunRootValue(string line)
+    {
+        int separator = FindYamlKeySeparator(line);
+        string value = separator < 0 ? string.Empty : line[(separator + 1)..].Trim();
+        int commentStart = FindInlineCommentStart(value);
+        if (commentStart >= 0)
+        {
+            value = value[..commentStart].TrimEnd();
+        }
+
+        if (value.StartsWith('*') || value.StartsWith('&'))
+        {
+            throw new InvalidDataException(
+                "A TUN anchor or alias cannot be safely overridden; use a standalone block or inline TUN mapping.");
+        }
+    }
     private static int GetIndent(string line) => line.Length - line.TrimStart().Length;
 
     private static string CreateTunPropertyLine(int indent, string property, string value) =>
@@ -379,26 +694,24 @@ public static class RuntimeConfigBuilder
 
     private static bool IsManagedLine(string line)
     {
-        if (line.Length > 0 && char.IsWhiteSpace(line[0]))
+        if (!TryGetRootKey(line, out string key))
         {
             return false;
         }
 
-        string trimmed = line.TrimStart();
-        return trimmed.StartsWith("external-controller:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("secret:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("external-ui:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("external-ui-name:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("external-ui-url:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("allow-lan:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("ipv6:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("tcp-concurrent:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("log-level:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("port:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("mixed-port:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("socks-port:", StringComparison.OrdinalIgnoreCase);
+        return key.Equals("external-controller", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("secret", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("external-ui", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("external-ui-name", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("external-ui-url", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("allow-lan", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("ipv6", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("tcp-concurrent", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("log-level", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("port", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("mixed-port", StringComparison.OrdinalIgnoreCase)
+            || key.Equals("socks-port", StringComparison.OrdinalIgnoreCase);
     }
-
     private static bool TryResolveExternalUiPath(string? path, out string resolvedPath)
     {
         resolvedPath = string.Empty;

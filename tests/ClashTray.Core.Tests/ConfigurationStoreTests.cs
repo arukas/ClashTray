@@ -9,6 +9,44 @@ public sealed class ConfigurationStoreTests
     private static readonly int[] ExpectedNewestItems = [2, 3];
 
     [TestMethod]
+    public async Task LocalConfigurationLargerThanSixteenMiBIsRejectedWithoutCreatingProfile()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            ConfigurationStore store = new(paths);
+            string sourcePath = Path.Combine(root, "oversized.yaml");
+            Directory.CreateDirectory(root);
+            await using (FileStream stream = new(
+                sourcePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.Asynchronous))
+            {
+                byte[] prefix = "mixed-port: 7890\n"u8.ToArray();
+                await stream.WriteAsync(prefix);
+                stream.SetLength(16L * 1024 * 1024 + 1);
+            }
+
+            InvalidDataException exception = await Assert.ThrowsExactlyAsync<InvalidDataException>(
+                () => store.ImportLocalAsync(sourcePath));
+
+            StringAssert.Contains(exception.Message, "16 MiB", StringComparison.Ordinal);
+            Assert.AreEqual(0, (await store.ListAsync()).Count);
+            Assert.AreEqual(16L * 1024 * 1024 + 1, new FileInfo(sourcePath).Length);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+    [TestMethod]
     public async Task SubscriptionMetadataStoresUrlAsCurrentUserProtectedData()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));

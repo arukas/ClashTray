@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using ClashTray.Contracts;
 using ClashTray.Core;
 using Microsoft.UI.Xaml;
@@ -8,15 +10,20 @@ namespace ClashTray.App;
 public sealed partial class ConnectionsPage : UserControl
 {
     private readonly ClashTrayRuntime _runtime;
+    private readonly StableRowReconciler<string, ConnectionInfo, ConnectionRowViewModel> _rows = new(
+        connection => connection.Id);
     private IReadOnlyList<ConnectionInfo> _connections = [];
     private bool _controllerWritable = true;
     private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
+    private string? _selectedConnectionId;
+    private bool _synchronizingSelection;
 
     public ConnectionsPage(ClashTrayRuntime runtime)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
         InitializeComponent();
+        ConnectionsListView.ItemsSource = _rows.Rows;
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
@@ -63,41 +70,65 @@ public sealed partial class ConnectionsPage : UserControl
             return;
         }
 
-        string search = SearchBox.Text.Trim();
         string? sort = (SortBox.SelectedItem as ComboBoxItem)?.Tag as string;
-        IEnumerable<ConnectionInfo> filtered = _connections.Where(connection => string.IsNullOrWhiteSpace(search)
-            || $"{connection.Source} {connection.Destination} {connection.Rule} {connection.RulePayload} {connection.Chain}".Contains(search, StringComparison.OrdinalIgnoreCase));
-        filtered = sort switch
+        IReadOnlyList<ConnectionInfo> filtered = RuntimeListProjection.FilterAndSortConnections(
+            _connections,
+            SearchBox.Text,
+            sort);
+        _rows.Reconcile(
+            _connections,
+            filtered.Select(connection => connection.Id).ToArray(),
+            connection => new ConnectionRowViewModel(connection),
+            (row, connection) => row.Update(connection));
+
+        ConnectionRowViewModel? selectedRow = _selectedConnectionId is null
+            ? null
+            : _rows.Rows.FirstOrDefault(row => string.Equals(
+                row.Id,
+                _selectedConnectionId,
+                StringComparison.Ordinal));
+        _synchronizingSelection = true;
+        ConnectionsListView.SelectedItem = selectedRow;
+        _synchronizingSelection = false;
+        if (selectedRow is null)
         {
-            "upload" => filtered.OrderByDescending(connection => connection.UploadBytes),
-            "download" => filtered.OrderByDescending(connection => connection.DownloadBytes),
-            _ => filtered.OrderByDescending(connection => connection.StartTime)
-        };
-        ConnectionsListView.Items.Clear();
-        foreach (ConnectionInfo connection in filtered)
-        {
-            ConnectionsListView.Items.Add(new ListViewItem
-            {
-                Content = $"{connection.Source} → {connection.Destination} · {connection.Rule} {connection.RulePayload}",
-                Tag = connection
-            });
+            _selectedConnectionId = null;
         }
-        EmptyListText.Visibility = ConnectionsListView.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        EmptyListText.Visibility = _rows.Rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateSelectedDetails();
         UpdateActionButtons();
     }
 
     private void ConnectionsListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (ConnectionsListView.SelectedItem is not ListViewItem { Tag: ConnectionInfo connection })
+        if (_synchronizingSelection)
         {
-            DetailsText.Text = LocalizationService.Get("SelectConnectionHint");
-            UpdateActionButtons();
             return;
         }
 
-        DetailsText.Text = LocalizationService.Format("ConnectionDetailsFormat",
-            connection.Network, connection.Chain, connection.Rule, connection.RulePayload, connection.UploadBytes, connection.DownloadBytes);
+        _selectedConnectionId = (ConnectionsListView.SelectedItem as ConnectionRowViewModel)?.Id;
+        UpdateSelectedDetails();
         UpdateActionButtons();
+    }
+
+    private void UpdateSelectedDetails()
+    {
+        if (ConnectionsListView.SelectedItem is not ConnectionRowViewModel row)
+        {
+            DetailsText.Text = LocalizationService.Get("SelectConnectionHint");
+            return;
+        }
+
+        ConnectionInfo connection = row.Connection;
+        DetailsText.Text = LocalizationService.Format(
+            "ConnectionDetailsFormat",
+            connection.Network,
+            connection.Chain,
+            connection.Rule,
+            connection.RulePayload,
+            connection.UploadBytes,
+            connection.DownloadBytes);
     }
 
     private async void CloseSelectedButton_Click(object sender, RoutedEventArgs e)
@@ -107,15 +138,17 @@ public sealed partial class ConnectionsPage : UserControl
             return;
         }
 
-        if (ConnectionsListView.SelectedItem is ListViewItem { Tag: ConnectionInfo connection })
+        if (ConnectionsListView.SelectedItem is ConnectionRowViewModel row)
         {
             try
             {
-                await _runtime.CloseConnectionAsync(connection.Id);
+                await _runtime.CloseConnectionAsync(row.Id);
             }
             catch (Exception exception)
             {
-                DetailsText.Text = LocalizationService.Format("CloseConnectionFailedFormat", ErrorSanitizer.Sanitize(exception));
+                DetailsText.Text = LocalizationService.Format(
+                    "CloseConnectionFailedFormat",
+                    ErrorSanitizer.Sanitize(exception));
             }
         }
     }
@@ -144,7 +177,7 @@ public sealed partial class ConnectionsPage : UserControl
             return;
         }
 
-        bool hasSelection = ConnectionsListView.SelectedItem is ListViewItem { Tag: ConnectionInfo };
+        bool hasSelection = ConnectionsListView.SelectedItem is ConnectionRowViewModel;
         bool canCloseConnections = HasCapability(EndpointCapability.CloseConnection);
         CloseSelectedButton.IsEnabled = canCloseConnections && hasSelection;
         CloseAllButton.IsEnabled = canCloseConnections && ConnectionsListView.Items.Count > 0;
@@ -159,4 +192,39 @@ public sealed partial class ConnectionsPage : UserControl
 
     private bool HasCapability(EndpointCapability capability) =>
         _controllerWritable && (_controllerCapabilities & capability) == capability;
+}
+
+public sealed class ConnectionRowViewModel : INotifyPropertyChanged
+{
+    public ConnectionRowViewModel(ConnectionInfo connection)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        Connection = connection;
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public string Id => Connection.Id;
+
+    public ConnectionInfo Connection { get; private set; }
+
+    public string DisplayText =>
+        $"{Connection.Source} → {Connection.Destination} · {Connection.Rule} {Connection.RulePayload}";
+
+    internal bool Update(ConnectionInfo connection)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        if (Connection == connection)
+        {
+            return false;
+        }
+
+        Connection = connection;
+        OnPropertyChanged(nameof(Connection));
+        OnPropertyChanged(nameof(DisplayText));
+        return true;
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
