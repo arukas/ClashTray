@@ -159,6 +159,12 @@ public sealed class EndpointProvisioningCoordinator
 
         bool isCustomHttps = descriptor.Security == EndpointTransportSecurity.HttpsCustomCertificate;
         bool isExplicitHttp = descriptor.Security == EndpointTransportSecurity.HttpExplicitlyConfirmed;
+        if (!isCustomHttps && customCaCertificate is not null)
+        {
+            throw new ArgumentException(
+                "A custom CA can only be used with custom HTTPS trust.",
+                nameof(customCaCertificate));
+        }
         if (isExplicitHttp != (insecureHttpAcknowledgedAtUtc is not null))
         {
             throw new ArgumentException(

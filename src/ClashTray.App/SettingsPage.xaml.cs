@@ -1,6 +1,5 @@
 using ClashTray.Core;
 using ClashTray.Contracts;
-using System.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.System;
@@ -77,20 +76,16 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
-        bool explicitHttp = string.Equals(
-            (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
-            "http-explicit",
-            StringComparison.Ordinal);
+        EndpointTransportChoice transportChoice = EndpointDraftMapper.ParseTransportChoice(
+            (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString());
+        bool explicitHttp = transportChoice == EndpointTransportChoice.HttpExplicitlyConfirmed;
         if (explicitHttp && EndpointHttpRiskCheckBox.IsChecked != true)
         {
             StatusText.Text = LocalizationService.Get("EndpointHttpRiskRequired");
             return;
         }
 
-        bool customHttps = string.Equals(
-            (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
-            "https-custom",
-            StringComparison.Ordinal);
+        bool customHttps = transportChoice == EndpointTransportChoice.HttpsCustomCertificate;
         if (customHttps
             && string.IsNullOrWhiteSpace(EndpointCustomCaBox.Text)
             && _editingEndpointId is null)
@@ -116,34 +111,32 @@ public sealed partial class SettingsPage : UserControl
         {
             EndpointId endpointId = _editingEndpointId
                 ?? new EndpointId($"remote-{Guid.NewGuid():N}");
-            EndpointDescriptor descriptor = EndpointUriNormalizer.CreateRemoteDescriptor(
+            EndpointDraftSubmission submission = EndpointDraftMapper.CreateSubmission(
                 endpointId,
                 EndpointNameBox.Text.Trim(),
                 endpointUri,
-                allowExplicitHttp: explicitHttp);
-            string? secret = string.IsNullOrEmpty(EndpointSecretBox.Password)
-                ? null
-                : EndpointSecretBox.Password;
-            ReadOnlyMemory<byte>? customCa = customHttps
-                && !string.IsNullOrWhiteSpace(EndpointCustomCaBox.Text)
-                ? Encoding.UTF8.GetBytes(EndpointCustomCaBox.Text)
-                : null;
+                transportChoice,
+                httpRiskConfirmed: EndpointHttpRiskCheckBox.IsChecked == true,
+                secret: EndpointSecretBox.Password,
+                customCaPem: EndpointCustomCaBox.Text,
+                isEditing: _editingEndpointId is not null,
+                nowUtc: DateTimeOffset.UtcNow);
             if (_editingEndpointId is EndpointId editingEndpointId)
             {
                 await _runtime.UpdateRemoteEndpointAsync(
                     editingEndpointId,
-                    descriptor,
-                    secret,
-                    customCa,
-                    explicitHttp ? DateTimeOffset.UtcNow : null);
+                    submission.Descriptor,
+                    submission.Secret,
+                    submission.CustomCaCertificate,
+                    submission.InsecureHttpAcknowledgedAtUtc);
             }
             else
             {
                 await _runtime.ProvisionRemoteEndpointAsync(
-                    descriptor,
-                    secret,
-                    customCa,
-                    explicitHttp ? DateTimeOffset.UtcNow : null);
+                    submission.Descriptor,
+                    submission.Secret,
+                    submission.CustomCaCertificate,
+                    submission.InsecureHttpAcknowledgedAtUtc);
             }
             UpdateEndpointList(_runtime.Endpoints);
             ClearEndpointEditor();
@@ -279,14 +272,10 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
-        bool explicitHttp = string.Equals(
-            (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
-            "http-explicit",
-            StringComparison.Ordinal);
-        bool customHttps = string.Equals(
-            (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
-            "https-custom",
-            StringComparison.Ordinal);
+        EndpointTransportChoice transportChoice = EndpointDraftMapper.ParseTransportChoice(
+            (EndpointTransportBox.SelectedItem as ComboBoxItem)?.Tag?.ToString());
+        bool explicitHttp = transportChoice == EndpointTransportChoice.HttpExplicitlyConfirmed;
+        bool customHttps = transportChoice == EndpointTransportChoice.HttpsCustomCertificate;
         EndpointHttpRiskCheckBox.IsEnabled = explicitHttp;
         EndpointCustomCaBox.IsEnabled = customHttps;
         if (!explicitHttp)

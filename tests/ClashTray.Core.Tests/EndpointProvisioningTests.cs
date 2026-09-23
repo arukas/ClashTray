@@ -163,6 +163,52 @@ public sealed class EndpointProvisioningTests
     }
 
     [TestMethod]
+    public async Task UpdateRejectsCustomCaForSystemTrustWithoutChangingStoredCertificate()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        EndpointStore endpointStore = new(paths);
+        EndpointSecretStore secretStore = new(paths);
+        EndpointCertificateStore certificateStore = new(paths);
+        EndpointProvisioningCoordinator coordinator = new(endpointStore, secretStore, certificateStore);
+        EndpointDescriptor custom = EndpointUriNormalizer.CreateRemoteDescriptor(
+                new EndpointId("office"),
+                "Office",
+                new Uri("https://office.example.test"))
+            with { Security = EndpointTransportSecurity.HttpsCustomCertificate };
+        using X509Certificate2 ca = CreateCaCertificate();
+        byte[] certificateBytes = ca.Export(X509ContentType.Cert);
+
+        try
+        {
+            EndpointRecord created = await coordinator.ProvisionAsync(
+                custom,
+                null,
+                certificateBytes,
+                null);
+            EndpointDescriptor systemTrust = EndpointUriNormalizer.CreateRemoteDescriptor(
+                created.Descriptor.Id,
+                "Office",
+                new Uri("https://office.example.test"));
+
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => coordinator.UpdateAsync(
+                created.Descriptor.Id,
+                systemTrust,
+                secret: null,
+                customCaCertificate: certificateBytes,
+                insecureHttpAcknowledgedAtUtc: null));
+
+            EndpointRecord persisted = (await endpointStore.LoadAsync()).Endpoints.Single();
+            Assert.AreEqual(created.CertificateReference, persisted.CertificateReference);
+            CollectionAssert.AreEqual(certificateBytes, await certificateStore.GetAsync(created.CertificateReference!));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
     public async Task UpdatingCustomHttpsWithoutNewCaPreservesExistingCa()
     {
         string root = CreateRoot();
