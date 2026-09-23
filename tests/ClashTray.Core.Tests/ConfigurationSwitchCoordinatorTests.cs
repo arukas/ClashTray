@@ -63,6 +63,46 @@ public sealed class ConfigurationSwitchCoordinatorTests
     }
 
     [TestMethod]
+    public async Task RollingBackJournalWriteFailureStillRunsRollbackAndKeepsRecoveryJournal()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        ConfigurationProfile candidate = CreateProfile("new");
+        FakeSwitchOperations operations = new FakeSwitchOperations(candidate)
+        {
+            FailApply = true,
+            JournalPathToLockOnApply = paths.ConfigurationSwitchJournalFile
+        };
+        ConfigurationSwitchJournalStore journalStore = new ConfigurationSwitchJournalStore(paths);
+        await using ConfigurationSwitchCoordinator coordinator =
+            new ConfigurationSwitchCoordinator(journalStore);
+
+        ConfigurationSwitchResult result;
+        try
+        {
+            result = await coordinator.ExecuteAsync(
+                ConfigurationSwitchRequest.Create(ConfigurationSwitchSource.Manual, candidate.Id),
+                operations);
+        }
+        finally
+        {
+            if (operations.JournalBlocker is not null)
+            {
+                await operations.JournalBlocker.DisposeAsync();
+            }
+        }
+
+        Assert.IsTrue(operations.RolledBack, "Journal persistence failure must not skip resource rollback.");
+        Assert.AreEqual(ConfigurationSwitchOutcome.RollbackFailed, result.Outcome);
+        Assert.AreEqual(ErrorCode.ConfigurationSwitchRollbackFailed, result.ErrorCode);
+        Assert.AreEqual("candidate failed", result.Failure?.Message);
+        Assert.IsNotNull(result.RollbackFailure);
+
+        ConfigurationSwitchJournalLoadResult loaded = await journalStore.LoadAsync();
+        Assert.AreEqual(ConfigurationSwitchStage.RuntimePromoted, loaded.Journal?.Stage);
+    }
+
+    [TestMethod]
     public async Task RollbackFailureLeavesJournalAtRollbackFailedStage()
     {
         string root = CreateRoot();
@@ -273,6 +313,10 @@ public sealed class ConfigurationSwitchCoordinatorTests
 
         public bool FailValidation { get; init; }
 
+        public string? JournalPathToLockOnApply { get; init; }
+
+        public FileStream? JournalBlocker { get; private set; }
+
         public List<ConfigurationSwitchStage> Stages { get; } = [];
 
         public Task<ConfigurationProfile?> ResolveCandidateAsync(
@@ -315,6 +359,15 @@ public sealed class ConfigurationSwitchCoordinatorTests
             await context.SetStageAsync(ConfigurationSwitchStage.RuntimePromoted, cancellationToken);
             if (FailApply)
             {
+                if (JournalPathToLockOnApply is not null)
+                {
+                    JournalBlocker = new FileStream(
+                        JournalPathToLockOnApply,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read);
+                }
+
                 throw new InvalidOperationException("candidate failed");
             }
 

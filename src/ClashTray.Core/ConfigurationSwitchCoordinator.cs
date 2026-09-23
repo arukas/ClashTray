@@ -233,13 +233,41 @@ public sealed class ConfigurationSwitchCoordinator : IAsyncDisposable
             }
             catch (Exception failure)
             {
-                await context.SetStageAsync(
-                    ConfigurationSwitchStage.RollingBack,
-                    CancellationToken.None);
+                Exception? rollbackFailure = null;
+                try
+                {
+                    await context.SetStageAsync(
+                        ConfigurationSwitchStage.RollingBack,
+                        CancellationToken.None);
+                }
+                catch (Exception journalFailure)
+                {
+                    rollbackFailure = journalFailure;
+                }
+
                 try
                 {
                     await operations.RollbackAsync(context, failure, CancellationToken.None);
-                    await _journalStore.ClearAsync();
+                }
+                catch (Exception compensationFailure)
+                {
+                    rollbackFailure = CombineFailures(rollbackFailure, compensationFailure);
+                }
+
+                if (rollbackFailure is null)
+                {
+                    try
+                    {
+                        await _journalStore.ClearAsync();
+                    }
+                    catch (Exception cleanupFailure)
+                    {
+                        rollbackFailure = cleanupFailure;
+                    }
+                }
+
+                if (rollbackFailure is null)
+                {
                     return new ConfigurationSwitchResult(
                         request.OperationId,
                         ConfigurationSwitchOutcome.RolledBack,
@@ -247,26 +275,25 @@ public sealed class ConfigurationSwitchCoordinator : IAsyncDisposable
                         ErrorCode.ConfigurationSwitchFailed,
                         failure);
                 }
-                catch (Exception rollbackFailure)
-                {
-                    try
-                    {
-                        await context.SetStageAsync(
-                            ConfigurationSwitchStage.RollbackFailed,
-                            CancellationToken.None);
-                    }
-                    catch
-                    {
-                    }
 
-                    return new ConfigurationSwitchResult(
-                        request.OperationId,
-                        ConfigurationSwitchOutcome.RollbackFailed,
+                try
+                {
+                    await context.SetStageAsync(
                         ConfigurationSwitchStage.RollbackFailed,
-                        ErrorCode.ConfigurationSwitchRollbackFailed,
-                        failure,
-                        rollbackFailure);
+                        CancellationToken.None);
                 }
+                catch (Exception journalFailure)
+                {
+                    rollbackFailure = CombineFailures(rollbackFailure, journalFailure);
+                }
+
+                return new ConfigurationSwitchResult(
+                    request.OperationId,
+                    ConfigurationSwitchOutcome.RollbackFailed,
+                    ConfigurationSwitchStage.RollbackFailed,
+                    ErrorCode.ConfigurationSwitchRollbackFailed,
+                    failure,
+                    rollbackFailure);
             }
 
             await context.SetStageAsync(
@@ -284,6 +311,14 @@ public sealed class ConfigurationSwitchCoordinator : IAsyncDisposable
             _operationLock.Release();
         }
     }
+
+    private static Exception CombineFailures(Exception? previous, Exception current) =>
+        previous is null
+            ? current
+            : new AggregateException(
+                "Configuration switch compensation and recovery journaling both failed.",
+                previous,
+                current);
 
     public ValueTask DisposeAsync()
     {
