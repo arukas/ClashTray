@@ -15,6 +15,8 @@ internal sealed class EndpointCatalogCoordinator
     private readonly OperationGate _operationGate;
     private readonly EndpointSessionManager _sessions;
     private readonly EndpointStore _store;
+    private readonly EndpointSecretStore _secretStore;
+    private readonly EndpointCertificateStore _certificateStore;
     private readonly EndpointRemovalCoordinator _removalCoordinator;
     private readonly EndpointProvisioningCoordinator _provisioningCoordinator;
     private readonly Func<AppSettings> _settingsAccessor;
@@ -42,6 +44,8 @@ internal sealed class EndpointCatalogCoordinator
         _operationGate = operationGate;
         _sessions = sessions;
         _store = store;
+        _secretStore = secretStore;
+        _certificateStore = certificateStore;
         _settingsAccessor = settingsAccessor;
         _publish = publish;
         _removalCoordinator = new EndpointRemovalCoordinator(
@@ -162,6 +166,33 @@ internal sealed class EndpointCatalogCoordinator
         ArgumentNullException.ThrowIfNull(descriptor);
         using (OperationGate.Lease operationLease = await _operationGate.AcquireAsync(cancellationToken).ConfigureAwait(false))
         {
+            EndpointRecord? previousRecord = await ResolveRecordAsync(endpointId, cancellationToken)
+                .ConfigureAwait(false);
+            string? previousSecret = null;
+            if (previousRecord?.SecretReference is string previousSecretReference)
+            {
+                previousSecret = await _secretStore.GetAsync(previousSecretReference, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            byte[]? previousCertificate = null;
+            if (previousRecord?.CertificateReference is string previousCertificateReference)
+            {
+                previousCertificate = await _certificateStore.GetAsync(
+                        previousCertificateReference,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            bool secretChanged = secret is not null
+                && !string.Equals(
+                    previousSecret,
+                    string.IsNullOrEmpty(secret) ? null : secret,
+                    StringComparison.Ordinal);
+            bool certificateChanged = customCaCertificate.HasValue
+                && (previousCertificate is null
+                    || !previousCertificate.AsSpan().SequenceEqual(customCaCertificate.Value.Span));
+
             await _provisioningCoordinator.UpdateAsync(
                     endpointId,
                     descriptor,
@@ -170,6 +201,13 @@ internal sealed class EndpointCatalogCoordinator
                     insecureHttpAcknowledgedAtUtc,
                     cancellationToken)
                 .ConfigureAwait(false);
+
+            if ((secretChanged || certificateChanged)
+                && _sessions.Status.Endpoint.Id == endpointId)
+            {
+                await _sessions.DisconnectAsync().ConfigureAwait(false);
+            }
+
             return await LoadAsync(cancellationToken).ConfigureAwait(false);
         }
     }
