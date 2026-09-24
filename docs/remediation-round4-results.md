@@ -9,7 +9,7 @@
 | --- | --- | --- | --- | --- |
 | N1 YAML 文档/节点范围 | 完成 | Core 语料与官方 Mihomo 有效配置读取通过 | 不适用 | 未执行 |
 | N2 有界线性扫描 | 完成 | 资源/取消/失败保留用例通过；Release 分配基准完成 | 不适用 | 未执行 |
-| N3 官方 Mihomo 门禁 | 完成 | 官方 v1.19.31 归档校验通过；4/4 官方测试通过 | 不适用 | 首次托管运行因测试程序集路径失败；修正后远端重跑待定 |
+| N3 官方 Mihomo 门禁 | 完成 | 本地及 hosted 官方门禁 4/4；Core 411/411、Integration 29/29 全部通过 | 不适用 | 未执行真实系统操作 |
 | N4 有界异常定位 | 完成 | Core 全套及脱敏、栈帧、Aggregate 上限用例通过 | 不适用 | 未执行 |
 | N5 列表 smoke/基准 | 完成 | Release 行重排基准完成 | Debug 无核心隔离 smoke 通过 | 未执行 |
 
@@ -42,7 +42,7 @@
 - 强制模式缺路径/核心、错误路径、零个测试、未发现的测试、跳过或任一非 Passed 结果都会失败。脚本把源码中声明的 `RequiresOfficialMihomo` 类别数与 TRX 实跑数相核对，不固定为“永远三项”。
 - `.github/workflows/ci.yml` 与 `.github/workflows/release.yml` 都在常规测试前运行该门禁并上传独立 TRX。`GITHUB_ENV` 将强制核心路径传给后续完整测试。
 - 本机默认下载路径已实际运行：归档 `mihomo-windows-amd64-v1.19.31.zip` SHA-256 为 `38b2420799d9e7cde77ec1a19c7150dd17ca77f7fb82d9f62cb8763a307eee67`，与 manifest 一致；提取出的 Windows x64 核心报告 `v1.19.31`。官方类别 4/4 通过、0 跳过。最终完整 Integration 回归也使用此已验证归档内的核心和强制模式。
-- 工作流文件已修改并做本地检查。首次 GitHub hosted CI/Release 运行已触发，但在运行官方测试前因测试程序集路径不匹配失败；原因与后续门禁修复记录见“托管工作流追加验证”。远端修正后结果待验证。
+- 首次 hosted CI/Release 运行暴露直接 csproj 测试的 Any CPU 输出路径问题。门禁移除项目级 `Platform=x64` 后，修正提交 `b370c8b` 的 hosted CI 和 Release 均通过；官方门禁 4/4、Core 411/411、Integration 29/29 均为 0 失败、0 跳过。
 
 ## N4：有限异常栈帧与应用版本
 
@@ -74,10 +74,10 @@
 - Release run `35967963164` 与 CI run `35967930019` 均成功下载固定 Mihomo v1.19.31 归档并通过 SHA-256 校验，随后在 `dotnet test` 阶段失败；测试未执行，TRX 与发布资产均未生成。
 - 根因是 solution 的 x64 配置将 IntegrationTests 映射为 Any CPU，并将程序集输出到 `bin/Release`；门禁直接测试 csproj 时又传入 `Platform=x64`，`--no-build` 因而查找不存在的 `bin/x64/Release` 路径。
 - `packaging/Test-OfficialMihomo.ps1` 已移除这项与 solution 配置不一致的项目级 Platform 覆盖。本地 PowerShell 7 使用相同发布配置重跑，归档校验通过，官方测试 4/4 通过、0 跳过。
-- 修正后的 GitHub hosted CI 和 Release 尚未运行；初次 alpha.5 Release 作业失败，没有创建 GitHub Release 或上传安装包。
+- 修正提交 `b370c8b` 的 CI run `35971526286` 和 Release run `35972161818` 均成功；Release 强制 Mihomo 门禁 4/4、完整 Core 411/411 与 Integration 29/29 测试通过，0 失败、0 跳过。GitHub prerelease：[v0.3.3-alpha.5](https://github.com/arukas/ClashTray/releases/tag/v0.3.3-alpha.5)，7 项资产包含 Full/NoCET 安装器与校验文件、Mihomo v1.19.31 源码归档、SHA256SUMS 和 release manifest。
 ## 未完成验收与限制
 
 - 本轮没有安装/升级/卸载 Windows Service，没有操作真实 System Proxy/TUN，也未执行睡眠恢复、网络切换或真实网卡/路由回滚验收；这些真实系统场景仍需独立 Windows 验收。
-- GitHub CI 与 Release hosted workflow 已触发；首次运行均在 `dotnet test --no-build` 查找 IntegrationTests DLL 时失败，未执行官方测试或生成安装包。脚本修正已在本地 PowerShell 7 下验证 4/4，远端重跑与最终 Release 仍待完成。
+- 初次 hosted run 的测试程序集路径问题已修复；修正后的 GitHub CI、Release 工作流和 alpha.5 prerelease 均成功。真实 Windows Service、System Proxy/TUN、网卡及睡眠恢复仍需受控系统验收。
 - Builder 有意拒绝多文档、整体缩进根映射、受管 anchor 与不平衡/多行 flow 语法；这是本轮明确的安全支持边界。
 - UI smoke 是当前桌面环境的隔离渲染，未替代多显示器、所有任务栏位置、系统高对比度和多 DPI 的人工验收。
