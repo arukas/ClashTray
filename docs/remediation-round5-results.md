@@ -80,7 +80,9 @@ Connections 页原来只把连接 ID 交给 Runtime。Runtime 在取得共享操
 - GitHub master CI run 80（提交 `493543e`）构建及官方 Mihomo 门禁通过，但 Integration 为 28/29；唯一失败发生在官方核心 smoke 退出后删除隔离目录，Windows 报 `cache.db` 仍被共享锁占用。Core 为 420/420。该次未发布 alpha。详见 [GitHub Actions run 80](https://github.com/arukas/ClashTray/actions/runs/35987533629)。
 - 使用临时目录和 `FileShare.None` 合成锁在本机复现原始 `Directory.Delete` 失败，底层 HRESULT 为 `0x80070020`（sharing violation）。
 - `tests/ClashTray.IntegrationTests/OfficialMihomoInteropTests.cs` 现对 Mihomo 官方测试临时目录清理，仅对 Windows sharing/lock violation（错误码 32/33）做最多 8 次重试，间隔 100–450 ms；其他 I/O 错误立即传播。新增合成锁回归通过（1/1）。此更改只影响测试夹具清理，不改变产品进程管理行为。
-- 修正后完整 Release x64 build 0 警告/错误；固定官方 Mihomo 门禁 4/4、0 跳过；Core 420/420、Integration 30/30、0 跳过。包含该修正的新远端 master CI 和 alpha 发布结果待本轮推送后确认。
+- 修正后完整 Release x64 build 0 警告/错误；固定官方 Mihomo 门禁 4/4、0 跳过；Core 420/420、Integration 30/30、0 跳过。
+- GitHub master CI run 81（提交 `9199fc4`）成功；TRX 确认 Core 420/420、Integration 30/30、官方 Mihomo 4/4，失败与跳过均为 0。详见 [GitHub Actions run 81](https://github.com/arukas/ClashTray/actions/runs/35989136415)。
+- `v0.3.3-alpha.6` 指向提交 `9199fc4`。Release workflow run 成功，官方核心、解决方案测试、压缩变体、资产上传及 Release 创建均通过；GitHub 上已发布为 prerelease，包含 7 项资产。详见 [Release run](https://github.com/arukas/ClashTray/actions/runs/35989808806) 和 [alpha.6 下载页](https://github.com/arukas/ClashTray/releases/tag/v0.3.3-alpha.6)。既有 `alpha.5` 保持不变。
 
 ## 验证记录
 
@@ -101,8 +103,8 @@ Connections 页原来只把连接 ID 交给 Runtime。Runtime 在取得共享操
 
 - 本轮没有另行启动 WinUI Debug smoke，也没有手动点击真实应用界面；UI 目标传递经 Release 构建验证，Core 命令路由经 fake handler 验证。
 - 未执行真实代理/TUN、服务安装、真实远端 endpoint 或真实连接清理，也未执行 Explorer、睡眠/网卡切换等系统验收。以上是遵守本轮限制后的未完成验收项。
-- 首次远端 master CI 已执行并失败于上述 Windows 测试清理锁；修复后本地受控核心强制门禁和全套回归通过。包含清理重试的远端 CI/Release 尚待推送后的工作流验证。
+- 首次远端 master CI 曾失败于上述 Windows 测试清理锁；修复后的 master CI run 81 和 alpha.6 Release workflow 均成功。自动化验证状态已完成，详见上方运行记录。
 
 ## 交付状态
 
-已完成 G1–G3 代码修改、CI 清理竞态修正及本地交付记录。未更改应用版本、安装服务或操作真实代理/TUN；本轮后续推送和 alpha 发布状态以远端工作流结果补记。工作树中的既有无关文档继续保留。
+已完成 G1–G3 代码修改、CI 清理竞态修正、Release x64 构建、官方核心强制门禁与完整回归；master CI 及 `v0.3.3-alpha.6` Release 已通过并公开发布。未安装服务或操作真实代理/TUN，未更改项目版本源文件。工作树中的既有无关文档继续保留。
