@@ -2,7 +2,7 @@
 
 日期：2026-09-24
 Git 基线：`9919a5a`（本轮开始时 `HEAD` 与报告基线一致；未发现后续已修复版本）
-范围：仅处理 G1–G3；保留既有无关工作树文件，不改版本、不提交、不推送、不发布。
+范围：仅处理 G1–G3，并记录首次远端 CI 暴露的官方核心集成测试临时目录共享锁问题；保留既有无关工作树文件，不更改应用版本。用户随后授权推送及 alpha 发布。
 
 ## 结果摘要
 
@@ -75,13 +75,20 @@ Connections 页原来只把连接 ID 交给 Runtime。Runtime 在取得共享操
 - 64 KiB 限长的长行仅输出保留前缀和原截断标记，后续 `normal-after-long-line` 完整到达。
 - 取消时，尚未结束的部分行不发布，drain 按取消令牌退出。
 
+### 远端 CI 暴露的临时目录清理竞态
+
+- GitHub master CI run 80（提交 `493543e`）构建及官方 Mihomo 门禁通过，但 Integration 为 28/29；唯一失败发生在官方核心 smoke 退出后删除隔离目录，Windows 报 `cache.db` 仍被共享锁占用。Core 为 420/420。该次未发布 alpha。详见 [GitHub Actions run 80](https://github.com/arukas/ClashTray/actions/runs/35987533629)。
+- 使用临时目录和 `FileShare.None` 合成锁在本机复现原始 `Directory.Delete` 失败，底层 HRESULT 为 `0x80070020`（sharing violation）。
+- `tests/ClashTray.IntegrationTests/OfficialMihomoInteropTests.cs` 现对 Mihomo 官方测试临时目录清理，仅对 Windows sharing/lock violation（错误码 32/33）做最多 8 次重试，间隔 100–450 ms；其他 I/O 错误立即传播。新增合成锁回归通过（1/1）。此更改只影响测试夹具清理，不改变产品进程管理行为。
+- 修正后完整 Release x64 build 0 警告/错误；固定官方 Mihomo 门禁 4/4、0 跳过；Core 420/420、Integration 30/30、0 跳过。包含该修正的新远端 master CI 和 alpha 发布结果待本轮推送后确认。
+
 ## 验证记录
 
 ### 自动化构建和测试
 
 - 完整 Release x64 解决方案构建：`dotnet build .\ClashTray.sln --configuration Release -p:Platform=x64 --no-restore`；通过，0 警告、0 错误。
 - Core Release 回归：420 通过、0 失败、0 跳过。
-- Integration Release 回归：29 通过、0 失败、0 跳过。
+- Integration Release 回归：新增共享锁清理回归后 30 通过、0 失败、0 跳过。
 - 固定官方核心门禁：`packaging/Test-OfficialMihomo.ps1 -Configuration Release`；固定版本 `v1.19.31`，官方 Windows x64 归档 SHA-256 为 `38b2420799d9e7cde77ec1a19c7150dd17ca77f7fb82d9f62cb8763a307eee67`，与 `packaging/mihomo-release.json` 一致。核心版本和 PE x64 检查通过；官方类别 4/4 通过、0 跳过。完整 Integration 随后在同一受控核心强制环境中通过。
 - `git diff --check`：通过。
 - 上述完整 Core/Integration 套件保留并运行了既有 F1–F4、N1–N5 测试保证；没有为其重复实施整改。A1–A3 仍只作为后续取证/测试设计建议，本轮未展开。
@@ -94,8 +101,8 @@ Connections 页原来只把连接 ID 交给 Runtime。Runtime 在取得共享操
 
 - 本轮没有另行启动 WinUI Debug smoke，也没有手动点击真实应用界面；UI 目标传递经 Release 构建验证，Core 命令路由经 fake handler 验证。
 - 未执行真实代理/TUN、服务安装、真实远端 endpoint 或真实连接清理，也未执行 Explorer、睡眠/网卡切换等系统验收。以上是遵守本轮限制后的未完成验收项。
-- 未运行远端 GitHub CI/Release；本地 workflow 状态不能替代远端验证。
+- 首次远端 master CI 已执行并失败于上述 Windows 测试清理锁；修复后本地受控核心强制门禁和全套回归通过。包含清理重试的远端 CI/Release 尚待推送后的工作流验证。
 
 ## 交付状态
 
-已完成 G1–G3 代码修改、正式回归和本地交付记录。版本号、安装服务、真实代理/TUN、Git 提交、推送和发布均未操作。工作树中的既有无关文档继续保留。
+已完成 G1–G3 代码修改、CI 清理竞态修正及本地交付记录。未更改应用版本、安装服务或操作真实代理/TUN；本轮后续推送和 alpha 发布状态以远端工作流结果补记。工作树中的既有无关文档继续保留。

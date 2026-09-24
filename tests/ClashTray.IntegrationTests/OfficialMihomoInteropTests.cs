@@ -11,6 +11,40 @@ namespace ClashTray.IntegrationTests;
 public sealed class OfficialMihomoInteropTests
 {
     [TestMethod]
+    public async Task TemporaryDirectoryCleanupRetriesTransientFileLock()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "ClashTrayIntegrationTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string lockedFilePath = Path.Combine(root, "cache.db");
+        FileStream lockedFile = new(
+            lockedFilePath,
+            FileMode.CreateNew,
+            FileAccess.ReadWrite,
+            FileShare.None);
+
+        try
+        {
+            Task cleanup = DeleteTemporaryDirectoryWithRetryAsync(root);
+            await Task.Delay(TimeSpan.FromMilliseconds(250));
+            await lockedFile.DisposeAsync();
+            await cleanup;
+
+            Assert.IsFalse(Directory.Exists(root));
+        }
+        finally
+        {
+            await lockedFile.DisposeAsync();
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     [TestCategory("RequiresOfficialMihomo")]
     public async Task OfficialMihomoValidatesConfigAfterManagedMultilineYamlReplacement()
     {
@@ -79,10 +113,7 @@ public sealed class OfficialMihomoInteropTests
         finally
         {
             await manager.DisposeAsync();
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
+            await DeleteTemporaryDirectoryWithRetryAsync(root);
         }
     }
 
@@ -166,10 +197,7 @@ public sealed class OfficialMihomoInteropTests
         finally
         {
             await manager.DisposeAsync();
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
+            await DeleteTemporaryDirectoryWithRetryAsync(root);
         }
     }
 
@@ -240,9 +268,30 @@ public sealed class OfficialMihomoInteropTests
         finally
         {
             await manager.DisposeAsync();
-            if (Directory.Exists(root))
+            await DeleteTemporaryDirectoryWithRetryAsync(root);
+        }
+    }
+
+    private static async Task DeleteTemporaryDirectoryWithRetryAsync(string directoryPath)
+    {
+        const int maxAttempts = 8;
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            if (!Directory.Exists(directoryPath))
             {
-                Directory.Delete(root, recursive: true);
+                return;
+            }
+
+            try
+            {
+                Directory.Delete(directoryPath, recursive: true);
+                return;
+            }
+            catch (IOException exception) when (
+                attempt < maxAttempts - 1
+                && (exception.HResult & 0xFFFF) is 32 or 33)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100 + attempt * 50));
             }
         }
     }
