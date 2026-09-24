@@ -151,6 +151,31 @@ public sealed class RuntimeLogCoordinatorTests
         }
     }
 
+    [TestMethod]
+    public async Task DisposeRacingStopLogStreamDoesNotThrow()
+    {
+        RuntimeStateStore store = new(CreateSnapshot());
+        using HttpClient httpClient = new();
+        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:1/"), string.Empty);
+
+        for (int iteration = 0; iteration < 20; iteration++)
+        {
+            RuntimeLogCoordinator logs = new(
+                store,
+                () => api,
+                () => true,
+                () => "info",
+                () => { },
+                () => { },
+                CancellationToken.None);
+            logs.EnsureLogStreamStarted();
+
+            Task stop = logs.StopLogStreamAsync();
+            logs.Dispose();
+            await stop;
+        }
+    }
+
     private static RuntimeLogCoordinator CreateCoordinator(
         RuntimeStateStore store,
         Action queueThrottledPublish,

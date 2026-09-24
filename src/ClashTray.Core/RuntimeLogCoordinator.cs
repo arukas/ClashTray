@@ -112,7 +112,14 @@ internal sealed class RuntimeLogCoordinator : IDisposable
 
         if (streamCts is not null)
         {
-            await streamCts.CancelAsync();
+            try
+            {
+                await streamCts.CancelAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                // A concurrent Dispose may have released the source after it was detached.
+            }
         }
         try
         {
@@ -198,8 +205,26 @@ internal sealed class RuntimeLogCoordinator : IDisposable
 
     public void Dispose()
     {
-        _logStreamCts?.Dispose();
-        _logStreamCts = null;
+        CancellationTokenSource? streamCts;
+        lock (_logStreamGate)
+        {
+            streamCts = _logStreamCts;
+            _logStreamCts = null;
+        }
+
+        if (streamCts is not null)
+        {
+            try
+            {
+                streamCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            streamCts.Dispose();
+        }
+
         GC.SuppressFinalize(this);
     }
 }
