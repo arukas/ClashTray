@@ -3,9 +3,9 @@ using ClashTray.Contracts;
 
 namespace ClashTray.Core;
 
-internal sealed record ModeIntent(ProxyMode Mode, bool RouteToRemote);
+internal sealed record ModeIntent(ProxyMode Mode, bool RouteToRemote, EndpointCommandTarget Target);
 
-internal sealed record ProxySelectionIntent(string Group, string Proxy);
+internal sealed record ProxySelectionIntent(string Group, string Proxy, EndpointCommandTarget Target);
 
 /// <summary>
 /// Executes one controller mutation against the active local or remote
@@ -19,11 +19,11 @@ internal delegate Task ControllerMutationExecutor(
     string remoteRefreshFailureMessage,
     Func<MihomoApiClient, long, CancellationToken, Task> localOperation,
     Func<EndpointSession, CancellationToken, Task> remoteOperation,
-    CancellationToken cancellationToken,
+    EndpointCommandTarget expectedTarget,
     bool routeToRemote,
     bool includeRulesAndProviders,
-    MutationRefreshScope refreshScope);
-
+    MutationRefreshScope refreshScope,
+    CancellationToken cancellationToken);
 /// <summary>
 /// Owns the user-facing proxy operations: mode switching, node selection, and
 /// latency testing. Mode and selection intents are coalesced latest-wins,
@@ -47,6 +47,8 @@ internal sealed class ProxyOperationCoordinator
     private readonly Func<MihomoApiClient, long, IReadOnlyDictionary<string, int?>, CancellationToken, Task> _groupDelayCommitter;
     private readonly Action _publish;
     private readonly CancellationToken _runtimeCancellation;
+    private readonly Func<EndpointCommandTarget> _captureActiveTarget;
+    private readonly Func<EndpointCommandTarget> _captureLocalTarget;
     private readonly LatestWinsOperation<ModeIntent> _modeOperation = new("模式");
     private readonly object _proxyOperationGate = new();
     private readonly Dictionary<string, LatestWinsOperation<ProxySelectionIntent>> _proxyOperations =
@@ -68,7 +70,9 @@ internal sealed class ProxyOperationCoordinator
         ControllerMutationExecutor mutationExecutor,
         Func<MihomoApiClient, long, IReadOnlyDictionary<string, int?>, CancellationToken, Task> groupDelayCommitter,
         Action publish,
-        CancellationToken runtimeCancellation)
+        CancellationToken runtimeCancellation,
+        Func<EndpointCommandTarget>? captureActiveTarget = null,
+        Func<EndpointCommandTarget>? captureLocalTarget = null)
     {
         ArgumentNullException.ThrowIfNull(operationGate);
         ArgumentNullException.ThrowIfNull(stateStore);
@@ -91,12 +95,20 @@ internal sealed class ProxyOperationCoordinator
         _groupDelayCommitter = groupDelayCommitter;
         _publish = publish;
         _runtimeCancellation = runtimeCancellation;
+        _captureActiveTarget = captureActiveTarget
+            ?? (() => new EndpointCommandTarget(EndpointId.Local, 0));
+        _captureLocalTarget = captureLocalTarget
+            ?? (() => new EndpointCommandTarget(EndpointId.Local, 0));
     }
 
-    public async Task SetModeAsync(ProxyMode mode, CancellationToken cancellationToken = default)
+    public async Task SetModeAsync(
+        ProxyMode mode,
+        EndpointCommandTarget? expectedTarget = null,
+        CancellationToken cancellationToken = default)
     {
+        EndpointCommandTarget target = expectedTarget ?? _captureActiveTarget();
         await _modeOperation.RequestAsync(
-                new ModeIntent(mode, RouteToRemote: true),
+                new ModeIntent(mode, RouteToRemote: true, target),
                 (intent, token) => SetModeIntentCoreAsync(
                     intent,
                     token),
@@ -104,17 +116,20 @@ internal sealed class ProxyOperationCoordinator
             .ConfigureAwait(false);
     }
 
-    public async Task SetLocalModeAsync(ProxyMode mode, CancellationToken cancellationToken = default)
+    public async Task SetLocalModeAsync(
+        ProxyMode mode,
+        EndpointCommandTarget? expectedTarget = null,
+        CancellationToken cancellationToken = default)
     {
+        EndpointCommandTarget target = expectedTarget ?? _captureLocalTarget();
         await _modeOperation.RequestAsync(
-                new ModeIntent(mode, RouteToRemote: false),
+                new ModeIntent(mode, RouteToRemote: false, target),
                 (intent, token) => SetModeIntentCoreAsync(
                     intent,
                     token),
                 cancellationToken)
             .ConfigureAwait(false);
     }
-
     private async Task<ModeIntent> SetModeIntentCoreAsync(
         ModeIntent intent,
         CancellationToken cancellationToken)
@@ -127,24 +142,29 @@ internal sealed class ProxyOperationCoordinator
                 "远程端点模式切换结果无法确认，请重试。",
                 (api, _, token) => api.SetModeAsync(intent.Mode, token),
                 (session, token) => session.Api.SetModeAsync(intent.Mode, token),
-                cancellationToken,
-                intent.RouteToRemote,
+                intent.Target,
+                routeToRemote: intent.RouteToRemote,
                 includeRulesAndProviders: true,
-                refreshScope: MutationRefreshScope.Mode);
+                refreshScope: MutationRefreshScope.Mode,
+                cancellationToken: cancellationToken);
         }
 
         return intent;
     }
 
-    public Task SelectProxyAsync(string group, string proxy, CancellationToken cancellationToken = default)
+    public Task SelectProxyAsync(
+        string group,
+        string proxy,
+        EndpointCommandTarget? expectedTarget = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(group);
         ArgumentException.ThrowIfNullOrWhiteSpace(proxy);
+        EndpointCommandTarget target = expectedTarget ?? _captureActiveTarget();
         LatestWinsOperation<ProxySelectionIntent> operation = GetProxySelectionOperation(group);
-        ProxySelectionIntent intent = new(group, proxy);
+        ProxySelectionIntent intent = new(group, proxy, target);
         return SelectProxyLatestAsync(operation, intent, cancellationToken);
     }
-
     private LatestWinsOperation<ProxySelectionIntent> GetProxySelectionOperation(string group)
     {
         lock (_proxyOperationGate)
@@ -237,10 +257,11 @@ internal sealed class ProxyOperationCoordinator
                     }
                 },
                 (session, token) => session.Api.SelectProxyAsync(intent.Group, intent.Proxy, token),
-                cancellationToken,
+                intent.Target,
                 routeToRemote: true,
                 includeRulesAndProviders: true,
-                refreshScope: MutationRefreshScope.ProxySelection);
+                refreshScope: MutationRefreshScope.ProxySelection,
+                cancellationToken: cancellationToken);
 
             if (disconnectException is not null)
             {

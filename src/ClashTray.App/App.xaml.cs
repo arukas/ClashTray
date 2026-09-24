@@ -297,11 +297,11 @@ public partial class App : Application, IAsyncDisposable
         }
     }
 
-    internal async Task SetModeAsync(ProxyMode mode)
+    internal async Task SetModeAsync(ProxyMode mode, EndpointCommandTarget? expectedTarget = null)
     {
         try
         {
-            await _runtime.SetModeAsync(mode);
+            await _runtime.SetModeAsync(mode, expectedTarget);
         }
         catch (Exception exception)
         {

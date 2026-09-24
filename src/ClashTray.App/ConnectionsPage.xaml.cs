@@ -15,6 +15,7 @@ public sealed partial class ConnectionsPage : UserControl
     private string _controllerIdentity = EndpointId.Local.Value;
     private bool _controllerWritable = true;
     private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
+    private EndpointCommandTarget? _expectedCommandTarget;
     private string? _selectedConnectionId;
     private bool _synchronizingSelection;
 
@@ -51,7 +52,15 @@ public sealed partial class ConnectionsPage : UserControl
         RuntimeSnapshot snapshot,
         bool controllerWritable,
         EndpointCapability capabilities,
-        string controllerIdentity)
+        string controllerIdentity) =>
+        UpdateSnapshot(snapshot, controllerWritable, capabilities, controllerIdentity, null);
+
+    public void UpdateSnapshot(
+        RuntimeSnapshot snapshot,
+        bool controllerWritable,
+        EndpointCapability capabilities,
+        string controllerIdentity,
+        EndpointCommandTarget? expectedCommandTarget)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(controllerIdentity);
@@ -60,8 +69,10 @@ public sealed partial class ConnectionsPage : UserControl
             controllerIdentity,
             StringComparison.Ordinal);
         bool interactivityChanged = _controllerWritable != controllerWritable
-            || _controllerCapabilities != capabilities;
+            || _controllerCapabilities != capabilities
+            || _expectedCommandTarget != expectedCommandTarget;
         _controllerIdentity = controllerIdentity;
+        _expectedCommandTarget = expectedCommandTarget;
         if (controllerChanged)
         {
             _selectedConnectionId = null;
@@ -80,7 +91,6 @@ public sealed partial class ConnectionsPage : UserControl
         _connections = snapshot.Connections;
         ApplyFilter();
     }
-
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
 
     private void SortBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplyFilter();
@@ -171,7 +181,7 @@ public sealed partial class ConnectionsPage : UserControl
         {
             try
             {
-                await _runtime.CloseConnectionAsync(row.Id);
+                await _runtime.CloseConnectionAsync(row.Id, expectedTarget: _expectedCommandTarget);
             }
             catch (Exception exception)
             {
@@ -191,7 +201,7 @@ public sealed partial class ConnectionsPage : UserControl
 
         try
         {
-            await _runtime.CloseAllConnectionsAsync();
+            await _runtime.CloseAllConnectionsAsync(expectedTarget: _expectedCommandTarget);
         }
         catch (Exception exception)
         {

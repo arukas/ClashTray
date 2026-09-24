@@ -47,6 +47,7 @@ public sealed partial class MainWindow : Window
     private RuntimeSnapshot? _latestDisplayedSnapshot;
     private EndpointKind _activeEndpointKind = EndpointKind.Local;
     private string _activeControllerIdentity = EndpointId.Local.Value;
+    private EndpointCommandTarget? _activeCommandTarget;
     private readonly Queue<(double Up, double Down)> _trafficHistory = new();
     private DateTime _lastTrafficSample;
     private EndpointSessionState _activeEndpointState = EndpointSessionState.Disconnected;
@@ -162,6 +163,9 @@ public sealed partial class MainWindow : Window
         _activeEndpointKind = snapshot.ActiveController.Endpoint.Kind;
         _activeControllerIdentity =
             $"{snapshot.ActiveController.Endpoint.Id.Value}:{snapshot.ActiveController.Generation}";
+        _activeCommandTarget = new EndpointCommandTarget(
+            snapshot.ActiveController.Endpoint.Id,
+            snapshot.ActiveController.Generation);
         _activeEndpointState = snapshot.ActiveController.State;
         _activeControllerLastConfirmedAt = snapshot.ActiveController.LastConfirmedAt;
         _activeEndpointDisplayName = snapshot.ActiveController.Endpoint.DisplayName;
@@ -382,7 +386,7 @@ public sealed partial class MainWindow : Window
         switch (_activePage)
         {
             case PanelPage.Proxy:
-                _proxyPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
+                _proxyPage?.UpdateSnapshot(snapshot, writable, activeCapabilities, _activeCommandTarget);
                 break;
             case PanelPage.Rules:
                 _rulesPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
@@ -392,7 +396,8 @@ public sealed partial class MainWindow : Window
                     snapshot,
                     writable,
                     activeCapabilities,
-                    _activeControllerIdentity);
+                    _activeControllerIdentity,
+                    _activeCommandTarget);
                 break;
             case PanelPage.Logs:
                 _logsPage?.UpdateSnapshot(
@@ -402,7 +407,7 @@ public sealed partial class MainWindow : Window
                     _activeControllerIdentity);
                 break;
             case PanelPage.Settings:
-                _settingsPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
+                _settingsPage?.UpdateSnapshot(snapshot, writable, activeCapabilities, _activeCommandTarget);
                 break;
         }
     }
@@ -581,7 +586,7 @@ public sealed partial class MainWindow : Window
 
         if (HasActiveEndpointCapability(EndpointCapability.SwitchMode))
         {
-            await _app.SetModeAsync(ProxyMode.Rule);
+            await _app.SetModeAsync(ProxyMode.Rule, _activeCommandTarget);
         }
     }
 
@@ -594,7 +599,7 @@ public sealed partial class MainWindow : Window
 
         if (HasActiveEndpointCapability(EndpointCapability.SwitchMode))
         {
-            await _app.SetModeAsync(ProxyMode.Global);
+            await _app.SetModeAsync(ProxyMode.Global, _activeCommandTarget);
         }
     }
 
@@ -607,7 +612,7 @@ public sealed partial class MainWindow : Window
 
         if (HasActiveEndpointCapability(EndpointCapability.SwitchMode))
         {
-            await _app.SetModeAsync(ProxyMode.Direct);
+            await _app.SetModeAsync(ProxyMode.Direct, _activeCommandTarget);
         }
     }
 

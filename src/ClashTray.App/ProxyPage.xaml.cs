@@ -15,6 +15,7 @@ public sealed partial class ProxyPage : UserControl
     private string? _signature;
     private bool _controllerWritable = true;
     private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
+    private EndpointCommandTarget? _expectedCommandTarget;
 
     public ProxyPage(ClashTrayRuntime runtime)
     {
@@ -48,13 +49,22 @@ public sealed partial class ProxyPage : UserControl
     public void UpdateSnapshot(
         RuntimeSnapshot snapshot,
         bool controllerWritable,
-        EndpointCapability capabilities)
+        EndpointCapability capabilities) =>
+        UpdateSnapshot(snapshot, controllerWritable, capabilities, null);
+
+    public void UpdateSnapshot(
+        RuntimeSnapshot snapshot,
+        bool controllerWritable,
+        EndpointCapability capabilities,
+        EndpointCommandTarget? expectedCommandTarget)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         bool interactivityChanged = _controllerWritable != controllerWritable
-            || _controllerCapabilities != capabilities;
+            || _controllerCapabilities != capabilities
+            || _expectedCommandTarget != expectedCommandTarget;
         _controllerWritable = controllerWritable;
         _controllerCapabilities = capabilities;
+        _expectedCommandTarget = expectedCommandTarget;
         bool proxyDataUnchanged = _snapshot is not null
             && ReferenceEquals(_snapshot.ProxyGroups, snapshot.ProxyGroups)
             && ReferenceEquals(_snapshot.ProxyNodes, snapshot.ProxyNodes)
@@ -80,7 +90,6 @@ public sealed partial class ProxyPage : UserControl
         RenderGroups(snapshot);
         RenderProviders(snapshot);
     }
-
     private void RenderGroups(RuntimeSnapshot snapshot)
     {
         GroupsPanel.Children.Clear();
@@ -299,7 +308,7 @@ public sealed partial class ProxyPage : UserControl
                 // to render only confirmed selections.
                 try
                 {
-                    await _runtime.SelectProxyAsync(group.Name, name);
+                    await _runtime.SelectProxyAsync(group.Name, name, expectedTarget: _expectedCommandTarget);
                 }
                 catch (Exception exception)
                 {
@@ -414,7 +423,7 @@ public sealed partial class ProxyPage : UserControl
                 }
 
                 refresh.IsEnabled = false;
-                try { await _runtime.RefreshProviderAsync(provider.Name, false); }
+                try { await _runtime.RefreshProviderAsync(provider.Name, false, expectedTarget: _expectedCommandTarget); }
                 catch (Exception exception) { DelayText.Text = ErrorSanitizer.Sanitize(exception); }
                 finally { refresh.IsEnabled = _controllerWritable; }
             };

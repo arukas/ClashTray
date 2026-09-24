@@ -140,6 +140,9 @@ public sealed record LocalDeviceSnapshot(
     string? ErrorMessage,
     NetworkSwitchStatus? NetworkSwitch = null);
 
+/// <summary>Identifies the endpoint session a UI command was created for.</summary>
+public readonly record struct EndpointCommandTarget(EndpointId EndpointId, long Generation);
+
 public sealed record ControllerSessionSnapshot(
     EndpointDescriptor Endpoint,
     EndpointSessionState State,

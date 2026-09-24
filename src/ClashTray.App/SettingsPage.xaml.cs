@@ -26,6 +26,7 @@ public sealed partial class SettingsPage : UserControl
     private readonly List<NetworkRuleEditorRow> _networkRuleRows = [];
     private bool _controllerWritable = true;
     private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
+    private EndpointCommandTarget? _expectedCommandTarget;
 
     public SettingsPage(ClashTrayRuntime runtime)
     {
@@ -53,11 +54,19 @@ public sealed partial class SettingsPage : UserControl
     public void UpdateSnapshot(
         RuntimeSnapshot snapshot,
         bool controllerWritable,
-        EndpointCapability capabilities)
+        EndpointCapability capabilities) =>
+        UpdateSnapshot(snapshot, controllerWritable, capabilities, null);
+
+    public void UpdateSnapshot(
+        RuntimeSnapshot snapshot,
+        bool controllerWritable,
+        EndpointCapability capabilities,
+        EndpointCommandTarget? expectedCommandTarget)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         _controllerWritable = controllerWritable;
         _controllerCapabilities = capabilities;
+        _expectedCommandTarget = expectedCommandTarget;
         UpdateControllerActionButtons();
         _lastSnapshot = snapshot;
         LoadSettings(_runtime.Settings);
@@ -701,7 +710,7 @@ public sealed partial class SettingsPage : UserControl
 
         try
         {
-            await _runtime.ClearFakeIpCacheAsync();
+            await _runtime.ClearFakeIpCacheAsync(_expectedCommandTarget);
             StatusText.Text = LocalizationService.Get("FakeIpCleared");
         }
         catch (Exception exception)
@@ -719,7 +728,7 @@ public sealed partial class SettingsPage : UserControl
 
         try
         {
-            await _runtime.ClearDnsCacheAsync();
+            await _runtime.ClearDnsCacheAsync(_expectedCommandTarget);
             StatusText.Text = LocalizationService.Get("DnsCleared");
         }
         catch (Exception exception)
@@ -737,7 +746,7 @@ public sealed partial class SettingsPage : UserControl
 
         try
         {
-            await _runtime.UpdateGeoAsync();
+            await _runtime.UpdateGeoAsync(_expectedCommandTarget);
             StatusText.Text = LocalizationService.Get("GeoUpdateSent");
         }
         catch (Exception exception)
@@ -761,7 +770,7 @@ public sealed partial class SettingsPage : UserControl
 
         try
         {
-            await _runtime.RefreshProviderAsync(selected.Item1.Name, selected.Item2);
+            await _runtime.RefreshProviderAsync(selected.Item1.Name, selected.Item2, _expectedCommandTarget);
             StatusText.Text = LocalizationService.Format("ProviderRefreshRequestedFormat", selected.Item1.Name);
         }
         catch (Exception exception)

@@ -472,17 +472,31 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
     }
 
+    private Task DrainAsync(StreamReader reader, bool isError, CancellationToken cancellationToken) =>
+        DrainOutputAsync(
+            reader,
+            isError,
+            (line, error) => LogLineReceived?.Invoke(line, error),
+            cancellationToken);
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Design",
         "CA1031",
         Justification = "The drain loop is fire-and-forget; an unexpected failure must be observed and surfaced as a log line instead of faulting an unobserved task.")]
-    private async Task DrainAsync(StreamReader reader, bool isError, CancellationToken cancellationToken)
+    internal static async Task DrainOutputAsync(
+        TextReader reader,
+        bool isError,
+        Action<string, bool> logLine,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(reader);
+        ArgumentNullException.ThrowIfNull(logLine);
+        BoundedOutputLineReader lineReader = new(reader);
         try
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                string? line = await ReadLineLimitedAsync(reader, cancellationToken);
+                string? line = await lineReader.ReadLineLimitedAsync(cancellationToken);
                 if (line is null)
                 {
                     break;
@@ -490,7 +504,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
 
                 if (!string.IsNullOrWhiteSpace(line))
                 {
-                    LogLineReceived?.Invoke(line, isError);
+                    logLine(line, isError);
                 }
             }
         }
@@ -499,35 +513,41 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            LogLineReceived?.Invoke(
+            logLine(
                 $"[ClashTray] Mihomo 输出读取中断：{ErrorSanitizer.Sanitize(exception)}",
                 true);
         }
     }
 
-    private static async Task<string?> ReadLineLimitedAsync(
-        StreamReader reader,
-        CancellationToken cancellationToken)
+    private sealed class BoundedOutputLineReader(TextReader reader)
     {
-        StringBuilder builder = new StringBuilder(Math.Min(MaxLogLineCharacters, 1024));
-        char[] buffer = new char[1024];
-        bool truncated = false;
-        while (true)
+        private const int ReadBufferCharacters = 1024;
+        private readonly char[] _buffer = new char[ReadBufferCharacters];
+        private int _bufferOffset;
+        private int _bufferCount;
+        private bool _endOfStream;
+
+        public async Task<string?> ReadLineLimitedAsync(CancellationToken cancellationToken)
         {
-            int count = await reader.ReadAsync(buffer.AsMemory(), cancellationToken);
-            if (count == 0)
+            StringBuilder builder = new(Math.Min(MaxLogLineCharacters, 1024));
+            bool truncated = false;
+            while (true)
             {
-                if (builder.Length == 0 && !truncated)
+                if (_bufferOffset >= _bufferCount && !_endOfStream)
                 {
-                    return null;
+                    _bufferCount = await reader.ReadAsync(_buffer.AsMemory(), cancellationToken);
+                    _bufferOffset = 0;
+                    _endOfStream = _bufferCount == 0;
                 }
 
-                break;
-            }
+                if (_endOfStream)
+                {
+                    return builder.Length == 0 && !truncated
+                        ? null
+                        : FormatLogLine(builder, truncated);
+                }
 
-            for (int index = 0; index < count; index++)
-            {
-                char character = buffer[index];
+                char character = _buffer[_bufferOffset++];
                 if (character == '\n')
                 {
                     return FormatLogLine(builder, truncated);
@@ -546,8 +566,6 @@ public sealed class MihomoProcessManager : IAsyncDisposable
                 }
             }
         }
-
-        return FormatLogLine(builder, truncated);
     }
 
     private static string FormatLogLine(StringBuilder builder, bool truncated) =>

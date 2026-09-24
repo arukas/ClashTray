@@ -212,7 +212,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             ExecuteControllerMutationAndRefreshAsync,
             CommitGroupDelayResultsAsync,
             Publish,
-            _runtimeCts.Token);
+            _runtimeCts.Token,
+            CaptureCurrentEndpointCommandTarget,
+            CaptureLocalEndpointCommandTarget);
         _endpointSessions.StatusChanged += _remoteRefresh.HandleSessionStatusChanged;
         _processManager.StateChanged += OnProcessStateChanged;
         _processManager.LogLineReceived += _logs.OnProcessLogLine;
@@ -1480,13 +1482,49 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     }
 
     public Task SetModeAsync(ProxyMode mode, CancellationToken cancellationToken = default) =>
-        _proxyOps.SetModeAsync(mode, cancellationToken);
+        _proxyOps.SetModeAsync(mode, CaptureCurrentEndpointCommandTarget(), cancellationToken);
+
+    public Task SetModeAsync(
+        ProxyMode mode,
+        EndpointCommandTarget? expectedTarget,
+        CancellationToken cancellationToken = default) =>
+        _proxyOps.SetModeAsync(
+            mode,
+            expectedTarget ?? CaptureCurrentEndpointCommandTarget(),
+            cancellationToken);
 
     public Task SetLocalModeAsync(ProxyMode mode, CancellationToken cancellationToken = default) =>
-        _proxyOps.SetLocalModeAsync(mode, cancellationToken);
+        _proxyOps.SetLocalModeAsync(mode, CaptureLocalEndpointCommandTarget(), cancellationToken);
 
-    public Task SelectProxyAsync(string group, string proxy, CancellationToken cancellationToken = default) =>
-        _proxyOps.SelectProxyAsync(group, proxy, cancellationToken);
+    public Task SetLocalModeAsync(
+        ProxyMode mode,
+        EndpointCommandTarget? expectedTarget,
+        CancellationToken cancellationToken = default) =>
+        _proxyOps.SetLocalModeAsync(
+            mode,
+            expectedTarget ?? CaptureLocalEndpointCommandTarget(),
+            cancellationToken);
+
+    public Task SelectProxyAsync(
+        string group,
+        string proxy,
+        CancellationToken cancellationToken = default) =>
+        _proxyOps.SelectProxyAsync(
+            group,
+            proxy,
+            CaptureCurrentEndpointCommandTarget(),
+            cancellationToken);
+
+    public Task SelectProxyAsync(
+        string group,
+        string proxy,
+        EndpointCommandTarget? expectedTarget,
+        CancellationToken cancellationToken = default) =>
+        _proxyOps.SelectProxyAsync(
+            group,
+            proxy,
+            expectedTarget ?? CaptureCurrentEndpointCommandTarget(),
+            cancellationToken);
 
     public Task<int?> TestProxyDelayAsync(string proxy, CancellationToken cancellationToken = default) =>
         _proxyOps.TestProxyDelayAsync(proxy, cancellationToken);
@@ -1521,8 +1559,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         finally { _dataRefreshLock.Release(); }
     }
 
-    public async Task CloseConnectionAsync(string id, CancellationToken cancellationToken = default)
+    public Task CloseConnectionAsync(string id, CancellationToken cancellationToken = default) =>
+        CloseConnectionAsync(id, CaptureCurrentEndpointCommandTarget(), cancellationToken);
+
+    public async Task CloseConnectionAsync(
+        string id,
+        EndpointCommandTarget? expectedTarget,
+        CancellationToken cancellationToken = default)
     {
+        EndpointCommandTarget commandTarget = expectedTarget ?? CaptureCurrentEndpointCommandTarget();
         using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
@@ -1531,12 +1576,22 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 "远程连接关闭结果无法确认，请重试。",
                 (api, _, token) => api.CloseConnectionAsync(id, token),
                 (session, token) => session.Api.CloseConnectionAsync(id, token),
-                cancellationToken);
+                commandTarget,
+                routeToRemote: true,
+                includeRulesAndProviders: true,
+                refreshScope: MutationRefreshScope.Full,
+                cancellationToken: cancellationToken);
         }
     }
 
-    public async Task CloseAllConnectionsAsync(CancellationToken cancellationToken = default)
+    public Task CloseAllConnectionsAsync(CancellationToken cancellationToken = default) =>
+        CloseAllConnectionsAsync(CaptureCurrentEndpointCommandTarget(), cancellationToken);
+
+    public async Task CloseAllConnectionsAsync(
+        EndpointCommandTarget? expectedTarget,
+        CancellationToken cancellationToken = default)
     {
+        EndpointCommandTarget commandTarget = expectedTarget ?? CaptureCurrentEndpointCommandTarget();
         using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
@@ -1545,12 +1600,27 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 "远程连接清理结果无法确认，请重试。",
                 (api, _, token) => api.CloseAllConnectionsAsync(token),
                 (session, token) => session.Api.CloseAllConnectionsAsync(token),
-                cancellationToken);
+                commandTarget,
+                routeToRemote: true,
+                includeRulesAndProviders: true,
+                refreshScope: MutationRefreshScope.Full,
+                cancellationToken: cancellationToken);
         }
     }
 
-    public async Task RefreshProviderAsync(string name, bool rules, CancellationToken cancellationToken = default)
+    public Task RefreshProviderAsync(
+        string name,
+        bool rules,
+        CancellationToken cancellationToken = default) =>
+        RefreshProviderAsync(name, rules, CaptureCurrentEndpointCommandTarget(), cancellationToken);
+
+    public async Task RefreshProviderAsync(
+        string name,
+        bool rules,
+        EndpointCommandTarget? expectedTarget,
+        CancellationToken cancellationToken = default)
     {
+        EndpointCommandTarget commandTarget = expectedTarget ?? CaptureCurrentEndpointCommandTarget();
         using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
@@ -1563,14 +1633,24 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 (session, token) => rules
                     ? session.Api.RefreshRuleProviderAsync(name, token)
                     : session.Api.RefreshProviderAsync(name, token),
-                cancellationToken);
+                commandTarget,
+                routeToRemote: true,
+                includeRulesAndProviders: true,
+                refreshScope: MutationRefreshScope.Full,
+                cancellationToken: cancellationToken);
         }
     }
 
     public void ClearLogs() => _logs.ClearLogs();
 
-    public async Task ClearFakeIpCacheAsync(CancellationToken cancellationToken = default)
+    public Task ClearFakeIpCacheAsync(CancellationToken cancellationToken = default) =>
+        ClearFakeIpCacheAsync(CaptureCurrentEndpointCommandTarget(), cancellationToken);
+
+    public async Task ClearFakeIpCacheAsync(
+        EndpointCommandTarget? expectedTarget,
+        CancellationToken cancellationToken = default)
     {
+        EndpointCommandTarget commandTarget = expectedTarget ?? CaptureCurrentEndpointCommandTarget();
         using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
@@ -1579,7 +1659,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 "远程 FakeIP 缓存清理结果无法确认，请重试。",
                 (api, _, token) => api.ClearFakeIpCacheAsync(token),
                 (session, token) => session.Api.ClearFakeIpCacheAsync(token),
-                cancellationToken);
+                commandTarget,
+                routeToRemote: true,
+                includeRulesAndProviders: true,
+                refreshScope: MutationRefreshScope.Full,
+                cancellationToken: cancellationToken);
         }
     }
 
@@ -2013,8 +2097,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
     }
 
-    public async Task ClearDnsCacheAsync(CancellationToken cancellationToken = default)
+    public Task ClearDnsCacheAsync(CancellationToken cancellationToken = default) =>
+        ClearDnsCacheAsync(CaptureCurrentEndpointCommandTarget(), cancellationToken);
+
+    public async Task ClearDnsCacheAsync(
+        EndpointCommandTarget? expectedTarget,
+        CancellationToken cancellationToken = default)
     {
+        EndpointCommandTarget commandTarget = expectedTarget ?? CaptureCurrentEndpointCommandTarget();
         using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
@@ -2023,12 +2113,22 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 "远程 DNS 缓存清理结果无法确认，请重试。",
                 (api, _, token) => api.ClearDnsCacheAsync(token),
                 (session, token) => session.Api.ClearDnsCacheAsync(token),
-                cancellationToken);
+                commandTarget,
+                routeToRemote: true,
+                includeRulesAndProviders: true,
+                refreshScope: MutationRefreshScope.Full,
+                cancellationToken: cancellationToken);
         }
     }
 
-    public async Task UpdateGeoAsync(CancellationToken cancellationToken = default)
+    public Task UpdateGeoAsync(CancellationToken cancellationToken = default) =>
+        UpdateGeoAsync(CaptureCurrentEndpointCommandTarget(), cancellationToken);
+
+    public async Task UpdateGeoAsync(
+        EndpointCommandTarget? expectedTarget,
+        CancellationToken cancellationToken = default)
     {
+        EndpointCommandTarget commandTarget = expectedTarget ?? CaptureCurrentEndpointCommandTarget();
         using (OperationGate.Lease operationLease = await _operationLock.AcquireSharedAsync(cancellationToken))
         {
             await ExecuteControllerMutationAndRefreshAsync(
@@ -2037,10 +2137,13 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 "远程 Geo 数据库更新结果无法确认，请重试。",
                 (api, _, token) => api.UpdateGeoAsync(token),
                 (session, token) => session.Api.UpdateGeoAsync(token),
-                cancellationToken);
+                commandTarget,
+                routeToRemote: true,
+                includeRulesAndProviders: true,
+                refreshScope: MutationRefreshScope.Full,
+                cancellationToken: cancellationToken);
         }
     }
-
     public async Task<string> InstallCoreUpdateAsync(CoreUpdateManifest manifest, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(manifest);
@@ -3180,7 +3283,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         CancellationToken cancellationToken) =>
         _endpointCatalog.ResolveRecordAsync(endpointId, cancellationToken);
 
-    private CoreBindingEpochs CaptureCoreBindingEpochs() => new(
+    private EndpointCommandTarget CaptureCurrentEndpointCommandTarget()
+    {
+        EndpointSessionStatusEventArgs status = _endpointSessions.Status;
+        return status.Endpoint.Kind == EndpointKind.Remote
+            ? new EndpointCommandTarget(status.Endpoint.Id, status.Generation)
+            : CaptureLocalEndpointCommandTarget();
+    }
+
+    private EndpointCommandTarget CaptureLocalEndpointCommandTarget() =>
+        new(EndpointId.Local, ControllerGeneration);
+
+private CoreBindingEpochs CaptureCoreBindingEpochs() => new(
         Volatile.Read(ref _coreLifecycleEpoch),
         _processManager.Generation,
         ControllerGeneration);
@@ -3201,20 +3315,45 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         string remoteRefreshFailureMessage,
         Func<MihomoApiClient, long, CancellationToken, Task> localOperation,
         Func<EndpointSession, CancellationToken, Task> remoteOperation,
-        CancellationToken cancellationToken,
-        bool routeToRemote = true,
-        bool includeRulesAndProviders = true,
-        MutationRefreshScope refreshScope = MutationRefreshScope.Full)
+        EndpointCommandTarget expectedTarget,
+        bool routeToRemote,
+        bool includeRulesAndProviders,
+        MutationRefreshScope refreshScope,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(localOperation);
         ArgumentNullException.ThrowIfNull(remoteOperation);
 
-        EndpointSession? remoteSession = routeToRemote
-            ? _remoteRefresh.CaptureActiveRemoteSession(command, staleSessionMessage)
-            : null;
-        if (remoteSession is not null)
+if (expectedTarget.EndpointId == EndpointId.Local)
         {
+            if (expectedTarget.Generation != ControllerGeneration
+                || (routeToRemote && _endpointSessions.Status.Endpoint.Kind == EndpointKind.Remote))
+            {
+                throw new InvalidOperationException(staleSessionMessage);
+            }
+
+}
+        else
+        {
+            EndpointSessionStatusEventArgs activeStatus = _endpointSessions.Status;
+            if (!routeToRemote
+                || activeStatus.Endpoint.Kind != EndpointKind.Remote
+                || activeStatus.Endpoint.Id != expectedTarget.EndpointId
+                || activeStatus.Generation != expectedTarget.Generation)
+            {
+                throw new InvalidOperationException(staleSessionMessage);
+            }
+
+            EndpointSession? remoteSession = _remoteRefresh.CaptureActiveRemoteSession(command, staleSessionMessage);
             EndpointSessionStatusEventArgs remoteStatus = _endpointSessions.Status;
+            if (remoteSession is null
+                || remoteSession.Endpoint.Id != expectedTarget.EndpointId
+                || remoteSession.Generation != expectedTarget.Generation
+                || !_remoteRefresh.IsCurrentRemoteSession(remoteSession, remoteStatus))
+            {
+                throw new InvalidOperationException(staleSessionMessage);
+            }
+
             await remoteOperation(remoteSession, cancellationToken).ConfigureAwait(false);
             if (!_remoteRefresh.IsCurrentRemoteSession(remoteSession, remoteStatus))
             {
@@ -3245,6 +3384,11 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
 
         (MihomoApiClient api, long generation) = CaptureControllerSession();
+        if (expectedTarget.EndpointId != EndpointId.Local || expectedTarget.Generation != generation)
+        {
+            throw new InvalidOperationException(staleSessionMessage);
+        }
+
         EnsureControllerCommand(api, generation, command, staleSessionMessage);
         await localOperation(api, generation, cancellationToken).ConfigureAwait(false);
         EnsureControllerSession(api, generation, staleSessionMessage);

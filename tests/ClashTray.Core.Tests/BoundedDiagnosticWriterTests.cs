@@ -44,6 +44,46 @@ public sealed class BoundedDiagnosticWriterTests
     }
 
     [TestMethod]
+    public void TruncationInsideSensitiveValuesNeverWritesTheirVisiblePrefixes()
+    {
+        string root = CreateRoot();
+        const string marker = "SYNTHETIC_CREDENTIAL_MARKER_MUST_NEVER_REACH_DISK";
+        string prefix = new string('x', 512 - 32);
+        string[] messages =
+        [
+            prefix + " https://user:" + marker + new string('p', 2048) + "@subscription.invalid/config",
+            prefix + " Authorization: Bearer " + marker,
+            prefix + "?token=" + marker
+        ];
+        try
+        {
+            foreach (string message in messages)
+            {
+                Assert.IsTrue(BoundedDiagnosticWriter.TryWriteException(root, new InvalidOperationException(message)));
+            }
+
+            string content = string.Join(
+                Environment.NewLine,
+                Directory.EnumerateFiles(root, "startup-error-*.log")
+                    .Select(File.ReadAllText));
+
+            Assert.IsFalse(content.Contains("SYNTHETIC_", StringComparison.Ordinal));
+            Assert.IsTrue(content.Length <= BoundedDiagnosticWriter.MaximumFileCount * BoundedDiagnosticWriter.MaximumFileBytes);
+            foreach (string file in Directory.EnumerateFiles(root, "startup-error-*.log"))
+            {
+                foreach (string line in File.ReadAllLines(file))
+                {
+                    Assert.IsTrue(Encoding.UTF8.GetByteCount(line) + 1 <= BoundedDiagnosticWriter.MaximumRecordBytes);
+                }
+            }
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
     public void NestedAndUnicodeExceptionsAreSingleLineAndWithinEncodedRecordLimit()
     {
         string root = CreateRoot();

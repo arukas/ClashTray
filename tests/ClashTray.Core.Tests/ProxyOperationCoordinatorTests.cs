@@ -30,11 +30,11 @@ public sealed class ProxyOperationCoordinatorTests
         using SemaphoreSlim entered = new(0);
         using SemaphoreSlim blocker = new(0);
         int executions = 0;
-        ControllerMutationExecutor executor = async (_, _, _, _, _, _, _, _, _) =>
+        ControllerMutationExecutor executor = async (_, _, _, _, _, _, _, _, _, cancellationToken) =>
         {
             Interlocked.Increment(ref executions);
             entered.Release();
-            await blocker.WaitAsync();
+            await blocker.WaitAsync(cancellationToken);
         };
         ProxyOperationCoordinator coordinator = CreateCoordinator(store, gate, executor);
 
@@ -94,10 +94,10 @@ public sealed class ProxyOperationCoordinatorTests
         using OperationGate gate = new();
         using SemaphoreSlim entered = new(0);
         using SemaphoreSlim blocker = new(0);
-        ControllerMutationExecutor executor = async (_, _, _, _, _, _, _, _, _) =>
+        ControllerMutationExecutor executor = async (_, _, _, _, _, _, _, _, _, cancellationToken) =>
         {
             entered.Release();
-            await blocker.WaitAsync();
+            await blocker.WaitAsync(cancellationToken);
         };
         ProxyOperationCoordinator coordinator = CreateCoordinator(store, gate, executor);
 
@@ -120,7 +120,7 @@ public sealed class ProxyOperationCoordinatorTests
     }
 
     private static readonly ControllerMutationExecutor NeverExecute =
-        static (_, _, _, _, _, _, _, _, _) => throw new NotSupportedException();
+        static (_, _, _, _, _, _, _, _, _, _) => throw new NotSupportedException();
 
     private ProxyOperationCoordinator CreateCoordinator(
         RuntimeStateStore store,

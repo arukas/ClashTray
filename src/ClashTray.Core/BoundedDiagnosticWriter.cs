@@ -18,6 +18,7 @@ public static class BoundedDiagnosticWriter
     private const int MaximumStackFrames = 6;
     private const int MaximumTypeCharacters = 160;
     private const int MaximumMessageCharacters = 512;
+    private const int SanitizerLookaheadCharacters = 256;
     private const int MaximumStackFrameCharacters = 256;
     private const int MaximumVersionCharacters = 64;
     private const int MaximumDiagnosticTextBytes = MaximumRecordBytes - 4;
@@ -110,14 +111,14 @@ public static class BoundedDiagnosticWriter
             string type = current.GetType().FullName ?? current.GetType().Name;
             AppendBudgeted(
                 record,
-                ToSingleLine(ErrorSanitizer.Sanitize(LimitCharacters(type, MaximumTypeCharacters))),
+                ToSingleLine(SanitizeBounded(type, MaximumTypeCharacters)),
                 ref formattedBytes,
                 ref truncated);
             AppendBudgeted(record, ": ", ref formattedBytes, ref truncated);
-            string message = LimitCharacters(current.Message, MaximumMessageCharacters);
+            string message = current.Message;
             AppendBudgeted(
                 record,
-                ToSingleLine(ErrorSanitizer.Sanitize(message)),
+                ToSingleLine(SanitizeBounded(message, MaximumMessageCharacters)),
                 ref formattedBytes,
                 ref truncated);
             detailCount++;
@@ -177,13 +178,11 @@ public static class BoundedDiagnosticWriter
             }
 
             string declaringType = method.DeclaringType?.FullName ?? method.Module.Name;
-            string location = LimitCharacters(
-                $"{declaringType}.{method.Name}",
-                MaximumStackFrameCharacters);
+            string location = $"{declaringType}.{method.Name}";
             AppendBudgeted(record, index == 0 ? " | at " : " <- ", ref formattedBytes, ref truncated);
             AppendBudgeted(
                 record,
-                ToSingleLine(ErrorSanitizer.Sanitize(location)),
+                ToSingleLine(SanitizeBounded(location, MaximumStackFrameCharacters)),
                 ref formattedBytes,
                 ref truncated);
         }
@@ -197,6 +196,54 @@ public static class BoundedDiagnosticWriter
             ?? typeof(BoundedDiagnosticWriter).Assembly.GetName().Version?.ToString()
             ?? "unknown";
         return LimitCharacters(version, MaximumVersionCharacters);
+    }
+
+    private static string SanitizeBounded(string value, int maximumCharacters)
+    {
+        int scanLimit = Math.Min(value.Length, maximumCharacters + SanitizerLookaheadCharacters);
+        string bounded = value[..scanLimit];
+        int schemeIndex = FindHttpScheme(bounded, maximumCharacters);
+        if (schemeIndex >= 0)
+        {
+            int authorityStart = bounded.IndexOf("://", schemeIndex, StringComparison.Ordinal) + 3;
+            int authorityEnd = FindAuthorityEnd(bounded, authorityStart);
+            int visibleEnd = authorityEnd < 0 ? bounded.Length : authorityEnd;
+            bool hasUserInfoSeparator = visibleEnd > authorityStart
+                && bounded.IndexOf('@', authorityStart, visibleEnd - authorityStart) >= 0;
+            bool authorityCrossesOutputBoundary = visibleEnd > maximumCharacters;
+            bool authorityMayContinuePastScanWindow = authorityEnd < 0 && value.Length > scanLimit;
+            if (!hasUserInfoSeparator
+                && (authorityCrossesOutputBoundary || authorityMayContinuePastScanWindow))
+            {
+                bounded = bounded[..authorityStart] + "[已隐藏]";
+            }
+        }
+
+        string sanitized = ErrorSanitizer.Sanitize(bounded);
+        return LimitCharacters(sanitized, maximumCharacters);
+    }
+
+    private static int FindHttpScheme(string value, int maximumCharacters)
+    {
+        int http = value.IndexOf("http://", StringComparison.OrdinalIgnoreCase);
+        int https = value.IndexOf("https://", StringComparison.OrdinalIgnoreCase);
+        int result = http < 0 ? https : https < 0 ? http : Math.Min(http, https);
+        return result >= 0 && result < maximumCharacters ? result : -1;
+    }
+
+    private static int FindAuthorityEnd(string value, int authorityStart)
+    {
+        for (int index = authorityStart; index < value.Length; index++)
+        {
+            char current = value[index];
+            if (current is '/' or '?' or '#' or '\\' or '"' or '\'' or '<' or '>'
+                || char.IsWhiteSpace(current))
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     private static string LimitCharacters(string value, int maximumCharacters) =>
