@@ -54,6 +54,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly ControllerSessionGuard _controllerGuard;
     private readonly RuntimeDataRefreshCoordinator _dataRefresh;
     private readonly ProxyOperationCoordinator _proxyOps;
+    private readonly SubscriptionRefreshCoordinator _subscriptionRefresh;
     private readonly Func<MihomoApiClient>? _controllerApiFactory;
     private bool _usingServiceCore;
     private long _confirmedCoreLifecycleEpoch = long.MinValue;
@@ -215,6 +216,17 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             _runtimeCts.Token,
             CaptureCurrentEndpointCommandTarget,
             CaptureLocalEndpointCommandTarget);
+        _subscriptionRefresh = new SubscriptionRefreshCoordinator(
+            _configurationStore,
+            _configurationSwitchOperations,
+            _configurationSwitchJournalStore,
+            _logs,
+            _stateStore,
+            () => _settings,
+            UpdateSubscriptionState,
+            ExecuteConfigurationSwitchAsync,
+            cancellation => RefreshConfigurationSnapshotAsync(cancellation),
+            Publish);
         _endpointSessions.StatusChanged += _remoteRefresh.HandleSessionStatusChanged;
         _processManager.StateChanged += OnProcessStateChanged;
         _processManager.LogLineReceived += _logs.OnProcessLogLine;
@@ -952,174 +964,14 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         await _subscriptionOperationLock.WaitAsync(cancellationToken);
         try
         {
-            await RefreshSubscriptionCoreAsync(profile, cancellationToken);
+            using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
+            {
+                await _subscriptionRefresh.RefreshCoreLockedAsync(profile, operationLease, cancellationToken);
+            }
         }
         finally
         {
             _subscriptionOperationLock.Release();
-        }
-    }
-
-    private async Task RefreshSubscriptionCoreAsync(ConfigurationProfile profile, CancellationToken cancellationToken)
-    {
-        using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
-        {
-            await RefreshSubscriptionCoreLockedAsync(profile, operationLease, cancellationToken);
-        }
-    }
-
-    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Subscription refresh runs unattended; every failure is converted into a typed per-profile result and state update.")]
-    private async Task RefreshSubscriptionCoreLockedAsync(
-        ConfigurationProfile profile,
-        OperationGate.Lease operationLease,
-        CancellationToken cancellationToken)
-    {
-        if (profile.SubscriptionUri is null)
-        {
-            return;
-        }
-
-        bool shouldRemainActive = profile.IsActive
-            || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
-        bool activeSelectionChanged = !string.Equals(
-            _settings.ActiveConfigurationId,
-            profile.Id,
-            StringComparison.OrdinalIgnoreCase);
-        ConfigurationProfileBackup? contentBackup = null;
-        ConfigurationSwitchRuntimeState? previousState = null;
-        Guid operationId = Guid.NewGuid();
-        Guid? persistentBackupId = null;
-        bool contentChanged = false;
-        bool switchCommitted = false;
-        UpdateSubscriptionState(SubscriptionState.Downloading, null);
-        try
-        {
-            if (shouldRemainActive)
-            {
-                previousState = await _configurationSwitchOperations.CaptureStateAsync(cancellationToken);
-                contentBackup = await _configurationStore.CaptureBackupAsync(profile, cancellationToken);
-                persistentBackupId = Guid.NewGuid();
-                await _configurationStore.SavePersistentBackupAsync(
-                    persistentBackupId.Value,
-                    profile,
-                    contentBackup,
-                    cancellationToken);
-                ConfigurationSwitchJournal preparedJournal = ConfigurationSwitchJournal.Create(
-                    operationId,
-                    ConfigurationSwitchSource.SubscriptionRefresh,
-                    previousState.ActiveConfigurationId,
-                    profile.Id,
-                    previousState.CoreWasRunning,
-                    previousState.SystemProxyPreference,
-                    previousState.SystemProxyState,
-                    previousState.TunPreference,
-                    previousState.TunState,
-                    previousState.ControllerGeneration)
-                    .WithContentBackup(persistentBackupId);
-                await _configurationSwitchJournalStore.SaveAsync(preparedJournal, cancellationToken);
-            }
-
-            UpdateSubscriptionState(SubscriptionState.Validating, null);
-            ConfigurationImportResult update = await _configurationStore.ImportSubscriptionWithResultAsync(
-                profile.SubscriptionUri,
-                profile.Name,
-                cancellationToken);
-            contentChanged = update.ContentChanged;
-            UpdateSubscriptionState(SubscriptionState.Applying, null);
-            if (shouldRemainActive)
-            {
-                ConfigurationSwitchRequest request = new(
-                    operationId,
-                    ConfigurationSwitchSource.SubscriptionRefresh,
-                    profile.Id,
-                    RestartCore: update.ContentChanged || activeSelectionChanged,
-                    ForceApply: update.ContentChanged);
-                ConfigurationSwitchResult result = await ExecuteConfigurationSwitchAsync(
-                    request,
-                    operationLease,
-                    cancellationToken);
-                switchCommitted = result.Outcome is
-                    ConfigurationSwitchOutcome.NoOp
-                    or ConfigurationSwitchOutcome.Committed;
-                if (switchCommitted)
-                {
-                    Guid backupId = persistentBackupId
-                        ?? throw new InvalidOperationException("订阅备份标识丢失。");
-                    await ClearConfigurationSwitchArtifactsAsync(operationId, backupId);
-                    persistentBackupId = null;
-                }
-                if (result.Outcome == ConfigurationSwitchOutcome.NoOp)
-                {
-                    await RefreshConfigurationSnapshotAsync(cancellationToken);
-                }
-            }
-            else
-            {
-                await RefreshConfigurationSnapshotAsync(cancellationToken);
-            }
-
-            if (shouldRemainActive && !update.ContentChanged && !activeSelectionChanged)
-            {
-                _logs.AddApplicationLog(new LogEntry(
-                    DateTimeOffset.UtcNow,
-                    "ClashTray",
-                    "info",
-                    "订阅内容 SHA-256 未变化，已跳过 Mihomo 重启。"));
-                _stateStore.Update(snapshot => snapshot with { Logs = _logs.Snapshot() });
-                Publish();
-            }
-
-            UpdateSubscriptionState(SubscriptionState.Succeeded, null);
-        }
-        catch (Exception exception)
-        {
-            Exception finalException = exception;
-            if (persistentBackupId is Guid backupId && !switchCommitted)
-            {
-                try
-                {
-                    if (contentBackup is not null && contentChanged)
-                    {
-                        await ConfigurationStore.RestoreBackupAsync(contentBackup, CancellationToken.None);
-                        await RefreshConfigurationSnapshotAsync(CancellationToken.None);
-                    }
-
-                    ConfigurationSwitchJournalLoadResult currentJournal =
-                        await _configurationSwitchJournalStore.LoadAsync(CancellationToken.None);
-                    bool keepRecoveryJournal = currentJournal.Journal is { } journal
-                        && journal.OperationId == operationId
-                        && journal.Stage == ConfigurationSwitchStage.RollbackFailed;
-                    if (!keepRecoveryJournal)
-                    {
-                        await ClearConfigurationSwitchArtifactsAsync(operationId, backupId);
-                        persistentBackupId = null;
-                    }
-                }
-                catch (Exception restoreException)
-                {
-                    Exception recoveryException = restoreException;
-                    try
-                    {
-                        await EnsureRecoveryJournalAsync(
-                            operationId,
-                            profile,
-                            previousState,
-                            backupId);
-                    }
-                    catch (Exception journalException)
-                    {
-                        recoveryException = new AggregateException(
-                            restoreException,
-                            journalException);
-                    }
-                    finalException = new InvalidOperationException(
-                        "订阅切换失败，且旧配置文件恢复失败。",
-                        new AggregateException(exception, recoveryException));
-                }
-            }
-
-            UpdateSubscriptionState(SubscriptionState.Failed, ErrorSanitizer.Sanitize(finalException));
-            throw finalException;
         }
     }
 
@@ -1343,20 +1195,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         return message;
     }
 
-    private async Task ClearConfigurationSwitchArtifactsAsync(
-        Guid operationId,
-        Guid backupId)
-    {
-        ConfigurationSwitchJournalLoadResult currentJournal =
-            await _configurationSwitchJournalStore.LoadAsync(CancellationToken.None);
-        if (currentJournal.Journal is null || currentJournal.Journal.OperationId == operationId)
-        {
-            await _configurationSwitchJournalStore.ClearAsync();
-        }
-
-        await _configurationStore.ClearPersistentBackupAsync(backupId);
-    }
-
     private async Task ClearRecoveredConfigurationSwitchArtifactsAsync(
         ConfigurationSwitchJournal journal)
     {
@@ -1365,41 +1203,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         {
             await _configurationStore.ClearPersistentBackupAsync(backupId);
         }
-    }
-
-    private async Task EnsureRecoveryJournalAsync(
-        Guid operationId,
-        ConfigurationProfile profile,
-        ConfigurationSwitchRuntimeState? previousState,
-        Guid backupId)
-    {
-        if (previousState is null)
-        {
-            return;
-        }
-
-        ConfigurationSwitchJournalLoadResult currentJournal =
-            await _configurationSwitchJournalStore.LoadAsync(CancellationToken.None);
-        if (currentJournal.Journal is { } existingJournal
-            && existingJournal.OperationId != operationId)
-        {
-            return;
-        }
-
-        ConfigurationSwitchJournal journal = currentJournal.Journal ?? ConfigurationSwitchJournal.Create(
-            operationId,
-            ConfigurationSwitchSource.SubscriptionRefresh,
-            previousState.ActiveConfigurationId,
-            profile.Id,
-            previousState.CoreWasRunning,
-            previousState.SystemProxyPreference,
-            previousState.SystemProxyState,
-            previousState.TunPreference,
-            previousState.TunState,
-            previousState.ControllerGeneration);
-        await _configurationSwitchJournalStore.SaveAsync(
-            journal.WithContentBackup(backupId).WithStage(ConfigurationSwitchStage.RollbackFailed),
-            CancellationToken.None);
     }
 
     private async Task<bool> RecoverCoreFromJournalAsync(
