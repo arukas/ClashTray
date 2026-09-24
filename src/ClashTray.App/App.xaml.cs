@@ -55,19 +55,7 @@ public partial class App : Application, IAsyncDisposable
             });
         UnhandledException += (_, e) =>
         {
-#if DEBUG
-            string directory = _smokeDirectory
-                ?? Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "ClashTray",
-                    "logs");
-#else
-            string directory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "ClashTray",
-                "logs");
-#endif
-            BoundedDiagnosticWriter.TryWriteException(directory, e.Exception);
+            BoundedDiagnosticWriter.TryWriteException(GetDiagnosticDirectory(), e.Exception);
         };
 
         // Set the Windows App SDK language override after the Application object
@@ -174,6 +162,40 @@ public partial class App : Application, IAsyncDisposable
         return completion.Task;
     }
     public Task RequestQuitAsync() => _shutdownCoordinator.RequestQuitAsync();
+
+    internal async Task RequestQuitEnsuringExitAsync()
+    {
+        try
+        {
+            await _shutdownCoordinator.RequestQuitAsync();
+        }
+        catch (Exception exception)
+        {
+            // The quit pipeline failed before reaching the exit action (for example
+            // the dispatcher is already gone). An explicit quit must never leave the
+            // process running: rerun the idempotent cleanup, then exit directly.
+            BoundedDiagnosticWriter.TryWriteException(GetDiagnosticDirectory(), exception);
+            await DisposeForQuitAsync();
+            Environment.Exit(_shutdownResult?.IsFullyClean == true ? 0 : 2);
+        }
+    }
+
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "The DEBUG build reads the instance smoke-test directory; Release uses the shared log directory.")]
+    private string GetDiagnosticDirectory()
+    {
+#if DEBUG
+        return _smokeDirectory
+            ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "ClashTray",
+                "logs");
+#else
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ClashTray",
+            "logs");
+#endif
+    }
 
     private async Task DisposeForQuitAsync()
     {
@@ -396,7 +418,7 @@ public partial class App : Application, IAsyncDisposable
                     _ = SetLocalModeFromTrayAsync(ProxyMode.Direct);
                     break;
                 case 1009:
-                    _ = RequestQuitAsync();
+                    _ = RequestQuitEnsuringExitAsync();
                     break;
             }
         });

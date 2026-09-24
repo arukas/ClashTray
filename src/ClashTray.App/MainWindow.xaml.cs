@@ -434,18 +434,18 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        FileOpenPicker picker = new FileOpenPicker();
-        picker.FileTypeFilter.Add(".yaml");
-        picker.FileTypeFilter.Add(".yml");
-        InitializeWithWindow.Initialize(picker, _windowHandle);
-        StorageFile file = await picker.PickSingleFileAsync();
-        if (file is null)
-        {
-            return;
-        }
-
         try
         {
+            FileOpenPicker picker = new FileOpenPicker();
+            picker.FileTypeFilter.Add(".yaml");
+            picker.FileTypeFilter.Add(".yml");
+            InitializeWithWindow.Initialize(picker, _windowHandle);
+            StorageFile file = await picker.PickSingleFileAsync();
+            if (file is null)
+            {
+                return;
+            }
+
             await _runtime.ImportLocalConfigurationAsync(file.Path);
         }
         catch (Exception exception)
@@ -461,27 +461,27 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        TextBox urlBox = new TextBox { PlaceholderText = "https://example.com/mihomo.yaml", MinWidth = 320 };
-        TextBox nameBox = new TextBox { PlaceholderText = LocalizationService.Get("DialogOptionalNamePlaceholder"), Margin = new Thickness(0, 8, 0, 0) };
-        StackPanel content = new StackPanel { Children = { new TextBlock { Text = LocalizationService.Get("DialogSubscriptionUrlLabel") }, urlBox, nameBox } };
-        ContentDialog dialog = new ContentDialog
-        {
-            Title = LocalizationService.Get("DialogAddSubscriptionTitle"),
-            Content = content,
-            PrimaryButtonText = LocalizationService.Get("DialogAdd"),
-            CloseButtonText = LocalizationService.Get("DialogCancel"),
-            XamlRoot = RootGrid.XamlRoot
-        };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary
-            || !Uri.TryCreate(urlBox.Text.Trim(), UriKind.Absolute, out Uri? uri)
-            || uri is null
-            || uri.Scheme is not ("http" or "https"))
-        {
-            return;
-        }
-
         try
         {
+            TextBox urlBox = new TextBox { PlaceholderText = "https://example.com/mihomo.yaml", MinWidth = 320 };
+            TextBox nameBox = new TextBox { PlaceholderText = LocalizationService.Get("DialogOptionalNamePlaceholder"), Margin = new Thickness(0, 8, 0, 0) };
+            StackPanel content = new StackPanel { Children = { new TextBlock { Text = LocalizationService.Get("DialogSubscriptionUrlLabel") }, urlBox, nameBox } };
+            ContentDialog dialog = new ContentDialog
+            {
+                Title = LocalizationService.Get("DialogAddSubscriptionTitle"),
+                Content = content,
+                PrimaryButtonText = LocalizationService.Get("DialogAdd"),
+                CloseButtonText = LocalizationService.Get("DialogCancel"),
+                XamlRoot = RootGrid.XamlRoot
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary
+                || !Uri.TryCreate(urlBox.Text.Trim(), UriKind.Absolute, out Uri? uri)
+                || uri is null
+                || uri.Scheme is not ("http" or "https"))
+            {
+                return;
+            }
+
             await _runtime.ImportSubscriptionAsync(uri, string.IsNullOrWhiteSpace(nameBox.Text) ? null : nameBox.Text.Trim());
         }
         catch (Exception exception)
@@ -641,24 +641,24 @@ public sealed partial class MainWindow : Window
         ConfigurationProfile? selected = GetSelectedConfiguration();
         if (selected is not null && _runtime is not null)
         {
-            ContentDialog dialog = new ContentDialog
-            {
-                Title = LocalizationService.Get("DialogDeleteConfigTitle"),
-                Content = selected.IsActive
-                    ? LocalizationService.Format("DialogDeleteConfigActiveFormat", selected.Name)
-                    : LocalizationService.Format("DialogDeleteConfigFormat", selected.Name),
-                PrimaryButtonText = LocalizationService.Get("DialogDelete"),
-                CloseButtonText = LocalizationService.Get("DialogCancel"),
-                DefaultButton = ContentDialogButton.Close,
-                XamlRoot = RootGrid.XamlRoot
-            };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
-            {
-                return;
-            }
-
             try
             {
+                ContentDialog dialog = new ContentDialog
+                {
+                    Title = LocalizationService.Get("DialogDeleteConfigTitle"),
+                    Content = selected.IsActive
+                        ? LocalizationService.Format("DialogDeleteConfigActiveFormat", selected.Name)
+                        : LocalizationService.Format("DialogDeleteConfigFormat", selected.Name),
+                    PrimaryButtonText = LocalizationService.Get("DialogDelete"),
+                    CloseButtonText = LocalizationService.Get("DialogCancel"),
+                    DefaultButton = ContentDialogButton.Close,
+                    XamlRoot = RootGrid.XamlRoot
+                };
+                if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+                {
+                    return;
+                }
+
                 await _runtime.DeleteConfigurationAsync(selected);
             }
             catch (Exception exception)
@@ -711,7 +711,7 @@ public sealed partial class MainWindow : Window
 
     private void SettingsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_settingsPage, PanelPage.Settings);
 
-    private async void QuitButton_Click(object sender, RoutedEventArgs e) => await _app.RequestQuitAsync();
+    private async void QuitButton_Click(object sender, RoutedEventArgs e) => await _app.RequestQuitEnsuringExitAsync();
 
     private void CopyEndpointButton_Click(object sender, RoutedEventArgs e)
     {
@@ -732,20 +732,27 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        Uri controllerUri = new Uri($"http://127.0.0.1:{_runtime.Settings.ControllerPort}/");
-        if (!_runtime.DashboardAvailable)
+        try
         {
-            DataPackage package = new DataPackage();
-            package.SetText(controllerUri.ToString());
-            Clipboard.SetContent(package);
-            ShowMessage(LocalizationService.Get("MessageDashboardMissingCopied"), InfoBarSeverity.Informational);
-            return;
-        }
+            Uri controllerUri = new Uri($"http://127.0.0.1:{_runtime.Settings.ControllerPort}/");
+            if (!_runtime.DashboardAvailable)
+            {
+                DataPackage package = new DataPackage();
+                package.SetText(controllerUri.ToString());
+                Clipboard.SetContent(package);
+                ShowMessage(LocalizationService.Get("MessageDashboardMissingCopied"), InfoBarSeverity.Informational);
+                return;
+            }
 
-        Uri dashboardUri = new Uri(controllerUri, "ui/");
-        if (!await Launcher.LaunchUriAsync(dashboardUri))
+            Uri dashboardUri = new Uri(controllerUri, "ui/");
+            if (!await Launcher.LaunchUriAsync(dashboardUri))
+            {
+                ShowError(LocalizationService.Get("ErrorOpenDashboard"));
+            }
+        }
+        catch (Exception exception)
         {
-            ShowError(LocalizationService.Get("ErrorOpenDashboard"));
+            ShowError(exception.Message);
         }
     }
 

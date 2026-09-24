@@ -470,7 +470,19 @@ public sealed partial class SettingsPage : UserControl
                 PrimaryButtonText = LocalizationService.Get("NetworkSwitchEnableConfirmPrimary"),
                 CloseButtonText = LocalizationService.Get("DialogCancel")
             };
-            if (await confirmation.ShowAsync() != ContentDialogResult.Primary)
+            ContentDialogResult confirmationResult;
+            try
+            {
+                confirmationResult = await confirmation.ShowAsync();
+            }
+            catch (Exception exception)
+            {
+                NetworkSwitchEnabledSwitch.IsOn = current.AutomaticSwitchingEnabled;
+                NetworkSwitchStateText.Text = ErrorSanitizer.Sanitize(exception);
+                return;
+            }
+
+            if (confirmationResult != ContentDialogResult.Primary)
             {
                 NetworkSwitchEnabledSwitch.IsOn = current.AutomaticSwitchingEnabled;
                 return;
