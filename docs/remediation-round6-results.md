@@ -59,7 +59,7 @@ Runtime 在等待 operation lock 前验证 manifest，因而无效更新不会�
 - Release x64 Integration：32/32 passed，0 skipped；设置 `CLASHTRAY_MIHOMO_REQUIRED=true`，并显式提供固定 Mihomo 可执行文件和官方 ZIP 路径。
 - `packaging/Test-OfficialMihomo.ps1 -Configuration Release -ExistingArchivePath <已校验官方 ZIP>`：官方类别 5/5 passed，0 skipped；固定版本 `v1.19.31`，脚本重新校验 ZIP SHA。该门禁执行官方 config/controller/service 与 updater 集成用例。
 - H1/H2 旧实现失败用例、修复后定向用例，以及 H3 官方归档用例均已实际执行；合成 secret 只用于测试。
-- 未修改 CI/Release workflow 文件。上述是本地 Release 测试和本地官方脚本证据；GitHub Actions / Release 的远端运行状态在本记录写入时尚未确认。
+- 未修改 CI/Release workflow 文件。GitHub master CI 在提交 `6e962a0800c47e17ce199bd0d3e33de274100999` 上成功：[CI run 35997310019](https://github.com/arukas/ClashTray/actions/runs/35997310019)。Release workflow 亦完成：[Release run 35997781733](https://github.com/arukas/ClashTray/actions/runs/35997781733)。
 
 ## 验收层级与剩余工作
 
@@ -67,4 +67,6 @@ Runtime 在等待 operation lock 前验证 manifest，因而无效更新不会�
 - **自动化验证：** Release x64 build、Core、Integration 和本地固定官方 Mihomo 强制门禁通过。
 - **隔离 UI 验证：** 本轮没有启动 WinUI UI smoke；行为通过 Runtime/服务边界自动化覆盖。
 - **真实系统验收：** 未执行。没有安装服务、触碰真实 Mihomo 安装、System Proxy、TUN、代理流量或真实用户配置。
-- **远端验证：** 当前尚未推送，远端 CI 和 alpha Release 尚未运行；在按追加请求推送后，应以 Actions 结果及 GitHub Release 状态更新本记录。
+- **远端验证：** `master` 已推送。GitHub CI 的 Release 构建与测试工作流成功；release tag 上的固定官方 Mihomo 门禁及 Release 全套测试、安装包步骤均成功。
+
+- **alpha 发布：** `v0.3.3-alpha.7` 指向经 CI 验证的代码提交 `6e962a0`，GitHub Release 已发布为 prerelease：[ClashTray v0.3.3-alpha.7](https://github.com/arukas/ClashTray/releases/tag/v0.3.3-alpha.7)。包含 Full 与 NoCET x64 安装程序、SHA-256 文件、固定 Mihomo 源归档、release manifest 和 `SHA256SUMS.txt`。本交付记录随后以独立文档提交补记远端结果，alpha tag 的产品代码与该提交相同。
