@@ -276,6 +276,47 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task PublishDoesNotHoldGateWhileInvokingSubscribers()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
+        TaskCompletionSource<bool> firstHandlerEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim releaseHandler = new();
+        int invocations = 0;
+
+        try
+        {
+            runtime.SnapshotChanged += (_, _) =>
+            {
+                if (Interlocked.Increment(ref invocations) == 1)
+                {
+                    firstHandlerEntered.TrySetResult(true);
+                    releaseHandler.Wait();
+                }
+            };
+
+            Task first = Task.Run(() => runtime.ClearLogs());
+            await firstHandlerEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            // The first subscriber is still blocked; a concurrent publish must not
+            // wait on it. Pre-fix this second publish deadlocked on _publishGate.
+            await Task.Run(() => runtime.ClearLogs()).WaitAsync(TimeSpan.FromSeconds(10));
+
+            releaseHandler.Set();
+            await first.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            releaseHandler.Set();
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task UnchangedControllerDataReusesListSnapshots()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));

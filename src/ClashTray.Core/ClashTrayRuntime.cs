@@ -4061,21 +4061,35 @@ if (expectedTarget.EndpointId == EndpointId.Local)
 
     private void Publish()
     {
+        RuntimeSnapshot snapshot;
+        AppSnapshot appSnapshot;
+        EventHandler<RuntimeSnapshot>? snapshotChanged;
+        EventHandler<AppSnapshot>? appSnapshotChanged;
         lock (_publishGate)
         {
-            RuntimeSnapshot snapshot = Snapshot;
-            SnapshotChanged?.Invoke(this, snapshot);
-            AppSnapshotChanged?.Invoke(this, ComposeAppSnapshot(snapshot));
+            snapshot = Snapshot;
+            appSnapshot = ComposeAppSnapshot(snapshot);
+            snapshotChanged = SnapshotChanged;
+            appSnapshotChanged = AppSnapshotChanged;
         }
+
+        // Subscriber callbacks run outside the gate: a slow or re-entrant
+        // subscriber must not extend the critical section for other publishers.
+        snapshotChanged?.Invoke(this, snapshot);
+        appSnapshotChanged?.Invoke(this, appSnapshot);
     }
 
     private void PublishAppSnapshot()
     {
+        AppSnapshot appSnapshot;
+        EventHandler<AppSnapshot>? appSnapshotChanged;
         lock (_publishGate)
         {
-            RuntimeSnapshot snapshot = Snapshot;
-            AppSnapshotChanged?.Invoke(this, ComposeAppSnapshot(snapshot));
+            appSnapshot = ComposeAppSnapshot(Snapshot);
+            appSnapshotChanged = AppSnapshotChanged;
         }
+
+        appSnapshotChanged?.Invoke(this, appSnapshot);
     }
 
     private AppSnapshot ComposeAppSnapshot(RuntimeSnapshot snapshot) => AppSnapshotComposer.Compose(
