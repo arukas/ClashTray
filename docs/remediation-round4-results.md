@@ -75,6 +75,14 @@
 - 根因是 solution 的 x64 配置将 IntegrationTests 映射为 Any CPU，并将程序集输出到 `bin/Release`；门禁直接测试 csproj 时又传入 `Platform=x64`，`--no-build` 因而查找不存在的 `bin/x64/Release` 路径。
 - `packaging/Test-OfficialMihomo.ps1` 已移除这项与 solution 配置不一致的项目级 Platform 覆盖。本地 PowerShell 7 使用相同发布配置重跑，归档校验通过，官方测试 4/4 通过、0 跳过。
 - 修正提交 `b370c8b` 的 CI run `35971526286` 和 Release run `35972161818` 均成功；Release 强制 Mihomo 门禁 4/4、完整 Core 411/411 与 Integration 29/29 测试通过，0 失败、0 跳过。GitHub prerelease：[v0.3.3-alpha.5](https://github.com/arukas/ClashTray/releases/tag/v0.3.3-alpha.5)，7 项资产包含 Full/NoCET 安装器与校验文件、Mihomo v1.19.31 源码归档、SHA256SUMS 和 release manifest。
+
+## 托管清理回归（2026-09-24）
+
+- 文档同步提交后的 CI run 35973076794 中，Integration 为 28/29；ServiceStartsRestartsAndStopsPinnedMihomoWithTunPermanentlyDisabled 的核心启动、重启、停止断言完成后，在测试夹具 finally 删除临时 mihomo.exe 时遇到 UnauthorizedAccessException。同一 run 的第二次尝试复现相同清理失败；Core 411/411 通过。故障发生在测试副本清理，不是产品断言失败。
+- 提交 0a31c94 只修改 tests/ClashTray.IntegrationTests/OfficialMihomoServiceInteropTests.cs：临时目录删除前清除只读属性，最多重试 12 次、每次间隔 250 ms；持续占用仍使测试失败。
+- 修正后的本地 Release 全解决方案构建通过，0 warnings、0 errors；固定 Mihomo v1.19.31 归档 SHA-256 校验通过，官方类别 4/4、Core 411/411、Integration 29/29，全部 0 失败、0 跳过。托管 CI run 35975059036 在 0a31c94 上成功。
+- alpha.5 Release 仍由 b370c8b 构建，资产未重发；0a31c94 是发布后的测试夹具清理稳定性修正，不改变产品二进制。
+
 ## 未完成验收与限制
 
 - 本轮没有安装/升级/卸载 Windows Service，没有操作真实 System Proxy/TUN，也未执行睡眠恢复、网络切换或真实网卡/路由回滚验收；这些真实系统场景仍需独立 Windows 验收。
