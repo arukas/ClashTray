@@ -107,6 +107,19 @@ Runtime 先给退出准备步骤一段短期限，然后还用同一个前置期
 
 ## 版本、工作树与后续发布
 
-本轮没有更改版本、提交、推送、安装服务或发布。检查时 HEAD 是 `bf5e69b`，标签为 `v0.3.3-alpha.2`。原有三个未跟踪文档保持未修改：`docs/code-review-2026-09-23.md`、`docs/remediation-round2-2026-09-23.md`、`docs/review-round2-followup-2026-09-24.md`。本文件是本轮新增交付记录。
+本轮 F1–F4 整改以 `master` / `bf5e69b` / `v0.3.3-alpha.2` 为基线。随后用户明确要求推送 GitHub 并发布新的 0.3.3 alpha。
 
-请求中“本轮不自行改版本、发布”和“后续发布 0.3.3 alpha”需要区分处理；若开始后续发布，需要先明确目标 alpha 标签/版本（当前指向 `alpha.2`），再进行独立的提交、推送和发布步骤。
+### alpha.3 首次工作流结果与修正
+
+- 整改提交 `4d36db8` 和注释标签 `v0.3.3-alpha.3` 已推送。GitHub CI 和 Release 工作流因同一个 Core 测试失败，没有创建 alpha.3 Release 或安装包。
+- CI 失败项是 `RecoveryStopsOnlyExactPidStartTimeAndExecutableMatch`。Actions 日志显示恢复时进程 PID/启动时间/可执行映像身份已不匹配，安全逻辑按设计保留该进程；测试夹具用 `cmd.exe /c timeout` 包装进程，却仍假设恢复时身份必定匹配。
+- 后续提交 `123df65` 将测试子进程改为直接启动长期运行的 `ping.exe -t 127.0.0.1`。生产进程身份校验和恢复逻辑未更改；该定向测试连续 5 次通过。`v0.3.3-alpha.3` 标签保留为失败的发布尝试记录。
+
+### alpha.4 发布
+
+- `v0.3.3-alpha.4` 指向 `123df654620a4e5c244dbb7d6e283cb7334d4188`，已推送到 GitHub；`master` 已同步到该提交。
+- GitHub CI：成功。Hosted Windows 的 Core 测试 398/398 通过；Integration 25 项通过、3 项官方 Mihomo 实测因 runner 未提供核心而跳过。此跳过情况仅限 hosted 环境。
+- GitHub Release 工作流：成功；Release x64 构建和整套工作流通过。已发布公开 prerelease：[ClashTray 0.3.3-alpha.4](https://github.com/arukas/ClashTray/releases/tag/v0.3.3-alpha.4)，包含 Full / NoCET 安装器、两份 SHA-256 文件、`SHA256SUMS.txt`、`release-manifest.json` 和 Mihomo 对应源码归档。
+- 本机 alpha.4 Release x64 完整解决方案构建通过，0 警告、0 错误；Core 398/398、Integration 28/28 通过，0 失败、0 跳过。Integration 使用官方 Mihomo Windows x64 核心；核心只执行配置验证和 TUN 关闭的 loopback smoke test。
+- 真实 WinUI 操作、安装/升级/卸载、服务 IPC、System Proxy、TUN、路由和网络切换场景仍未在本机验收；本轮没有改变这些真实机器状态，也未用 fake 测试替代系统验收结论。
+- 三份原有未跟踪文档仍保留且未纳入发布提交：`docs/code-review-2026-09-23.md`、`docs/remediation-round2-2026-09-23.md`、`docs/review-round2-followup-2026-09-24.md`。
