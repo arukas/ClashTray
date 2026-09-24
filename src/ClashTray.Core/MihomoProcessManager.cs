@@ -15,6 +15,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
     private readonly TimeSpan _stopTimeout;
     private Process? _process;
     private CancellationTokenSource? _lifetimeCts;
+    private ProcessJobObject? _processJob;
     private long _generation;
 
     public CoreState State { get; private set; } = CoreState.Stopped;
@@ -139,6 +140,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         {
             Process? exitedProcess = null;
             CancellationTokenSource? exitedLifetime = null;
+            ProcessJobObject? exitedJob = null;
             lock (_processGate)
             {
                 if (_process is not null)
@@ -150,12 +152,14 @@ public sealed class MihomoProcessManager : IAsyncDisposable
 
                     exitedProcess = _process;
                     exitedLifetime = _lifetimeCts;
+                    exitedJob = _processJob;
                     _process = null;
                     _lifetimeCts = null;
+                    _processJob = null;
                 }
             }
 
-            DisposeProcess(exitedProcess, exitedLifetime);
+            DisposeProcess(exitedProcess, exitedLifetime, exitedJob);
             State = CoreState.Starting;
             OnStateChanged();
             StartProcess(executablePath, configurationPath, workingDirectory, safePaths);
@@ -226,10 +230,12 @@ public sealed class MihomoProcessManager : IAsyncDisposable
     {
         Process? process;
         CancellationTokenSource? lifetime;
+        ProcessJobObject? job;
         lock (_processGate)
         {
             process = _process;
             lifetime = _lifetimeCts;
+            job = _processJob;
             State = CoreState.Stopping;
         }
 
@@ -282,12 +288,17 @@ public sealed class MihomoProcessManager : IAsyncDisposable
                 _lifetimeCts = null;
             }
 
+            if (stopped && ReferenceEquals(_processJob, job))
+            {
+                _processJob = null;
+            }
+
             State = stopped ? CoreState.Stopped : CoreState.Failed;
         }
 
         if (stopped)
         {
-            DisposeProcess(process, lifetime);
+            DisposeProcess(process, lifetime, job);
         }
 
         OnStateChanged();
@@ -357,6 +368,30 @@ public sealed class MihomoProcessManager : IAsyncDisposable
 
             Interlocked.Increment(ref _generation);
 
+            ProcessJobObject? createdJob = null;
+            try
+            {
+                if (ProcessJobObject.TryCreate(process, out createdJob))
+                {
+                    lock (_processGate)
+                    {
+                        if (ReferenceEquals(_process, process))
+                        {
+                            _processJob = createdJob;
+                            createdJob = null;
+                        }
+                    }
+                }
+                else
+                {
+                    LogLineReceived?.Invoke("[ClashTray] 无法为 Mihomo 进程分配 Job Object，宿主被强制终止时核心可能残留。", true);
+                }
+            }
+            finally
+            {
+                createdJob?.Dispose();
+            }
+
             _ = DrainAsync(process.StandardOutput, isError: false, lifetime.Token);
             _ = DrainAsync(process.StandardError, isError: true, lifetime.Token);
 
@@ -379,17 +414,20 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         catch
         {
             lifetime.Cancel();
+            ProcessJobObject? failedJob = null;
             lock (_processGate)
             {
                 if (ReferenceEquals(_process, process))
                 {
                     _process = null;
                     _lifetimeCts = null;
+                    failedJob = _processJob;
+                    _processJob = null;
                     State = CoreState.Failed;
                 }
             }
 
-            DisposeProcess(process, lifetime);
+            DisposeProcess(process, lifetime, failedJob);
             OnStateChanged();
             throw;
         }
@@ -614,7 +652,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
     }
 
-    private void DisposeProcess(Process? process, CancellationTokenSource? lifetime)
+    private void DisposeProcess(Process? process, CancellationTokenSource? lifetime, ProcessJobObject? job)
     {
         if (process is not null)
         {
@@ -622,6 +660,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             process.Dispose();
         }
 
+        job?.Dispose();
         lifetime?.Dispose();
     }
 
