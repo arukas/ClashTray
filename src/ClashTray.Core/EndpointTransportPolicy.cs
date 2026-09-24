@@ -16,6 +16,12 @@ public static class EndpointTransportPolicy
     public const int MaxUriCharacters = 2_048;
     public const int MaxSecretCharacters = 4_096;
 
+    // Request budgets are applied per request by MihomoApiClient through linked
+    // cancellation tokens. A shorter HttpClient.Timeout would race that policy and
+    // leak OperationCanceledException instead of the typed TimeoutException.
+    public static HttpClient CreateControllerHttpClient() =>
+        new() { Timeout = Timeout.InfiniteTimeSpan };
+
     internal static TimeSpan ResolveTimeout(TimeSpan? value, string parameterName, TimeSpan fallback)
     {
         TimeSpan resolved = value ?? fallback;

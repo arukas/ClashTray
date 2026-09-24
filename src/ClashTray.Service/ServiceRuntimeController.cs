@@ -24,7 +24,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private const int MaxCachedRequests = 128;
     private readonly AppPaths _paths;
     private readonly MihomoProcessManager _processManager = new();
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(5) };
+    private readonly HttpClient _httpClient = EndpointTransportPolicy.CreateControllerHttpClient();
     private readonly HttpClient _coreUpdateHttpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web);
     private readonly CoreUpdater _coreUpdater;

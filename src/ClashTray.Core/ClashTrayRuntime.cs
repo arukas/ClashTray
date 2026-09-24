@@ -17,7 +17,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     private readonly CancellationTokenSource _runtimeCts = new();
     private readonly object _disposeGate = new();
     private readonly object _publishGate = new();
-    private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(8) };
+    private readonly HttpClient _httpClient = EndpointTransportPolicy.CreateControllerHttpClient();
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "Released only after shutdown workers settle; timed out workers retain the runtime and its resources.")]
     private readonly SnapshotPublishThrottle _throttledPublisher;
     private readonly AppPaths _paths;

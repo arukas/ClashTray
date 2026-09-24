@@ -124,6 +124,25 @@ public sealed class MihomoApiCompatibilityTests
     }
 
     [TestMethod]
+    public async Task ControllerHttpClientLetsPerRequestBudgetSurfaceTimeoutException()
+    {
+        using HttpClient policyClient = EndpointTransportPolicy.CreateControllerHttpClient();
+        Assert.AreEqual(Timeout.InfiniteTimeSpan, policyClient.Timeout);
+
+        // With no hidden HttpClient timeout racing the per-request budget, a hanging
+        // controller surfaces the typed TimeoutException instead of a raw cancellation.
+        using HangingHandler handler = new();
+        using HttpClient hangingClient = new(handler) { Timeout = policyClient.Timeout };
+        MihomoApiClient api = new(
+            hangingClient,
+            new Uri("http://127.0.0.1:9090/"),
+            "test-secret",
+            restTimeout: TimeSpan.FromMilliseconds(200));
+
+        await Assert.ThrowsExactlyAsync<TimeoutException>(() => api.GetAsync("/version"));
+    }
+
+    [TestMethod]
     public async Task StreamingCancellationIsNotConvertedToTimeout()
     {
         ChunkedStream stream = new ChunkedStream([], chunkSize: 4, holdOpen: true);
@@ -626,6 +645,15 @@ public sealed class MihomoApiCompatibilityTests
             {
                 Content = new StringContent("redacted")
             });
+    }
+
+    private sealed class HangingHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }
     }
 
     private sealed class StreamingContent : HttpContent
