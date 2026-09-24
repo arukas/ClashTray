@@ -12,6 +12,81 @@ public sealed class OfficialMihomoInteropTests
 {
     [TestMethod]
     [TestCategory("RequiresOfficialMihomo")]
+    public async Task OfficialMihomoValidatesConfigAfterManagedMultilineYamlReplacement()
+    {
+        string? executablePath = FindMihomoExecutable();
+        if (executablePath is null)
+        {
+            Assert.Inconclusive(
+                "Official Mihomo payload not found. Set CLASHTRAY_MIHOMO_PATH or build the packaging payload to run this test.");
+            return;
+        }
+
+        ManagedCoreVerifier.ValidateWindowsAmd64Executable(executablePath);
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "ClashTrayIntegrationTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string sourcePath = Path.Combine(root, "source.yaml");
+        string outputPath = Path.Combine(root, "managed.yaml");
+        string source = "secret: >-" + Environment.NewLine
+            + "  stale secret" + Environment.NewLine
+            + "  continuation" + Environment.NewLine
+            + "external-controller: |" + Environment.NewLine
+            + "  0.0.0.0:1" + Environment.NewLine
+            + "  stale controller" + Environment.NewLine
+            + "allow-lan: 'true" + Environment.NewLine
+            + "  stale setting'" + Environment.NewLine
+            + "mode: rule" + Environment.NewLine
+            + "proxies: []" + Environment.NewLine
+            + "proxy-groups: []" + Environment.NewLine
+            + "rules: []" + Environment.NewLine
+            + "tun:" + Environment.NewLine
+            + "  enable: false" + Environment.NewLine;
+        await File.WriteAllTextAsync(sourcePath, source);
+        HashSet<int> ports = [];
+        while (ports.Count < 4)
+        {
+            ports.Add(GetAvailableLoopbackPort());
+        }
+
+        int[] selectedPorts = ports.ToArray();
+        AppSettings settings = new(
+            ControllerPort: selectedPorts[0],
+            HttpPort: selectedPorts[1],
+            MixedPort: selectedPorts[2],
+            SocksPort: selectedPorts[3]);
+        MihomoProcessManager manager = new();
+        try
+        {
+            string builtPath = await RuntimeConfigBuilder.BuildForCoreStartAsync(
+                sourcePath,
+                outputPath,
+                settings,
+                externalUiPath: null);
+            string built = await File.ReadAllTextAsync(builtPath);
+            Assert.IsFalse(built.Contains("stale secret", StringComparison.Ordinal));
+            Assert.IsFalse(built.Contains("stale controller", StringComparison.Ordinal));
+            Assert.IsFalse(built.Contains("stale setting", StringComparison.Ordinal));
+            Assert.IsTrue(built.Contains($"external-controller: 127.0.0.1:{settings.ControllerPort}", StringComparison.Ordinal));
+            Assert.IsTrue(built.Contains("secret: ''", StringComparison.Ordinal));
+
+            bool valid = await manager.ValidateAsync(executablePath, builtPath, root);
+            Assert.IsTrue(valid, "Official Mihomo rejected the configuration produced by RuntimeConfigBuilder.");
+            Assert.AreEqual(source, await File.ReadAllTextAsync(sourcePath), "The source YAML must remain unchanged.");
+        }
+        finally
+        {
+            await manager.DisposeAsync();
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
     public async Task PinnedMihomoStartsWithTunDisabledAndServesLoopbackController()
     {
         string? executablePath = FindMihomoExecutable();

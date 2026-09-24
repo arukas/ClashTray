@@ -2299,12 +2299,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         bool cleanupLeaseTransferred = false;
         OperationGate.Lease? cleanupLease = null;
 
+        List<Task> pendingCleanupOperations = [];
+
         async Task<bool> RunStepAsync(
             string operationName,
             Func<CancellationToken, Task> operation,
-            CancellationToken cancellationToken,
-            Action<ShutdownCleanupStepResult>? record = null)
+            CancellationToken waitDeadline,
+            Action<ShutdownCleanupStepResult>? record = null,
+            CancellationToken? operationCancellationToken = null,
+            bool continueAfterIncomplete = false)
         {
+            CancellationToken operationToken = operationCancellationToken ?? waitDeadline;
+
             async Task ExecuteAsync(CancellationToken token)
             {
                 if (_shutdownStepTestHook is not null)
@@ -2317,13 +2323,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             BoundedCleanupStepResult runResult = await BoundedCleanupStepRunner.RunAsync(
                     ExecuteAsync,
-                    cancellationToken)
+                    waitDeadline,
+                    operationToken)
                 .ConfigureAwait(false);
 
+            bool deadlineExpired = waitDeadline.IsCancellationRequested || operationToken.IsCancellationRequested;
             ShutdownCleanupStatus status;
             string? detail = null;
             if (runResult.IncompleteOperation is not null
-                || (cancellationToken.IsCancellationRequested && runResult.Failure is OperationCanceledException))
+                || (deadlineExpired && runResult.Failure is OperationCanceledException))
             {
                 status = ShutdownCleanupStatus.TimedOutUnknown;
                 detail = $"{operationName} 未在对应退出阶段期限内完成，结果未确认。";
@@ -2350,7 +2358,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             if (runResult.Failure is not null)
             {
-                Exception failure = cancellationToken.IsCancellationRequested
+                Exception failure = deadlineExpired
                     && runResult.Failure is OperationCanceledException
                     ? new TimeoutException($"{operationName} 达到退出阶段期限。", runResult.Failure)
                     : runResult.Failure;
@@ -2359,19 +2367,40 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
 
             if (runResult.IncompleteOperation is Task pendingOperation)
             {
-                shutdownDeadlineTransferred = true;
-                preNetworkDeadlineTransferred = true;
-                cleanupLeaseTransferred = cleanupLease is not null;
-                _ = CompleteAbandonedCleanupAsync(
-                    pendingOperation,
-                    cleanupLease,
-                    shutdownDeadline,
-                    preNetworkDeadline);
-                return false;
+                pendingCleanupOperations.Add(pendingOperation);
+                return continueAfterIncomplete;
             }
 
-            return !cancellationToken.IsCancellationRequested
-                || runResult.Failure is not OperationCanceledException;
+            return !deadlineExpired || runResult.Failure is not OperationCanceledException;
+        }
+
+        async Task<bool> ObserveCompletedCleanupOperationsAsync()
+        {
+            bool hasUnsettledOperation = false;
+            foreach (Task pendingOperation in pendingCleanupOperations)
+            {
+                if (!pendingOperation.IsCompleted)
+                {
+                    hasUnsettledOperation = true;
+                    continue;
+                }
+
+                try
+                {
+                    await pendingOperation.ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    RecordCleanupFailure(cleanupFailures, "迟到的退出清理操作", exception);
+                }
+            }
+
+            if (!hasUnsettledOperation)
+            {
+                pendingCleanupOperations.Clear();
+            }
+
+            return !hasUnsettledOperation;
         }
 
         try
@@ -2404,7 +2433,9 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (!await RunStepAsync(
                     "取消运行时工作",
                     _ => _runtimeCts.CancelAsync(),
-                    preNetworkDeadline.Token).ConfigureAwait(false))
+                    preNetworkDeadline.Token,
+                    operationCancellationToken: shutdownDeadline.Token,
+                    continueAfterIncomplete: true).ConfigureAwait(false))
             {
                 return resultBuilder.Build();
             }
@@ -2417,11 +2448,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (!await RunStepAsync(
                     "停止远程端点刷新",
                     _ => _remoteRefresh.StopRefreshAsync(),
-                    preNetworkDeadline.Token).ConfigureAwait(false)
+                    preNetworkDeadline.Token,
+                    operationCancellationToken: shutdownDeadline.Token,
+                    continueAfterIncomplete: true).ConfigureAwait(false)
                 || !await RunStepAsync(
                     "停止订阅调度器",
                     _ => _subscriptionScheduler.DisposeAsync().AsTask(),
-                    preNetworkDeadline.Token).ConfigureAwait(false))
+                    preNetworkDeadline.Token,
+                    operationCancellationToken: shutdownDeadline.Token,
+                    continueAfterIncomplete: true).ConfigureAwait(false))
             {
                 return resultBuilder.Build();
             }
@@ -2429,24 +2464,24 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             OperationGate.Lease cleanupOwnership;
             try
             {
-                cleanupOwnership = await _operationLock.AcquireCleanupOwnershipAsync(preNetworkDeadline.Token)
+                cleanupOwnership = await _operationLock.AcquireCleanupOwnershipAsync(shutdownDeadline.Token)
                     .ConfigureAwait(false);
                 cleanupLease = cleanupOwnership;
                 resultBuilder.SetOperationGate(new ShutdownCleanupStepResult(
                     "运行时操作安全点",
                     ShutdownCleanupStatus.Completed));
             }
-            catch (OperationCanceledException exception) when (preNetworkDeadline.IsCancellationRequested)
+            catch (OperationCanceledException exception) when (shutdownDeadline.IsCancellationRequested)
             {
                 ShutdownCleanupStepResult step = new(
                     "运行时操作安全点",
                     ShutdownCleanupStatus.TimedOutUnknown,
-                    "等待已准入操作结束时达到网络清理前置期限；TUN、代理和核心状态均未宣称已清理。");
+                    "等待已准入操作结束时达到退出总期限；TUN、代理和核心状态均未宣称已清理。");
                 resultBuilder.SetOperationGate(step);
                 RecordCleanupFailure(
                     cleanupFailures,
                     "等待运行时操作安全点",
-                    new TimeoutException("等待已准入操作结束时达到退出清理前置期限。", exception));
+                    new TimeoutException("等待已准入操作结束时达到退出清理总期限。", exception));
                 return resultBuilder.Build();
             }
             catch (Exception exception)
@@ -2462,7 +2497,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
             if (!await RunStepAsync(
                     "等待 TUN 操作安全点",
                     token => _tunOperation.WaitForIdleAsync(_disposeCleanupTimeout, token),
-                    preNetworkDeadline.Token).ConfigureAwait(false))
+                    shutdownDeadline.Token).ConfigureAwait(false))
             {
                 return resultBuilder.Build();
             }
@@ -2613,6 +2648,15 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 }
             }
 
+            if (!await ObserveCompletedCleanupOperationsAsync().ConfigureAwait(false))
+            {
+                resultBuilder.SetRuntimeResources(new ShutdownCleanupStepResult(
+                    "释放运行时资源",
+                    ShutdownCleanupStatus.TimedOutUnknown,
+                    "前置退出工作仍在使用运行时资源；保留资源与操作所有权，等待迟到任务结束。"));
+                return resultBuilder.Build();
+            }
+
             cleanupOwnership.Dispose();
             cleanupLease = null;
             SetController(null);
@@ -2705,6 +2749,18 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
         }
         finally
         {
+            if (pendingCleanupOperations.Count > 0)
+            {
+                cleanupLeaseTransferred = cleanupLease is not null;
+                shutdownDeadlineTransferred = true;
+                preNetworkDeadlineTransferred = true;
+                _ = CompleteAbandonedCleanupAsync(
+                    Task.WhenAll(pendingCleanupOperations),
+                    cleanupLease,
+                    shutdownDeadline,
+                    preNetworkDeadline);
+            }
+
             if (!cleanupLeaseTransferred)
             {
                 cleanupLease?.Dispose();

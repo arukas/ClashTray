@@ -118,6 +118,86 @@ public sealed class RuntimeConfigBuilderYamlCorpusTests
     }
 
     [TestMethod]
+    public async Task ManagedMultilineNodesAreRemovedWholeAndPreserveAdjacentRootContent()
+    {
+        const string source = """
+            secret: |-
+              stale block secret
+              port: 1111
+            external-controller: >-
+              127.0.0.1:10001
+              stale controller continuation
+            external-ui-name: 'old
+              multiline name'
+            external-ui-url: "https://old.example/
+              old token"
+            mode: rule
+            proxies: []
+            proxy-groups: []
+            rules: []
+            tun:
+              enable: false
+            """;
+
+        string output = await BuildAsync(source, new AppSettings(ControllerPort: 9192, HttpPort: 7893));
+
+        Assert.IsFalse(output.Contains("stale block secret", StringComparison.Ordinal));
+        Assert.IsFalse(output.Contains("stale controller continuation", StringComparison.Ordinal));
+        Assert.IsFalse(output.Contains("multiline name", StringComparison.Ordinal));
+        Assert.IsFalse(output.Contains("old token", StringComparison.Ordinal));
+        Assert.IsFalse(output.Contains("port: 1111", StringComparison.Ordinal));
+        Assert.AreEqual(1, CountRootKey(output, "secret"));
+        Assert.AreEqual(1, CountRootKey(output, "external-controller"));
+        Assert.AreEqual(0, CountRootKey(output, "external-ui-name"));
+        Assert.AreEqual(0, CountRootKey(output, "external-ui-url"));
+        Assert.IsTrue(output.Contains("external-controller: 127.0.0.1:9192", StringComparison.Ordinal));
+        Assert.IsTrue(output.Contains("secret: ''", StringComparison.Ordinal));
+        Assert.IsTrue(output.Contains("mode: rule", StringComparison.Ordinal));
+        Assert.IsTrue(output.Contains("proxies: []", StringComparison.Ordinal));
+        Assert.IsTrue(output.Contains("rules: []", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task UnsupportedManagedAnchorsAndMultilineFlowNodesAreRejectedWithoutReplacingOutput()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string sourcePath = Path.Combine(root, "source.yaml");
+        string destinationPath = Path.Combine(root, "effective.yaml");
+        const string lastGood = "last-successful-output";
+        string[] unsupported =
+        [
+            "secret: &shared old-secret" + Environment.NewLine + "copy: *shared",
+            "secret: {" + Environment.NewLine + "  nested: [unbalanced" + Environment.NewLine + "mode: rule",
+            "tun: |-" + Environment.NewLine + "  enable: true"
+        ];
+
+        try
+        {
+            await File.WriteAllTextAsync(destinationPath, lastGood);
+            foreach (string input in unsupported)
+            {
+                await File.WriteAllTextAsync(sourcePath, input);
+                InvalidDataException exception = await Assert.ThrowsExactlyAsync<InvalidDataException>(
+                    () => RuntimeConfigBuilder.BuildAsync(
+                        sourcePath,
+                        destinationPath,
+                        new AppSettings(TunEnabled: true)));
+                Assert.IsFalse(string.IsNullOrWhiteSpace(exception.Message));
+                Assert.AreEqual(lastGood, await File.ReadAllTextAsync(destinationPath));
+                Assert.AreEqual(input, await File.ReadAllTextAsync(sourcePath));
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task GeneratedCoreStartConfigAlwaysKeepsTunDisabled()
     {
         string output = await BuildAsync(

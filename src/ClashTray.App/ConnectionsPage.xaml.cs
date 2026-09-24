@@ -10,9 +10,9 @@ namespace ClashTray.App;
 public sealed partial class ConnectionsPage : UserControl
 {
     private readonly ClashTrayRuntime _runtime;
-    private readonly StableRowReconciler<string, ConnectionInfo, ConnectionRowViewModel> _rows = new(
-        connection => connection.Id);
+    private readonly StableRowReconciler<ConnectionRowIdentity, ConnectionInfo, ConnectionRowViewModel> _rows;
     private IReadOnlyList<ConnectionInfo> _connections = [];
+    private string _controllerIdentity = EndpointId.Local.Value;
     private bool _controllerWritable = true;
     private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
     private string? _selectedConnectionId;
@@ -22,13 +22,14 @@ public sealed partial class ConnectionsPage : UserControl
     {
         ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
+        _rows = new(connection => new ConnectionRowIdentity(_controllerIdentity, connection.Id));
         InitializeComponent();
         ConnectionsListView.ItemsSource = _rows.Rows;
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
-        UpdateSnapshot(snapshot, controllerWritable: true, EndpointCapabilityDefaults.Local);
+        UpdateSnapshot(snapshot, controllerWritable: true, EndpointCapabilityDefaults.Local, EndpointId.Local.Value);
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
@@ -36,21 +37,42 @@ public sealed partial class ConnectionsPage : UserControl
         UpdateSnapshot(
             snapshot,
             controllerWritable,
-            controllerWritable ? EndpointCapabilityDefaults.Local : EndpointCapability.None);
+            controllerWritable ? EndpointCapabilityDefaults.Local : EndpointCapability.None,
+            EndpointId.Local.Value);
     }
 
     public void UpdateSnapshot(
         RuntimeSnapshot snapshot,
         bool controllerWritable,
-        EndpointCapability capabilities)
+        EndpointCapability capabilities) =>
+        UpdateSnapshot(snapshot, controllerWritable, capabilities, EndpointId.Local.Value);
+
+    public void UpdateSnapshot(
+        RuntimeSnapshot snapshot,
+        bool controllerWritable,
+        EndpointCapability capabilities,
+        string controllerIdentity)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(controllerIdentity);
+        bool controllerChanged = !string.Equals(
+            _controllerIdentity,
+            controllerIdentity,
+            StringComparison.Ordinal);
         bool interactivityChanged = _controllerWritable != controllerWritable
             || _controllerCapabilities != capabilities;
+        _controllerIdentity = controllerIdentity;
+        if (controllerChanged)
+        {
+            _selectedConnectionId = null;
+        }
+
         _controllerWritable = controllerWritable;
         _controllerCapabilities = capabilities;
         UpdateActionButtons();
-        if (ReferenceEquals(_connections, snapshot.Connections) && !interactivityChanged)
+        if (ReferenceEquals(_connections, snapshot.Connections)
+            && !interactivityChanged
+            && !controllerChanged)
         {
             return;
         }
@@ -75,24 +97,31 @@ public sealed partial class ConnectionsPage : UserControl
             _connections,
             SearchBox.Text,
             sort);
-        _rows.Reconcile(
-            _connections,
-            filtered.Select(connection => connection.Id).ToArray(),
-            connection => new ConnectionRowViewModel(connection),
-            (row, connection) => row.Update(connection));
-
-        ConnectionRowViewModel? selectedRow = _selectedConnectionId is null
-            ? null
-            : _rows.Rows.FirstOrDefault(row => string.Equals(
-                row.Id,
-                _selectedConnectionId,
-                StringComparison.Ordinal));
         _synchronizingSelection = true;
-        ConnectionsListView.SelectedItem = selectedRow;
-        _synchronizingSelection = false;
-        if (selectedRow is null)
+        ConnectionRowViewModel? selectedRow;
+        try
         {
-            _selectedConnectionId = null;
+            _rows.Reconcile(
+                _connections,
+                filtered.Select(connection => new ConnectionRowIdentity(_controllerIdentity, connection.Id)).ToArray(),
+                connection => new ConnectionRowViewModel(connection),
+                (row, connection) => row.Update(connection));
+
+            selectedRow = _selectedConnectionId is null
+                ? null
+                : _rows.Rows.FirstOrDefault(row => string.Equals(
+                    row.Id,
+                    _selectedConnectionId,
+                    StringComparison.Ordinal));
+            ConnectionsListView.SelectedItem = selectedRow;
+            if (selectedRow is null)
+            {
+                _selectedConnectionId = null;
+            }
+        }
+        finally
+        {
+            _synchronizingSelection = false;
         }
 
         EmptyListText.Visibility = _rows.Rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -193,6 +222,8 @@ public sealed partial class ConnectionsPage : UserControl
     private bool HasCapability(EndpointCapability capability) =>
         _controllerWritable && (_controllerCapabilities & capability) == capability;
 }
+
+internal readonly record struct ConnectionRowIdentity(string ControllerIdentity, string ConnectionId);
 
 public sealed class ConnectionRowViewModel : INotifyPropertyChanged
 {

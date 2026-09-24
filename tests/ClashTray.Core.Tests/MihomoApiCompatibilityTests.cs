@@ -9,6 +9,7 @@ namespace ClashTray.Core.Tests;
 public sealed class MihomoApiCompatibilityTests
 {
     private static readonly string[] ExpectedProxyMembers = ["Node"];
+    private static readonly string[] ExpectedConnectionBoundaryIds = ["selected/id", "other"];
 
     [TestMethod]
     public async Task TrafficReturnsFirstJsonLineWithoutWaitingForStreamEof()
@@ -272,6 +273,66 @@ public sealed class MihomoApiCompatibilityTests
     }
 
     [TestMethod]
+    public async Task ConnectionBoundaryKeepsUniqueRealIdsThroughSelectionAndClose()
+    {
+        const string initialJson = """
+            {"connections":[
+              {"id":"selected/id","metadata":{"network":"tcp","destinationIP":"first.example"}},
+              {"id":"selected/id","metadata":{"network":"tcp","destinationIP":"duplicate.example"}},
+              {"id":"","metadata":{"network":"tcp"}},
+              {"id":"   ","metadata":{"network":"tcp"}},
+              {"id":null,"metadata":{"network":"tcp"}},
+              {"metadata":{"network":"tcp"}},
+              {"id":"other","metadata":{"network":"tcp","destinationIP":"other.example"}}
+            ]}
+            """;
+        const string refreshedJson = """
+            {"connections":[
+              {"id":"selected/id","metadata":{"network":"tcp","destinationIP":"updated.example"}},
+              {"id":"selected/id","metadata":{"network":"tcp","destinationIP":"duplicate-after-refresh.example"}},
+              {"id":"","metadata":{"network":"tcp"}},
+              {"metadata":{"network":"tcp"}}
+            ]}
+            """;
+
+        using JsonDocument initialDocument = JsonDocument.Parse(initialJson);
+        IReadOnlyList<ConnectionInfo> initial = MihomoDataParser.ParseConnections(initialDocument);
+        CollectionAssert.AreEqual(ExpectedConnectionBoundaryIds, initial.Select(item => item.Id).ToArray());
+
+        StableRowReconciler<string, ConnectionInfo, ConnectionRow> rows = new(item => item.Id);
+        rows.Reconcile(
+            initial,
+            initial.Select(item => item.Id).ToArray(),
+            item => new ConnectionRow(item),
+            (row, item) => row.Update(item));
+        ConnectionRow selected = rows.Rows.Single(row => row.Connection.Id == "selected/id");
+
+        using JsonDocument refreshedDocument = JsonDocument.Parse(refreshedJson);
+        IReadOnlyList<ConnectionInfo> refreshed = MihomoDataParser.ParseConnections(refreshedDocument);
+        StableRowReconcileResult refreshResult = rows.Reconcile(
+            refreshed,
+            refreshed.Select(item => item.Id).ToArray(),
+            item => new ConnectionRow(item),
+            (row, item) => row.Update(item));
+
+        Assert.AreEqual(1, refreshed.Count);
+        Assert.AreEqual(1, rows.Rows.Count);
+        Assert.AreSame(selected, rows.Rows.Single());
+        Assert.AreEqual("updated.example", selected.Connection.Destination);
+        Assert.AreEqual(0, refreshResult.CreatedRows);
+        Assert.AreEqual(1, refreshResult.RemovedRows);
+        Assert.AreEqual(1, refreshResult.UpdatedRows);
+
+        using RecordingHandler handler = new();
+        using HttpClient httpClient = new(handler, disposeHandler: false);
+        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await api.CloseConnectionAsync(selected.Connection.Id);
+
+        Assert.AreEqual(HttpMethod.Delete, handler.Method);
+        Assert.AreEqual("/connections/selected%2Fid", handler.PathAndQuery);
+    }
+
+    [TestMethod]
     public void ParserToleratesUnexpectedJsonShapes()
     {
         using JsonDocument proxies = JsonDocument.Parse(
@@ -427,6 +488,22 @@ public sealed class MihomoApiCompatibilityTests
         Assert.IsTrue(providerData[0].Error!.Length <= 1_024);
         Assert.AreEqual(1, logData.Count);
         Assert.IsTrue(logData[0].Message.Length <= 4_096);
+    }
+
+    private sealed class ConnectionRow(ConnectionInfo connection)
+    {
+        public ConnectionInfo Connection { get; private set; } = connection;
+
+        public bool Update(ConnectionInfo value)
+        {
+            if (Connection == value)
+            {
+                return false;
+            }
+
+            Connection = value;
+            return true;
+        }
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

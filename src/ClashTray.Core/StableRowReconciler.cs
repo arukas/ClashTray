@@ -54,17 +54,29 @@ public sealed class StableRowReconciler<TKey, TItem, TRow>
         ArgumentNullException.ThrowIfNull(createRow);
         ArgumentNullException.ThrowIfNull(updateRow);
 
-        int createdRows = 0;
-        int updatedRows = 0;
-        HashSet<TKey> currentKeys = new();
+        Dictionary<TKey, TItem> itemsByKey = new();
         foreach (TItem item in source)
         {
             TKey key = _keySelector(item);
-            if (!currentKeys.Add(key))
+            if (key is null || !itemsByKey.TryAdd(key, item))
             {
-                throw new InvalidOperationException("The source contains duplicate stable row identities.");
+                throw new InvalidOperationException("The source contains duplicate or null stable row identities.");
             }
+        }
 
+        HashSet<TKey> targetKeys = new();
+        foreach (TKey key in visibleKeys)
+        {
+            if (key is null || !targetKeys.Add(key))
+            {
+                throw new InvalidOperationException("The visible projection contains duplicate or null stable row identities.");
+            }
+        }
+
+        int createdRows = 0;
+        int updatedRows = 0;
+        foreach ((TKey key, TItem item) in itemsByKey)
+        {
             if (_rowsByKey.TryGetValue(key, out TRow? row))
             {
                 if (updateRow(row, item))
@@ -80,21 +92,15 @@ public sealed class StableRowReconciler<TKey, TItem, TRow>
         }
 
         int removedRows = 0;
-        foreach (TKey key in _rowsByKey.Keys.Where(key => !currentKeys.Contains(key)).ToArray())
+        foreach (TKey key in _rowsByKey.Keys.Where(key => !itemsByKey.ContainsKey(key)).ToArray())
         {
             _rowsByKey.Remove(key);
             removedRows++;
         }
 
         List<TRow> targetRows = [];
-        HashSet<TKey> targetKeys = new();
         foreach (TKey key in visibleKeys)
         {
-            if (!targetKeys.Add(key))
-            {
-                throw new InvalidOperationException("The visible projection contains duplicate stable row identities.");
-            }
-
             if (_rowsByKey.TryGetValue(key, out TRow? row))
             {
                 targetRows.Add(row);

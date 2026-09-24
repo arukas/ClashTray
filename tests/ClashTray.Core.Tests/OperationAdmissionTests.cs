@@ -469,6 +469,34 @@ public sealed class OperationAdmissionTests
     }
 
     [TestMethod]
+    public async Task BoundedCleanupCanWaitForPreparationDeadlineAndKeepOperationBudgetAlive()
+    {
+        using CancellationTokenSource preparationDeadline = new(TimeSpan.FromMilliseconds(75));
+        using CancellationTokenSource operationDeadline = new(TimeSpan.FromSeconds(2));
+        TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<CancellationToken> startedWith = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        BoundedCleanupStepResult result = await BoundedCleanupStepRunner.RunAsync(
+            async operationToken =>
+            {
+                startedWith.TrySetResult(operationToken);
+                await release.Task;
+            },
+            preparationDeadline.Token,
+            operationDeadline.Token);
+
+        Assert.IsTrue(startedWith.Task.IsCompleted);
+        CancellationToken startedOperationToken = await startedWith.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.IsFalse(startedOperationToken.IsCancellationRequested);
+        Assert.IsFalse(result.IsSettled);
+        Assert.IsInstanceOfType<OperationCanceledException>(result.Failure);
+        Assert.IsFalse(result.IncompleteOperation!.IsCompleted);
+
+        release.TrySetResult(true);
+        await result.IncompleteOperation;
+        Assert.IsFalse(operationDeadline.IsCancellationRequested);
+    }
+    [TestMethod]
     public async Task WaitForIdleTracksSharedHolders()
     {
         using OperationGate gate = new();

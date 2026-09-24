@@ -211,10 +211,13 @@ public static class MihomoDataParser
         }
 
         List<ConnectionInfo> result = new List<ConnectionInfo>();
+        HashSet<string> seenIds = new(StringComparer.Ordinal);
         foreach (JsonElement connection in connections.EnumerateArray().Take(MaxConnectionEntries))
         {
             string? id = GetRawString(connection, "id");
-            if (id is { Length: > MaxIdentifierCharacters })
+            if (string.IsNullOrWhiteSpace(id)
+                || id.Length > MaxIdentifierCharacters
+                || !seenIds.Add(id))
             {
                 continue;
             }
@@ -222,7 +225,7 @@ public static class MihomoDataParser
             JsonElement metadata = connection.TryGetProperty("metadata", out JsonElement metadataElement) ? metadataElement : default;
             string[] chains = GetStringArray(connection, "chains", MaxChainEntries, MaxConnectionFieldCharacters);
             result.Add(new ConnectionInfo(
-                id ?? Guid.NewGuid().ToString("N"),
+                id,
                 GetString(metadata, "network", MaxConnectionFieldCharacters) ?? "-",
                 GetString(metadata, "sourceIP", MaxConnectionFieldCharacters)
                     ?? GetString(metadata, "source", MaxConnectionFieldCharacters)

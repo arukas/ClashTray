@@ -145,7 +145,9 @@ internal sealed class LocalCoreShutdownJournal
             return new(false, true, ErrorSanitizer.Sanitize(exception));
         }
 
-        if (record.Version != CurrentFormatVersion || !IsValidIdentity(record.Identity))
+        if (record.Version != CurrentFormatVersion
+            || record.Identity is not { } identity
+            || !IsValidIdentity(identity))
         {
             return new(false, true, "本地核心退出恢复记录版本或进程身份无效；未操作任何进程。");
         }
@@ -168,7 +170,7 @@ internal sealed class LocalCoreShutdownJournal
 
         Func<LocalCoreProcessIdentity, CancellationToken, Task<LocalCoreShutdownJournalResult>> recover =
             recoverProcessAsync ?? StopExactProcessAsync;
-        LocalCoreShutdownJournalResult stopResult = await recover(record.Identity, cancellationToken)
+        LocalCoreShutdownJournalResult stopResult = await recover(identity, cancellationToken)
             .ConfigureAwait(false);
         if (!stopResult.Succeeded)
         {
@@ -318,5 +320,5 @@ internal sealed class LocalCoreShutdownJournal
         }
     }
 
-    private sealed record JournalRecord(int Version, LocalCoreProcessIdentity Identity);
+    private sealed record JournalRecord(int Version, LocalCoreProcessIdentity? Identity);
 }

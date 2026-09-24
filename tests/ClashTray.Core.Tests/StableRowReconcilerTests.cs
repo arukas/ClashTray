@@ -44,6 +44,50 @@ public sealed class StableRowReconcilerTests
     }
 
     [TestMethod]
+    public void InvalidIdentitySnapshotsAreRejectedBeforeRowsChangeAndNextSnapshotRecovers()
+    {
+        ConnectionInfo original = Connection("stable", 10, "before.example");
+        StableRowReconciler<string, ConnectionInfo, TestConnectionRow> rows = new(item => item.Id);
+        rows.Reconcile(
+            [original],
+            ["stable"],
+            item => new TestConnectionRow(item),
+            (row, item) => row.Update(item));
+        TestConnectionRow selected = rows.Rows.Single();
+
+        ConnectionInfo duplicate = original with { Destination = "duplicate.example" };
+        InvalidOperationException duplicateSource = Assert.ThrowsExactly<InvalidOperationException>(
+            () => rows.Reconcile(
+                [original with { Destination = "partial.example" }, duplicate],
+                ["stable"],
+                item => new TestConnectionRow(item),
+                (row, item) => row.Update(item)));
+        StringAssert.Contains(duplicateSource.Message, "duplicate", StringComparison.OrdinalIgnoreCase);
+        Assert.AreSame(selected, rows.Rows.Single());
+        Assert.AreEqual("before.example", selected.Item.Destination);
+        Assert.AreEqual(1, rows.CachedRowCount);
+
+        InvalidOperationException duplicateProjection = Assert.ThrowsExactly<InvalidOperationException>(
+            () => rows.Reconcile(
+                [original with { Destination = "also-partial.example" }],
+                ["stable", "stable"],
+                item => new TestConnectionRow(item),
+                (row, item) => row.Update(item)));
+        StringAssert.Contains(duplicateProjection.Message, "duplicate", StringComparison.OrdinalIgnoreCase);
+        Assert.AreSame(selected, rows.Rows.Single());
+        Assert.AreEqual("before.example", selected.Item.Destination);
+
+        ConnectionInfo recovered = original with { Destination = "recovered.example" };
+        rows.Reconcile(
+            [recovered],
+            ["stable"],
+            item => new TestConnectionRow(item),
+            (row, item) => row.Update(item));
+        Assert.AreSame(selected, rows.Rows.Single());
+        Assert.AreEqual("recovered.example", selected.Item.Destination);
+    }
+
+    [TestMethod]
     public void RepeatedSnapshotDoesNotNotifyAndConnectionProjectionKeepsSearchAndSortSemantics()
     {
         ConnectionInfo first = Connection("first", 5, "alpha.example");

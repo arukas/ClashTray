@@ -67,7 +67,7 @@ public static class RuntimeConfigBuilder
         SettingsValidator.Validate(settings);
         string[] source = await File.ReadAllLinesAsync(sourcePath, cancellationToken);
         List<string> withTunOverride = ApplyTunOverride(source, tunEnabled, settings.TunStack);
-        List<string> filtered = withTunOverride.Where(line => !IsManagedLine(line)).ToList();
+        List<string> filtered = RemoveManagedRootEntries(withTunOverride);
         filtered.Add(string.Empty);
         filtered.Add($"external-controller: 127.0.0.1:{settings.ControllerPort}");
         filtered.Add("secret: ''");
@@ -89,6 +89,7 @@ public static class RuntimeConfigBuilder
         try
         {
             await File.WriteAllLinesAsync(tempPath, filtered, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+            WindowsPathSecurity.ProtectRuntimeFile(tempPath);
             File.Move(tempPath, destinationPath, overwrite: true);
         }
         finally
@@ -99,7 +100,6 @@ public static class RuntimeConfigBuilder
             }
         }
 
-        WindowsPathSecurity.ProtectRuntimeFile(destinationPath);
         return destinationPath;
     }
 
@@ -673,45 +673,299 @@ public static class RuntimeConfigBuilder
 
     private static void EnsureSupportedTunRootValue(string line)
     {
+        string value = GetRootValue(line);
+        if (value.Length == 0)
+        {
+            return;
+        }
+
+        if (value.StartsWith('*') || value.StartsWith('&'))
+        {
+            throw new InvalidDataException(
+                "TUN anchor or alias values cannot be safely overridden; use a standalone block or inline mapping.");
+        }
+
+        if (value[0] == '{' && IsFlowCollectionBalanced(value))
+        {
+            return;
+        }
+
+        throw new InvalidDataException(
+            "TUN must use a block mapping or a balanced inline mapping before its managed settings can be changed.");
+    }
+
+    private static List<string> RemoveManagedRootEntries(List<string> source)
+    {
+        List<string> result = new(source.Count + 12);
+        for (int index = 0; index < source.Count;)
+        {
+            string line = source[index];
+            if (!TryGetRootKey(line, out string key) || !IsManagedRootKey(key))
+            {
+                result.Add(line);
+                index++;
+                continue;
+            }
+
+            int finalNodeLine = FindManagedNodeEnd(source, index, key);
+            index = finalNodeLine + 1;
+        }
+
+        return result;
+    }
+
+    private static int FindManagedNodeEnd(List<string> source, int rootLineIndex, string key)
+    {
+        string value = GetRootValue(source[rootLineIndex]);
+        if (value.StartsWith('&'))
+        {
+            throw new InvalidDataException(
+                $"受管 YAML 字段 {key} 定义了 anchor，无法保证删除其引用；请移除该 anchor 后重试。");
+        }
+
+        if (value.StartsWith('|') || value.StartsWith('>'))
+        {
+            if (!IsBlockScalarHeader(value))
+            {
+                throw new InvalidDataException($"受管 YAML 字段 {key} 的块标量标记无法识别，已保留现有运行配置。");
+            }
+
+            return FindIndentedNodeEnd(source, rootLineIndex);
+        }
+
+        if (value.StartsWith('\'') || value.StartsWith('"'))
+        {
+            char quote = value[0];
+            int lastLine = rootLineIndex;
+            string scalar = value;
+            while (FindQuotedScalarEnd(scalar, quote) < 0)
+            {
+                int nextLine = lastLine + 1;
+                if (nextLine >= source.Count
+                    || !IsIndentedYamlContinuation(source[nextLine]))
+                {
+                    throw new InvalidDataException(
+                        $"受管 YAML 字段 {key} 的多行引号值未闭合；已保留现有运行配置。");
+                }
+
+                scalar += "\n" + source[nextLine].TrimStart();
+                lastLine = nextLine;
+            }
+
+            return Math.Max(lastLine, FindIndentedNodeEnd(source, lastLine));
+        }
+
+        if ((value.StartsWith('{') || value.StartsWith('['))
+            && !IsFlowCollectionBalanced(value))
+        {
+            throw new InvalidDataException(
+                $"受管 YAML 字段 {key} 使用不平衡的 flow 集合，无法安全替换；已保留现有运行配置。");
+        }
+
+        return FindIndentedNodeEnd(source, rootLineIndex);
+    }
+
+    private static int FindIndentedNodeEnd(List<string> source, int rootLineIndex)
+    {
+        int lastNodeLine = rootLineIndex;
+        for (int index = rootLineIndex + 1; index < source.Count; index++)
+        {
+            string line = source[index];
+            if (string.IsNullOrWhiteSpace(line) || GetIndent(line) > 0)
+            {
+                lastNodeLine = index;
+                continue;
+            }
+
+            break;
+        }
+
+        return lastNodeLine;
+    }
+
+    private static bool IsIndentedYamlContinuation(string line) =>
+        string.IsNullOrWhiteSpace(line) || GetIndent(line) > 0;
+
+    private static string GetRootValue(string line)
+    {
         int separator = FindYamlKeySeparator(line);
-        string value = separator < 0 ? string.Empty : line[(separator + 1)..].Trim();
+        if (separator < 0)
+        {
+            return string.Empty;
+        }
+
+        string value = line[(separator + 1)..].Trim();
         int commentStart = FindInlineCommentStart(value);
         if (commentStart >= 0)
         {
             value = value[..commentStart].TrimEnd();
         }
 
-        if (value.StartsWith('*') || value.StartsWith('&'))
-        {
-            throw new InvalidDataException(
-                "A TUN anchor or alias cannot be safely overridden; use a standalone block or inline TUN mapping.");
-        }
+        return value.Trim();
     }
-    private static int GetIndent(string line) => line.Length - line.TrimStart().Length;
 
-    private static string CreateTunPropertyLine(int indent, string property, string value) =>
-        new string(' ', Math.Max(0, indent)) + $"{property}: {value}";
-
-    private static bool IsManagedLine(string line)
+    private static int FindQuotedScalarEnd(string value, char quote)
     {
-        if (!TryGetRootKey(line, out string key))
+        bool escaped = false;
+        for (int index = 1; index < value.Length; index++)
+        {
+            char current = value[index];
+            if (quote == '"')
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (current == '\\')
+                {
+                    escaped = true;
+                }
+                else if (current == '"')
+                {
+                    return index;
+                }
+
+                continue;
+            }
+
+            if (current == '\'' && index + 1 < value.Length && value[index + 1] == '\'')
+            {
+                index++;
+            }
+            else if (current == '\'')
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool IsBlockScalarHeader(string value)
+    {
+        if (value.Length == 0 || value[0] is not ('|' or '>'))
         {
             return false;
         }
 
-        return key.Equals("external-controller", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("secret", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("external-ui", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("external-ui-name", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("external-ui-url", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("allow-lan", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("ipv6", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("tcp-concurrent", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("log-level", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("port", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("mixed-port", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("socks-port", StringComparison.OrdinalIgnoreCase);
+        bool hasChomping = false;
+        bool hasIndent = false;
+        foreach (char indicator in value.AsSpan(1).Trim())
+        {
+            if (indicator is '+' or '-')
+            {
+                if (hasChomping)
+                {
+                    return false;
+                }
+
+                hasChomping = true;
+            }
+            else if (indicator is >= '1' and <= '9')
+            {
+                if (hasIndent)
+                {
+                    return false;
+                }
+
+                hasIndent = true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
+
+    private static bool IsFlowCollectionBalanced(string value)
+    {
+        Stack<char> closing = new();
+        char quote = '\0';
+        bool escaped = false;
+        for (int index = 0; index < value.Length; index++)
+        {
+            char current = value[index];
+            if (quote == '"')
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (current == '\\')
+                {
+                    escaped = true;
+                }
+                else if (current == '"')
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (quote == '\'')
+            {
+                if (current == '\'' && index + 1 < value.Length && value[index + 1] == '\'')
+                {
+                    index++;
+                }
+                else if (current == '\'')
+                {
+                    quote = '\0';
+                }
+
+                continue;
+            }
+
+            if (current is '"' or '\'')
+            {
+                quote = current;
+            }
+            else if (current == '{')
+            {
+                closing.Push('}');
+            }
+            else if (current == '[')
+            {
+                closing.Push(']');
+            }
+            else if (current is '}' or ']')
+            {
+                if (closing.Count == 0 || closing.Pop() != current)
+                {
+                    return false;
+                }
+
+                if (closing.Count == 0 && index != value.Length - 1)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return quote == '\0' && closing.Count == 0;
+    }
+
+    private static bool IsManagedRootKey(string key) =>
+        key.Equals("external-controller", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("secret", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("external-ui", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("external-ui-name", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("external-ui-url", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("allow-lan", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("ipv6", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("tcp-concurrent", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("log-level", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("port", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("mixed-port", StringComparison.OrdinalIgnoreCase)
+        || key.Equals("socks-port", StringComparison.OrdinalIgnoreCase);
+
+    private static int GetIndent(string line) => line.Length - line.TrimStart().Length;
+
+    private static string CreateTunPropertyLine(int indent, string property, string value) =>
+        new string(' ', Math.Max(0, indent)) + $"{property}: {value}";
     private static bool TryResolveExternalUiPath(string? path, out string resolvedPath)
     {
         resolvedPath = string.Empty;

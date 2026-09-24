@@ -46,6 +46,7 @@ public sealed partial class MainWindow : Window
     private PanelPage _activePage = PanelPage.Proxy;
     private RuntimeSnapshot? _latestDisplayedSnapshot;
     private EndpointKind _activeEndpointKind = EndpointKind.Local;
+    private string _activeControllerIdentity = EndpointId.Local.Value;
     private readonly Queue<(double Up, double Down)> _trafficHistory = new();
     private DateTime _lastTrafficSample;
     private EndpointSessionState _activeEndpointState = EndpointSessionState.Disconnected;
@@ -159,6 +160,8 @@ public sealed partial class MainWindow : Window
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         _activeEndpointKind = snapshot.ActiveController.Endpoint.Kind;
+        _activeControllerIdentity =
+            $"{snapshot.ActiveController.Endpoint.Id.Value}:{snapshot.ActiveController.Generation}";
         _activeEndpointState = snapshot.ActiveController.State;
         _activeControllerLastConfirmedAt = snapshot.ActiveController.LastConfirmedAt;
         _activeEndpointDisplayName = snapshot.ActiveController.Endpoint.DisplayName;
@@ -385,7 +388,11 @@ public sealed partial class MainWindow : Window
                 _rulesPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
                 break;
             case PanelPage.Connections:
-                _connectionsPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
+                _connectionsPage?.UpdateSnapshot(
+                    snapshot,
+                    writable,
+                    activeCapabilities,
+                    _activeControllerIdentity);
                 break;
             case PanelPage.Logs:
                 _logsPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);

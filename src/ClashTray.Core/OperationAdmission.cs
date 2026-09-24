@@ -460,9 +460,9 @@ internal readonly record struct BoundedCleanupStepResult(
 }
 
 /// <summary>
-/// Waits for one shutdown action only until the shared shutdown deadline. An
-/// incomplete action is returned to its owner so dependent resources stay
-/// alive until that action settles.
+/// Waits until a bounded phase deadline while giving the action a separate
+/// cancellation deadline. An incomplete action is returned to its owner so
+/// dependent resources stay alive until that action settles.
 /// </summary>
 internal static class BoundedCleanupStepRunner
 {
@@ -470,22 +470,32 @@ internal static class BoundedCleanupStepRunner
         "Design",
         "CA1031:Do not catch general exception types",
         Justification = "Shutdown must record failures and preserve ownership when a cleanup action does not settle before its deadline.")]
+    public static Task<BoundedCleanupStepResult> RunAsync(
+        Func<CancellationToken, Task> operation,
+        CancellationToken shutdownDeadline) =>
+        RunAsync(operation, shutdownDeadline, shutdownDeadline);
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Shutdown must record failures and preserve ownership when a cleanup action does not settle before its deadline.")]
     public static async Task<BoundedCleanupStepResult> RunAsync(
         Func<CancellationToken, Task> operation,
-        CancellationToken shutdownDeadline)
+        CancellationToken waitDeadline,
+        CancellationToken operationCancellationToken)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        if (shutdownDeadline.IsCancellationRequested)
+        if (operationCancellationToken.IsCancellationRequested)
         {
             return new BoundedCleanupStepResult(
-                new OperationCanceledException(shutdownDeadline),
+                new OperationCanceledException(operationCancellationToken),
                 null);
         }
 
         Task operationTask;
         try
         {
-            operationTask = operation(shutdownDeadline)
+            operationTask = operation(operationCancellationToken)
                 ?? throw new InvalidOperationException("A cleanup action returned no task.");
         }
         catch (Exception exception)
@@ -493,9 +503,22 @@ internal static class BoundedCleanupStepRunner
             return new BoundedCleanupStepResult(exception, null);
         }
 
+        if (operationTask.IsCompleted)
+        {
+            try
+            {
+                await operationTask.ConfigureAwait(false);
+                return new BoundedCleanupStepResult(null, null);
+            }
+            catch (Exception exception)
+            {
+                return new BoundedCleanupStepResult(exception, null);
+            }
+        }
+
         try
         {
-            await operationTask.WaitAsync(shutdownDeadline).ConfigureAwait(false);
+            await operationTask.WaitAsync(waitDeadline).ConfigureAwait(false);
             return new BoundedCleanupStepResult(null, null);
         }
         catch (Exception exception)
@@ -508,13 +531,12 @@ internal static class BoundedCleanupStepRunner
             try
             {
                 await operationTask.ConfigureAwait(false);
+                return new BoundedCleanupStepResult(null, null);
             }
             catch (Exception operationException)
             {
                 return new BoundedCleanupStepResult(operationException, null);
             }
-
-            return new BoundedCleanupStepResult(exception, null);
         }
     }
 }

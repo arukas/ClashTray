@@ -7,6 +7,73 @@ namespace ClashTray.Core.Tests;
 public sealed class LocalCoreShutdownJournalTests
 {
     [TestMethod]
+    public async Task MalformedRecoveryRecordsFailClosedWithoutCallingRecoveryOrDeletingRecord()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        LocalCoreShutdownJournal journal = new(paths, _ => true);
+        string executablePath = paths.ManagedCoreExecutable;
+        long startTimeUtcTicks = DateTime.UtcNow.Ticks;
+        string[] malformedRecords =
+        [
+            """{"version":1,"identity":null}""",
+            """{"version":1}""",
+            JsonSerializer.Serialize(new
+            {
+                version = 2,
+                identity = new { processId = 42, startTimeUtcTicks, executablePath }
+            }),
+            JsonSerializer.Serialize(new
+            {
+                version = 1,
+                identity = new { processId = 0, startTimeUtcTicks, executablePath }
+            }),
+            JsonSerializer.Serialize(new
+            {
+                version = 1,
+                identity = new { processId = 42, startTimeUtcTicks = 0, executablePath }
+            }),
+            JsonSerializer.Serialize(new
+            {
+                version = 1,
+                identity = new { processId = 42, startTimeUtcTicks }
+            }),
+            JsonSerializer.Serialize(new
+            {
+                version = 1,
+                identity = new { processId = 42, startTimeUtcTicks, executablePath = string.Empty }
+            })
+        ];
+        int recoveryCalls = 0;
+
+        try
+        {
+            foreach (string malformedRecord in malformedRecords)
+            {
+                await File.WriteAllTextAsync(paths.LocalCoreShutdownFile, malformedRecord);
+
+                LocalCoreShutdownJournalResult result = await journal.RecoverPendingStopAsync(
+                    (_, _) =>
+                    {
+                        recoveryCalls++;
+                        return Task.FromResult(new LocalCoreShutdownJournalResult(true, true));
+                    });
+
+                Assert.IsFalse(result.Succeeded, malformedRecord);
+                Assert.IsTrue(result.RecordFound, malformedRecord);
+                Assert.IsFalse(string.IsNullOrWhiteSpace(result.Detail), malformedRecord);
+                Assert.AreEqual(0, recoveryCalls, malformedRecord);
+                Assert.AreEqual(malformedRecord, await File.ReadAllTextAsync(paths.LocalCoreShutdownFile));
+            }
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
     public async Task RecoveryStopsOnlyExactPidStartTimeAndExecutableMatch()
     {
         string root = CreateRoot();
