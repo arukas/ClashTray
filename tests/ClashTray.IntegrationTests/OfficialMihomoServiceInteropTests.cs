@@ -11,8 +11,6 @@ namespace ClashTray.IntegrationTests;
 [TestClass]
 public sealed class OfficialMihomoServiceInteropTests
 {
-    private const string PinnedArchiveSha256 =
-        "38b2420799d9e7cde77ec1a19c7150dd17ca77f7fb82d9f62cb8763a307eee67";
 
     [TestMethod]
     [TestCategory("RequiresOfficialMihomo")]
@@ -45,7 +43,7 @@ public sealed class OfficialMihomoServiceInteropTests
                 BundledMihomo.Version,
                 new Uri(
                     $"https://github.com/MetaCubeX/mihomo/releases/download/{BundledMihomo.Version}/mihomo-windows-amd64-{BundledMihomo.Version}.zip"),
-                PinnedArchiveSha256,
+                OfficialMihomoTestSupport.PinnedArchiveSha256,
                 executableSha256)));
 
         int controllerPort = GetAvailableLoopbackPort();
@@ -83,7 +81,8 @@ public sealed class OfficialMihomoServiceInteropTests
             await using ServiceRuntimeController controller = new(
                 paths,
                 managedUserSid: null,
-                tunHealthProbe: healthProbe);
+                tunHealthProbe: healthProbe,
+                restoreOwnedProxyStates: static () => { });
 
             ServiceResponse startResponse = await controller.HandleAsync(
                 startRequest,

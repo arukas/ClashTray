@@ -3,7 +3,9 @@ param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
 
-    [string]$ExistingCorePath
+    [string]$ExistingCorePath,
+
+    [string]$ExistingArchivePath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +20,32 @@ if (
     throw 'The pinned Mihomo version or Windows x64 archive SHA-256 is invalid.'
 }
 
+$temporaryRoot = if (-not [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+    $env:RUNNER_TEMP
+}
+else {
+    [IO.Path]::GetTempPath()
+}
+$archiveName = "mihomo-windows-amd64-$($manifest.version).zip"
+$archiveUri = "https://github.com/MetaCubeX/mihomo/releases/download/$($manifest.version)/$archiveName"
+if (-not [string]::IsNullOrWhiteSpace($ExistingArchivePath)) {
+    if (-not (Test-Path -LiteralPath $ExistingArchivePath -PathType Leaf)) {
+        throw "The explicitly supplied Mihomo archive does not exist: $ExistingArchivePath"
+    }
+
+    $archivePath = (Resolve-Path -LiteralPath $ExistingArchivePath).Path
+}
+else {
+    $archivePath = Join-Path $temporaryRoot $archiveName
+    Invoke-WebRequest -Uri $archiveUri -OutFile $archivePath
+}
+
+$actualArchiveSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+if ($actualArchiveSha256 -ine $manifest.windowsAmd64Sha256) {
+    throw "Official Mihomo archive SHA-256 mismatch. Expected $($manifest.windowsAmd64Sha256), received $actualArchiveSha256."
+}
+Write-Host "Verified official Mihomo archive SHA-256: $actualArchiveSha256"
+
 $corePath = $null
 if (-not [string]::IsNullOrWhiteSpace($ExistingCorePath)) {
     if (-not (Test-Path -LiteralPath $ExistingCorePath -PathType Leaf)) {
@@ -25,27 +53,10 @@ if (-not [string]::IsNullOrWhiteSpace($ExistingCorePath)) {
     }
 
     $corePath = (Resolve-Path -LiteralPath $ExistingCorePath).Path
-    Write-Host 'Using an existing controlled Mihomo executable; archive download and SHA-256 verification were not performed by this invocation.'
+    Write-Host 'Using an explicitly supplied controlled Mihomo executable.'
 }
 else {
-    $temporaryRoot = if (-not [string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
-        $env:RUNNER_TEMP
-    }
-    else {
-        [IO.Path]::GetTempPath()
-    }
-
-    $archiveName = "mihomo-windows-amd64-$($manifest.version).zip"
-    $archiveUri = "https://github.com/MetaCubeX/mihomo/releases/download/$($manifest.version)/$archiveName"
-    $archivePath = Join-Path $temporaryRoot $archiveName
     $extractRoot = Join-Path $temporaryRoot "clashtray-mihomo-test-$($manifest.version)-$([guid]::NewGuid().ToString('N'))"
-
-    Invoke-WebRequest -Uri $archiveUri -OutFile $archivePath
-    $actualArchiveSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
-    if ($actualArchiveSha256 -ine $manifest.windowsAmd64Sha256) {
-        throw "Official Mihomo archive SHA-256 mismatch. Expected $($manifest.windowsAmd64Sha256), received $actualArchiveSha256."
-    }
-
     New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
     Expand-Archive -LiteralPath $archivePath -DestinationPath $extractRoot -Force
     $executables = @(Get-ChildItem -LiteralPath $extractRoot -Recurse -File -Filter 'mihomo-windows-amd64.exe')
@@ -54,7 +65,6 @@ else {
     }
 
     $corePath = $executables[0].FullName
-    Write-Host "Verified official Mihomo archive SHA-256: $actualArchiveSha256"
 }
 
 $stream = [IO.File]::OpenRead($corePath)
@@ -92,9 +102,13 @@ if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($manifest.v
 
 $env:CLASHTRAY_MIHOMO_PATH = $corePath
 $env:CLASHTRAY_MIHOMO_REQUIRED = 'true'
+$env:CLASHTRAY_MIHOMO_ARCHIVE_PATH = $archivePath
+$env:CLASHTRAY_MIHOMO_ARCHIVE_SHA256 = $actualArchiveSha256
 if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_ENV)) {
     $environmentLines = "CLASHTRAY_MIHOMO_PATH=$corePath" + [Environment]::NewLine
     $environmentLines += "CLASHTRAY_MIHOMO_REQUIRED=true" + [Environment]::NewLine
+    $environmentLines += "CLASHTRAY_MIHOMO_ARCHIVE_PATH=$archivePath" + [Environment]::NewLine
+    $environmentLines += "CLASHTRAY_MIHOMO_ARCHIVE_SHA256=$actualArchiveSha256" + [Environment]::NewLine
     [IO.File]::AppendAllText(
         $env:GITHUB_ENV,
         $environmentLines,
@@ -161,5 +175,5 @@ if ($nonPassing.Count -gt 0) {
     throw "The mandatory official Mihomo category must pass every selected test; non-passing outcomes: $outcomes."
 }
 
-Write-Host "Official Mihomo gate passed: $($testResults.Count) category tests; version $($manifest.version); executable $corePath"
+Write-Host "Official Mihomo gate passed: $($testResults.Count) category tests; version $($manifest.version); executable $corePath; archive $archivePath"
 Write-Host "Test result: $trxPath"

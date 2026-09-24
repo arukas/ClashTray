@@ -2147,6 +2147,7 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
     public async Task<string> InstallCoreUpdateAsync(CoreUpdateManifest manifest, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(manifest);
+        CoreUpdater.ValidateManifest(manifest);
         using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
             bool wasRunning = Snapshot.Core.State == CoreState.Running;

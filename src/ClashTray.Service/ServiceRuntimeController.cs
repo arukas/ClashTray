@@ -35,6 +35,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private readonly ITunNetworkHealthProbe _tunHealthProbe;
     private readonly TunTransactionCoordinator _tunTransactions;
     private readonly ILogger _logger;
+    private readonly Action _restoreOwnedProxyStates;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly object _requestCacheGate = new();
     private readonly Dictionary<Guid, CachedRequest> _requestCache = [];
@@ -65,10 +66,13 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         AppPaths? paths,
         string? managedUserSid,
         ITunNetworkHealthProbe? tunHealthProbe,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        Action? restoreOwnedProxyStates = null)
     {
         _paths = paths ?? new AppPaths();
         _logger = loggerFactory?.CreateLogger<ServiceRuntimeController>() ?? NullLogger<ServiceRuntimeController>.Instance;
+        _restoreOwnedProxyStates = restoreOwnedProxyStates ?? SystemProxyRecovery.RestoreOwnedStatesForLoadedUsers;
+        _restoreOwnedProxyStates = restoreOwnedProxyStates ?? SystemProxyRecovery.RestoreOwnedStatesForLoadedUsers;
         _coreUpdater = new CoreUpdater(_paths, _coreUpdateHttpClient, managedUserSid);
         _tunHealthProbe = tunHealthProbe ?? new WindowsTunNetworkHealthProbe();
         _tunTransactions = new TunTransactionCoordinator(
@@ -457,7 +461,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             }
             if (!IsDesktopProcessRunning())
             {
-                SystemProxyRecovery.RestoreOwnedStatesForLoadedUsers();
+                _restoreOwnedProxyStates();
             }
         }
         finally
@@ -555,6 +559,13 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         return await RefreshTunStateAfterStartAsync(request, cancellationToken);
     }
 
+    internal static CoreUpdateManifest ValidateCoreUpdatePayload(ServiceCoreUpdatePayload payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        CoreUpdateManifest manifest = new(payload.Version, payload.DownloadUri, payload.Sha256);
+        CoreUpdater.ValidateManifest(manifest);
+        return manifest;
+    }
     private async Task<ServiceResponse> InstallCoreAsync(ServiceRequest request, CancellationToken cancellationToken)
     {
         if (_processManager.State == CoreState.Running)
@@ -566,8 +577,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         bool installed = false;
         try
         {
-            CoreUpdateManifest manifest = new(payload.Version, payload.DownloadUri, payload.Sha256);
-            CoreUpdater.ValidateManifest(manifest);
+            CoreUpdateManifest manifest = ValidateCoreUpdatePayload(payload);
             string path = await _coreUpdater.DownloadAndInstallAsync(manifest, cancellationToken);
             installed = true;
             if (!await ValidateInstalledCoreAsync(cancellationToken))

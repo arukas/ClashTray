@@ -731,6 +731,34 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task CoreUpdateRejectsUnapprovedReleaseBeforeCallingService()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        BlockingInstallService service = new();
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, service, null);
+
+        try
+        {
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => runtime.InstallCoreUpdateAsync(new CoreUpdateManifest(
+                "v1.19.31",
+                new Uri("https://github.com/example-owner/example-repo/raw/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-windows-amd64-v1.19.31.zip"),
+                string.Empty)));
+
+            Assert.AreEqual(0, service.InstallRequestCount);
+            Assert.IsFalse(service.InstallEntered.Task.IsCompleted);
+            Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable));
+        }
+        finally
+        {
+            service.ReleaseInstall();
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+    [TestMethod]
     public async Task CoreUpdateDoesNotHoldReadRefreshBehindInstall()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
@@ -748,7 +776,7 @@ public sealed class RuntimeStateTests
         {
             update = runtime.InstallCoreUpdateAsync(new CoreUpdateManifest(
                 "v1.19.30",
-                new Uri("https://example.test/mihomo.zip"),
+                new Uri("https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-windows-amd64-v1.19.30.zip"),
                 new string('0', 64)));
             await service.InstallEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
@@ -1877,6 +1905,8 @@ public sealed class RuntimeStateTests
         public TaskCompletionSource<bool> InstallEntered { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public int InstallRequestCount { get; private set; }
+
         public void ReleaseInstall() => _releaseInstall.TrySetResult(true);
 
         public async Task<ServiceResponse> SendAsync(
@@ -1886,6 +1916,7 @@ public sealed class RuntimeStateTests
         {
             if (command == ServiceCommand.InstallCore)
             {
+                InstallRequestCount++;
                 InstallEntered.TrySetResult(true);
                 await _releaseInstall.Task.WaitAsync(cancellationToken);
             }

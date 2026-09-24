@@ -202,9 +202,15 @@ public static class BoundedDiagnosticWriter
     {
         int scanLimit = Math.Min(value.Length, maximumCharacters + SanitizerLookaheadCharacters);
         string bounded = value[..scanLimit];
-        int schemeIndex = FindHttpScheme(bounded, maximumCharacters);
-        if (schemeIndex >= 0)
+        int searchStart = 0;
+        while (searchStart < maximumCharacters)
         {
+            int schemeIndex = FindHttpScheme(bounded, maximumCharacters, searchStart);
+            if (schemeIndex < 0)
+            {
+                break;
+            }
+
             int authorityStart = bounded.IndexOf("://", schemeIndex, StringComparison.Ordinal) + 3;
             int authorityEnd = FindAuthorityEnd(bounded, authorityStart);
             int visibleEnd = authorityEnd < 0 ? bounded.Length : authorityEnd;
@@ -215,18 +221,26 @@ public static class BoundedDiagnosticWriter
             if (!hasUserInfoSeparator
                 && (authorityCrossesOutputBoundary || authorityMayContinuePastScanWindow))
             {
-                bounded = bounded[..authorityStart] + "[已隐藏]";
+                bounded = bounded[..schemeIndex] + "[已隐藏]";
+                break;
             }
+
+            if (authorityEnd < 0)
+            {
+                break;
+            }
+
+            searchStart = authorityEnd + 1;
         }
 
         string sanitized = ErrorSanitizer.Sanitize(bounded);
         return LimitCharacters(sanitized, maximumCharacters);
     }
 
-    private static int FindHttpScheme(string value, int maximumCharacters)
+    private static int FindHttpScheme(string value, int maximumCharacters, int searchStart)
     {
-        int http = value.IndexOf("http://", StringComparison.OrdinalIgnoreCase);
-        int https = value.IndexOf("https://", StringComparison.OrdinalIgnoreCase);
+        int http = value.IndexOf("http://", searchStart, StringComparison.OrdinalIgnoreCase);
+        int https = value.IndexOf("https://", searchStart, StringComparison.OrdinalIgnoreCase);
         int result = http < 0 ? https : https < 0 ? http : Math.Min(http, https);
         return result >= 0 && result < maximumCharacters ? result : -1;
     }

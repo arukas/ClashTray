@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ClashTray.Core;
 
@@ -9,6 +10,7 @@ public sealed record CoreUpdateManifest(string Version, Uri DownloadUri, string 
 public sealed class CoreUpdater : IDisposable
 {
     private const long MaxArchiveBytes = 128L * 1024 * 1024;
+    private const string OfficialArchiveExecutableName = "mihomo-windows-amd64.exe";
     private const long MaxExecutableBytes = 128L * 1024 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -92,15 +94,17 @@ public sealed class CoreUpdater : IDisposable
             }
 
             using ZipArchive archive = await ZipFile.OpenReadAsync(archivePath, cancellationToken);
-            ZipArchiveEntry[] coreEntries = archive.Entries
-                .Where(entry => string.Equals(entry.Name, "mihomo.exe", StringComparison.OrdinalIgnoreCase))
+            ZipArchiveEntry[] namedCoreEntries = archive.Entries
+                .Where(entry => string.Equals(entry.Name, OfficialArchiveExecutableName, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
-            if (coreEntries.Length != 1)
+            if (namedCoreEntries.Length != 1
+                || !namedCoreEntries[0].FullName.Equals(OfficialArchiveExecutableName, StringComparison.Ordinal))
             {
-                throw new InvalidDataException("The Mihomo archive must contain exactly one mihomo.exe.");
+                throw new InvalidDataException(
+                    $"The Mihomo archive must contain exactly one root {OfficialArchiveExecutableName} entry.");
             }
 
-            await ExtractEntryAsync(coreEntries[0], extractedCorePath, cancellationToken);
+            await ExtractEntryAsync(namedCoreEntries[0], extractedCorePath, cancellationToken);
             ManagedCoreVerifier.ValidateWindowsAmd64Executable(extractedCorePath);
             string executableHash;
             await using (FileStream executable = File.OpenRead(extractedCorePath))
@@ -221,20 +225,76 @@ public sealed class CoreUpdater : IDisposable
     {
         ArgumentNullException.ThrowIfNull(manifest);
         Uri? downloadUri = manifest.DownloadUri;
-        string path = downloadUri?.AbsolutePath ?? string.Empty;
+        string version = manifest.Version ?? string.Empty;
         bool checksumValid = string.IsNullOrEmpty(manifest.Sha256)
-            || (manifest.Sha256.Length == 64 && manifest.Sha256.All(Uri.IsHexDigit));
-        if (string.IsNullOrWhiteSpace(manifest.Version)
-            || downloadUri is null
-            || downloadUri.Scheme != Uri.UriSchemeHttps
-            || !downloadUri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
-            || !path.Contains("/MetaCubeX/mihomo/releases/download/", StringComparison.OrdinalIgnoreCase)
-            || !path.Contains("windows-amd64", StringComparison.OrdinalIgnoreCase)
+            || (manifest.Sha256.Length == 64 && manifest.Sha256.All(IsAsciiHexDigit));
+        if (downloadUri is null
+            || !IsSupportedVersionTag(version)
+            || !IsCanonicalOfficialReleaseUri(downloadUri, version)
             || !checksumValid)
         {
             throw new ArgumentException("Mihomo update manifest is not an approved official release manifest.", nameof(manifest));
         }
     }
+
+    private static bool IsCanonicalOfficialReleaseUri(Uri downloadUri, string version)
+    {
+        if (!downloadUri.IsAbsoluteUri
+            || !downloadUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || !downloadUri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+            || downloadUri.Port != 443
+            || !downloadUri.IsDefaultPort
+            || downloadUri.UserInfo.Length != 0
+            || downloadUri.Query.Length != 0
+            || downloadUri.Fragment.Length != 0)
+        {
+            return false;
+        }
+
+        string original = downloadUri.OriginalString;
+        int authorityStart = original.IndexOf("://", StringComparison.Ordinal);
+        int pathStart = authorityStart < 0 ? -1 : original.IndexOf('/', authorityStart + 3);
+        if (authorityStart != Uri.UriSchemeHttps.Length
+            || !original.AsSpan(0, authorityStart).Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || pathStart < 0
+            || !original.AsSpan(authorityStart + 3, pathStart - authorityStart - 3)
+                .Equals("github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string rawPath = original[(pathStart + 1)..];
+        if (rawPath.IndexOfAny(['%', '\\', '?', '#']) >= 0)
+        {
+            return false;
+        }
+
+        string[] segments = rawPath.Split('/');
+        if (segments.Length != 6
+            || segments.Any(string.IsNullOrEmpty)
+            || segments[0] != "MetaCubeX"
+            || segments[1] != "mihomo"
+            || segments[2] != "releases"
+            || segments[3] != "download"
+            || !segments[4].Equals(version, StringComparison.Ordinal)
+            || !segments[5].Equals($"mihomo-windows-amd64-{version}.zip", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return downloadUri.AbsolutePath.Equals($"/{rawPath}", StringComparison.Ordinal);
+    }
+
+    private static bool IsSupportedVersionTag(string version) =>
+        version.Length is > 0 and <= 128
+        && Regex.IsMatch(
+            version,
+            @"\Av(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?\z",
+            RegexOptions.CultureInvariant | RegexOptions.NonBacktracking,
+            TimeSpan.FromMilliseconds(100));
+
+    private static bool IsAsciiHexDigit(char value) =>
+        value is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F';
 
     private static void ReplaceWithBackup(string candidatePath, string targetPath, string backupPath)
     {

@@ -8,6 +8,12 @@ namespace ClashTray.IntegrationTests;
 [TestClass]
 public sealed class BoundaryTests
 {
+    private static ServiceRuntimeController CreateIsolatedController(AppPaths? paths = null) =>
+        new ServiceRuntimeController(
+            paths,
+            managedUserSid: null,
+            tunHealthProbe: null,
+            restoreOwnedProxyStates: static () => { });
     [TestMethod]
     public void CoreStateIncludesExplicitLifecycleStates()
     {
@@ -19,7 +25,7 @@ public sealed class BoundaryTests
     [TestMethod]
     public async Task ServiceRequestIdJoinsSameObservationAndRejectsPayloadReuse()
     {
-        await using ServiceRuntimeController controller = new ServiceRuntimeController();
+        await using ServiceRuntimeController controller = CreateIsolatedController();
         Guid requestId = Guid.NewGuid();
         ServiceRequest request = new(requestId, ServiceCommand.GetStatus, ProtocolVersion: ServiceProtocol.CurrentVersion);
 
@@ -44,7 +50,7 @@ public sealed class BoundaryTests
     [TestMethod]
     public async Task ServiceRejectsRequestWithoutProtocolVersion()
     {
-        await using ServiceRuntimeController controller = new ServiceRuntimeController();
+        await using ServiceRuntimeController controller = CreateIsolatedController();
         // A legacy peer omits the version field, which deserializes to 0; the
         // service must reject it explicitly instead of assuming compatibility.
         ServiceResponse response = await controller.HandleAsync(
@@ -57,11 +63,21 @@ public sealed class BoundaryTests
     }
 
     [TestMethod]
+    public void ServiceCoreUpdateBoundaryRejectsUnapprovedReleaseUrl()
+    {
+        ServiceCoreUpdatePayload payload = new(
+            "v1.19.31",
+            new Uri("https://github.com/fake-owner/fake-repo/raw/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-windows-amd64-v1.19.31.zip"),
+            string.Empty);
+
+        Assert.ThrowsExactly<ArgumentException>(() => ServiceRuntimeController.ValidateCoreUpdatePayload(payload));
+    }
+    [TestMethod]
     [DataRow("test-secret")]
     [DataRow("")]
     public async Task TunCommandCannotTargetControllerWithoutRunningCore(string secret)
     {
-        await using ServiceRuntimeController controller = new ServiceRuntimeController();
+        await using ServiceRuntimeController controller = CreateIsolatedController();
         ServiceRequest request = new ServiceRequest(
             Guid.NewGuid(),
             ServiceCommand.EnableTun,
@@ -91,7 +107,7 @@ public sealed class BoundaryTests
 
         try
         {
-            await using ServiceRuntimeController controller = new ServiceRuntimeController(paths);
+            await using ServiceRuntimeController controller = CreateIsolatedController(paths);
             ServiceRequest request = new ServiceRequest(
                 Guid.NewGuid(),
                 ServiceCommand.StartCore,
@@ -136,7 +152,7 @@ public sealed class BoundaryTests
 
         try
         {
-            await using ServiceRuntimeController controller = new ServiceRuntimeController(paths);
+            await using ServiceRuntimeController controller = CreateIsolatedController(paths);
             ServiceRequest request = new ServiceRequest(
                 Guid.NewGuid(),
                 ServiceCommand.StartCore,

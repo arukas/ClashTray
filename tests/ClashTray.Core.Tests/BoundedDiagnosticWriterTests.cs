@@ -84,6 +84,73 @@ public sealed class BoundedDiagnosticWriterTests
     }
 
     [TestMethod]
+    public void SafeEarlierUrlsAndMixedSecretsCannotExposeLaterUrlPrefixesAtScanBoundary()
+    {
+        string root = CreateRoot();
+        const int scanWindow = 512 + 256;
+        const string urlSecret = "SYNTHETIC_URL_PASSWORD_FRAGMENT";
+        const string authorizationSecret = "SYNTHETIC_AUTHORIZATION_TOKEN";
+        const string querySecret = "SYNTHETIC_QUERY_TOKEN";
+        string safeUrlPrefix = "https://safe.invalid/path ";
+        string[] messages =
+        [
+            CreateBoundaryMessage(secretAtOffset: scanWindow - 1, includeMixedSecrets: false),
+            CreateBoundaryMessage(secretAtOffset: scanWindow, includeMixedSecrets: true),
+            CreateBoundaryMessage(secretAtOffset: scanWindow + 1, includeMixedSecrets: true)
+        ];
+
+        try
+        {
+            foreach (string message in messages)
+            {
+                Assert.IsTrue(BoundedDiagnosticWriter.TryWriteException(root, new InvalidOperationException(message)));
+            }
+
+            string content = string.Join(
+                Environment.NewLine,
+                Directory.EnumerateFiles(root, "startup-error-*.log")
+                    .Select(File.ReadAllText));
+
+            Assert.IsFalse(content.Contains("SYNTHETIC_URL_PASSWORD", StringComparison.Ordinal));
+            Assert.IsFalse(content.Contains(authorizationSecret, StringComparison.Ordinal));
+            Assert.IsFalse(content.Contains(querySecret, StringComparison.Ordinal));
+            StringAssert.Contains(content, "safe.invalid", StringComparison.Ordinal);
+            Assert.IsTrue(content.Length <= BoundedDiagnosticWriter.MaximumFileCount * BoundedDiagnosticWriter.MaximumFileBytes);
+            foreach (string file in Directory.EnumerateFiles(root, "startup-error-*.log"))
+            {
+                Assert.IsTrue(new FileInfo(file).Length <= BoundedDiagnosticWriter.MaximumFileBytes);
+                foreach (string line in File.ReadAllLines(file))
+                {
+                    Assert.IsTrue(Encoding.UTF8.GetByteCount(line) + 1 <= BoundedDiagnosticWriter.MaximumRecordBytes);
+                }
+            }
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+
+        string CreateBoundaryMessage(int secretAtOffset, bool includeMixedSecrets)
+        {
+            string mixed = includeMixedSecrets
+                ? $"Authorization: Bearer {authorizationSecret} https://second-safe.invalid/x?token={querySecret} "
+                : string.Empty;
+            string secondSafeUrl = includeMixedSecrets ? string.Empty : "https://second-safe.invalid/x ";
+            string beforeCredentialUrl = safeUrlPrefix + mixed + secondSafeUrl;
+            int credentialUrlStart = beforeCredentialUrl.Length + 220;
+            string filler = new string('x', credentialUrlStart - beforeCredentialUrl.Length - 1);
+            string credentialPrefix = "https://user:" + urlSecret;
+            int paddingLength = secretAtOffset - credentialUrlStart - credentialPrefix.Length;
+            Assert.IsTrue(paddingLength >= 0);
+            return beforeCredentialUrl
+                + filler
+                + " "
+                + credentialPrefix
+                + new string('p', paddingLength)
+                + "@subscription.invalid/config";
+        }
+    }
+    [TestMethod]
     public void NestedAndUnicodeExceptionsAreSingleLineAndWithinEncodedRecordLimit()
     {
         string root = CreateRoot();
