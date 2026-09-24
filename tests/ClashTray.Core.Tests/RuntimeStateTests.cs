@@ -197,6 +197,33 @@ public sealed class RuntimeStateTests
     }
 
     [TestMethod]
+    public async Task MutationsWithoutControllerSessionFailInsteadOfReportingSuccess()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
+
+        try
+        {
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => runtime.ClearDnsCacheAsync());
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => runtime.ClearFakeIpCacheAsync());
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => runtime.CloseAllConnectionsAsync());
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                () => runtime.CloseConnectionAsync("connection-id"));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task UnchangedControllerDataReusesListSnapshots()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));

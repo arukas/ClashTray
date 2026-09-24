@@ -3376,11 +3376,10 @@ if (expectedTarget.EndpointId == EndpointId.Local)
 
         if (_api is null)
         {
-            if (!routeToRemote)
-            {
-                _ = CaptureControllerSession();
-            }
-
+            // _api is derived from the controller session registry, so a missing
+            // client means there is no session: Capture() throws and the mutation
+            // must never complete silently as if it had succeeded.
+            _ = CaptureControllerSession();
             return;
         }
 
