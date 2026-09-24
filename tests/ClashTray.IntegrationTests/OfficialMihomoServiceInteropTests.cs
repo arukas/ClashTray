@@ -134,9 +134,51 @@ public sealed class OfficialMihomoServiceInteropTests
         {
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await DeleteTemporaryDirectoryAsync(root);
             }
         }
+    }
+
+    private static async Task DeleteTemporaryDirectoryAsync(string directoryPath)
+    {
+        const int maximumAttempts = 12;
+        const int retryDelayMilliseconds = 250;
+        Exception? lastException = null;
+
+        // Windows may briefly hold a just-exited executable during file-system scanning.
+        // Normalize read-only attributes and retry for a bounded period; persistent locks still fail the test.
+        for (int attempt = 0; attempt < maximumAttempts; attempt++)
+        {
+            try
+            {
+                foreach (string entry in Directory.EnumerateFileSystemEntries(
+                    directoryPath,
+                    "*",
+                    SearchOption.AllDirectories))
+                {
+                    FileAttributes attributes = File.GetAttributes(entry);
+                    if ((attributes & FileAttributes.ReadOnly) != 0)
+                    {
+                        File.SetAttributes(entry, attributes & ~FileAttributes.ReadOnly);
+                    }
+                }
+
+                Directory.Delete(directoryPath, recursive: true);
+                return;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                lastException = exception;
+                if (attempt + 1 < maximumAttempts)
+                {
+                    await Task.Delay(retryDelayMilliseconds).ConfigureAwait(false);
+                }
+            }
+        }
+
+        throw new IOException(
+            $"Could not delete the isolated Mihomo integration directory after {maximumAttempts} attempts.",
+            lastException);
     }
 
     private static async Task<ServiceResponse> WaitForSafeStatusAsync(
