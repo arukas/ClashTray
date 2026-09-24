@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core.Tests;
@@ -87,6 +90,65 @@ public sealed class RuntimeLogCoordinatorTests
 
         await logs.StopLogStreamAsync();
         await logs.StopLogStreamAsync();
+    }
+
+    [TestMethod]
+    public async Task StopLogStreamAsyncToleratesWebSocketHandshakeTimeouts()
+    {
+        RuntimeStateStore store = new(CreateSnapshot());
+        using TcpListener listener = new(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        using CancellationTokenSource acceptCts = new();
+        ConcurrentBag<TcpClient> heldClients = [];
+        Task acceptLoop = Task.Run(async () =>
+        {
+            try
+            {
+                while (!acceptCts.IsCancellationRequested)
+                {
+                    // Accept connections but never answer the WebSocket upgrade,
+                    // so the client-side handshake times out.
+                    heldClients.Add(await listener.AcceptTcpClientAsync(acceptCts.Token));
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        });
+
+        try
+        {
+            using HttpClient httpClient = new();
+            MihomoApiClient api = new(
+                httpClient,
+                new Uri($"http://127.0.0.1:{port}/"),
+                string.Empty,
+                webSocketHandshakeTimeout: TimeSpan.FromMilliseconds(300));
+            using RuntimeLogCoordinator logs = new(
+                store,
+                () => api,
+                () => true,
+                () => "info",
+                () => { },
+                () => { },
+                CancellationToken.None);
+
+            logs.EnsureLogStreamStarted();
+            await Task.Delay(TimeSpan.FromSeconds(2));
+
+            await logs.StopLogStreamAsync();
+        }
+        finally
+        {
+            await acceptCts.CancelAsync();
+            foreach (TcpClient client in heldClients)
+            {
+                client.Dispose();
+            }
+
+            await acceptLoop;
+        }
     }
 
     private static RuntimeLogCoordinator CreateCoordinator(

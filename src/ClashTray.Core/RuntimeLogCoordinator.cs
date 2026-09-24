@@ -133,6 +133,9 @@ internal sealed class RuntimeLogCoordinator : IDisposable
         catch (IOException)
         {
         }
+        catch (TimeoutException)
+        {
+        }
         finally
         {
             streamCts?.Dispose();
@@ -169,6 +172,9 @@ internal sealed class RuntimeLogCoordinator : IDisposable
             {
             }
             catch (IOException)
+            {
+            }
+            catch (TimeoutException)
             {
             }
 
