@@ -85,6 +85,94 @@ public sealed class OfficialMihomoInteropTests
             }
         }
     }
+
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
+    public async Task OfficialMihomoUsesManagedValuesBeforeExplicitDocumentEnd()
+    {
+        string? executablePath = FindMihomoExecutable();
+        if (executablePath is null)
+        {
+            Assert.Inconclusive(
+                "Official Mihomo payload not found. Set CLASHTRAY_MIHOMO_PATH or build the packaging payload to run this test.");
+            return;
+        }
+
+        ManagedCoreVerifier.ValidateWindowsAmd64Executable(executablePath);
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            "ClashTrayIntegrationTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string sourcePath = Path.Combine(root, "explicit-end.yaml");
+        string outputPath = Path.Combine(root, "managed.yaml");
+        string source = "---" + Environment.NewLine
+            + "mode: direct" + Environment.NewLine
+            + "allow-lan: true" + Environment.NewLine
+            + "tun:" + Environment.NewLine
+            + "  enable: false" + Environment.NewLine
+            + "  stack: |-" + Environment.NewLine
+            + "    gvisor" + Environment.NewLine
+            + "proxies: []" + Environment.NewLine
+            + "proxy-groups: []" + Environment.NewLine
+            + "rules: []" + Environment.NewLine
+            + "..." + Environment.NewLine;
+        await File.WriteAllTextAsync(sourcePath, source);
+
+        HashSet<int> ports = [];
+        while (ports.Count < 4)
+        {
+            ports.Add(GetAvailableLoopbackPort());
+        }
+
+        int[] selectedPorts = ports.ToArray();
+        AppSettings settings = new(
+            ControllerPort: selectedPorts[0],
+            HttpPort: selectedPorts[1],
+            MixedPort: selectedPorts[2],
+            SocksPort: selectedPorts[3],
+            AllowLan: false,
+            TunEnabled: true,
+            TunStack: "system");
+        MihomoProcessManager manager = new();
+        try
+        {
+            await RuntimeConfigBuilder.BuildForCoreStartAsync(
+                sourcePath,
+                outputPath,
+                settings,
+                externalUiPath: null);
+            bool valid = await manager.ValidateAsync(executablePath, outputPath, root);
+            Assert.IsTrue(valid, "Official Mihomo rejected the managed configuration.");
+
+            await manager.StartAsync(executablePath, outputPath, root);
+            using HttpClient httpClient = new();
+            MihomoApiClient api = new(
+                httpClient,
+                new Uri($"http://127.0.0.1:{settings.ControllerPort}/"),
+                string.Empty);
+            using JsonDocument version = await api.GetVersionAsync();
+            Assert.AreEqual(BundledMihomo.Version, MihomoDataParser.ParseVersion(version));
+
+            using JsonDocument configuration = await api.GetConfigurationAsync(force: false);
+            JsonElement effective = configuration.RootElement;
+            Assert.AreEqual(settings.MixedPort, effective.GetProperty("mixed-port").GetInt32());
+            Assert.AreEqual(settings.AllowLan, effective.GetProperty("allow-lan").GetBoolean());
+            JsonElement tun = effective.GetProperty("tun");
+            Assert.IsFalse(tun.GetProperty("enable").GetBoolean());
+            Assert.IsTrue(string.Equals("system", tun.GetProperty("stack").GetString(), StringComparison.OrdinalIgnoreCase));
+            Assert.AreEqual(source, await File.ReadAllTextAsync(sourcePath));
+        }
+        finally
+        {
+            await manager.DisposeAsync();
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [TestMethod]
     [TestCategory("RequiresOfficialMihomo")]
     public async Task PinnedMihomoStartsWithTunDisabledAndServesLoopbackController()
@@ -209,32 +297,7 @@ public sealed class OfficialMihomoInteropTests
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    private static string? FindMihomoExecutable()
-    {
-        string? configured = Environment.GetEnvironmentVariable("CLASHTRAY_MIHOMO_PATH");
-        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
-        {
-            return Path.GetFullPath(configured);
-        }
+    private static string? FindMihomoExecutable() => OfficialMihomoTestSupport.FindMihomoExecutable();
 
-        DirectoryInfo? directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            string candidate = Path.Combine(
-                directory.FullName,
-                "packaging",
-                "out",
-                "payload-local-full",
-                "Core",
-                "mihomo.exe");
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
 
-            directory = directory.Parent;
-        }
-
-        return null;
-    }
 }

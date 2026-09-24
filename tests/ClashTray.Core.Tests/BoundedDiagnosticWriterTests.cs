@@ -170,6 +170,91 @@ public sealed class BoundedDiagnosticWriterTests
         }
     }
 
+
+    [TestMethod]
+    public void DiagnosticsIncludeBoundedApplicationVersionAndDistinctMethodLocations()
+    {
+        string root = CreateRoot();
+        try
+        {
+            Exception first = CaptureAtFirstCallSite();
+            Exception second = CaptureAtSecondCallSite();
+            Assert.IsTrue(BoundedDiagnosticWriter.TryWriteException(root, first));
+            Assert.IsTrue(BoundedDiagnosticWriter.TryWriteException(root, second));
+
+            string content = string.Join(
+                Environment.NewLine,
+                Directory.EnumerateFiles(root, "startup-error-*.log")
+                    .Select(File.ReadAllText));
+
+            StringAssert.Contains(content, "app-version=", StringComparison.Ordinal);
+            StringAssert.Contains(content, nameof(ThrowFromFirstCallSite), StringComparison.Ordinal);
+            StringAssert.Contains(content, nameof(ThrowFromSecondCallSite), StringComparison.Ordinal);
+            Assert.IsTrue(content.Length < (BoundedDiagnosticWriter.MaximumFileCount * BoundedDiagnosticWriter.MaximumFileBytes));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public void AggregateExceptionTraversalStopsAtTheConfiguredDetailBound()
+    {
+        string root = CreateRoot();
+        AggregateException exception = new(
+            Enumerable.Range(0, 10_000)
+                .Select(index => new InvalidOperationException($"aggregate-child-{index}")));
+        try
+        {
+            Assert.IsTrue(BoundedDiagnosticWriter.TryWriteException(root, exception));
+            byte[] bytes = File.ReadAllBytes(Directory.EnumerateFiles(root, "startup-error-*.log").Single());
+            string content = Encoding.UTF8.GetString(bytes);
+
+            Assert.IsTrue(bytes.Length <= BoundedDiagnosticWriter.MaximumRecordBytes);
+            StringAssert.Contains(content, "aggregate-child-0", StringComparison.Ordinal);
+            Assert.IsFalse(content.Contains("aggregate-child-9999", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    private static InvalidOperationException CaptureAtFirstCallSite()
+    {
+        try
+        {
+            ThrowFromFirstCallSite();
+        }
+        catch (InvalidOperationException exception)
+        {
+            return exception;
+        }
+
+        throw new InvalidOperationException("Expected the first diagnostic exception to be thrown.");
+    }
+
+    private static InvalidOperationException CaptureAtSecondCallSite()
+    {
+        try
+        {
+            ThrowFromSecondCallSite();
+        }
+        catch (InvalidOperationException exception)
+        {
+            return exception;
+        }
+
+        throw new InvalidOperationException("Expected the second diagnostic exception to be thrown.");
+    }
+
+    private static void ThrowFromFirstCallSite() =>
+        throw new InvalidOperationException("same diagnostic message");
+
+    private static void ThrowFromSecondCallSite() =>
+        throw new InvalidOperationException("same diagnostic message");
+
     private static string CreateRoot() =>
         Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
 

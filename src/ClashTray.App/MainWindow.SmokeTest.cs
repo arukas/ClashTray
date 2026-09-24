@@ -115,6 +115,7 @@ public sealed partial class MainWindow
         await VerifyNodeScrollingAsync(directory, sample);
         await VerifyProxyDelayDisplayAsync(directory, sample);
         await VerifyRemoteFreshnessPresentationAsync(directory, sample);
+        await VerifyConnectionsAndLogsInteractionsAsync(directory, sample);
         await VerifyNetworkSwitchErrorPresentationAsync(directory);
         await VerifySsidFeatureScopeAsync(directory);
         await VerifySettingsDraftAsync(directory);
@@ -151,7 +152,16 @@ public sealed partial class MainWindow
             NavigateTo(page.Item1, page.Item2);
             await Task.Delay(100);
             RootGrid.UpdateLayout();
-            if (!ReferenceEquals(PageContent.Content, page.Item1) || OtherPageScrollViewer.Visibility != Visibility.Visible)
+            bool listPage = page.Item2 is PanelPage.Connections or PanelPage.Logs;
+            bool pageMounted = listPage
+                ? ReferenceEquals(ListPageContent.Content, page.Item1)
+                : ReferenceEquals(PageContent.Content, page.Item1);
+            bool pageLayoutVisible = listPage
+                ? ListPageContent.Visibility == Visibility.Visible
+                    && OtherPageScrollViewer.Visibility == Visibility.Collapsed
+                : OtherPageScrollViewer.Visibility == Visibility.Visible
+                    && ListPageContent.Visibility == Visibility.Collapsed;
+            if (!pageMounted || !pageLayoutVisible)
             {
                 throw new InvalidOperationException($"Navigation failed: {page.Item2}");
             }
@@ -283,6 +293,299 @@ public sealed partial class MainWindow
         DashboardScrollViewer.ChangeView(null, 0, null, true);
     }
 
+    private async Task VerifyConnectionsAndLogsInteractionsAsync(string directory, RuntimeSnapshot sample)
+    {
+        const int connectionCount = 400;
+        const int logCapacity = 500;
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        ConnectionInfo[] connections = Enumerable.Range(0, connectionCount)
+            .Select(index => new ConnectionInfo(
+                $"conn-{index:000}",
+                "tcp",
+                $"10.0.0.2:{10000 + index}",
+                index == 42 ? "needle-connection.example.test:443" : $"host-{index:000}.example.test:443",
+                "MATCH",
+                $"chain-{index:000}",
+                (index * 3L) + 1,
+                (connectionCount - index) * 2L,
+                now.AddMinutes(index),
+                $"payload-{index:000}"))
+            .ToArray();
+
+        NavigateTo(_connectionsPage!, PanelPage.Connections);
+        System.Diagnostics.Stopwatch connectionUpdate = System.Diagnostics.Stopwatch.StartNew();
+        _connectionsPage!.UpdateSnapshot(
+            sample with { Connections = connections },
+            false,
+            EndpointCapability.None,
+            "smoke-controller:generation-1");
+        connectionUpdate.Stop();
+        RootGrid.UpdateLayout();
+        ListView connectionList = (ListView)_connectionsPage.FindName("ConnectionsListView");
+        TextBox connectionSearch = (TextBox)_connectionsPage.FindName("SearchBox");
+        ComboBox connectionSort = (ComboBox)_connectionsPage.FindName("SortBox");
+        TextBlock connectionDetails = (TextBlock)_connectionsPage.FindName("DetailsText");
+        Button closeSelected = (Button)_connectionsPage.FindName("CloseSelectedButton");
+        Button closeAll = (Button)_connectionsPage.FindName("CloseAllButton");
+        if (connectionList.Items.Count != connectionCount
+            || (connectionList.Items[0] as ConnectionRowViewModel)?.Id != "conn-399")
+        {
+            throw new InvalidOperationException("Connections newest ordering did not show the latest connection first.");
+        }
+
+        ConnectionRowViewModel selectedConnection = connectionList.Items
+            .Cast<ConnectionRowViewModel>()
+            .Single(row => row.Id == "conn-042");
+        connectionList.SelectedItem = selectedConnection;
+        if (!connectionDetails.Text.Contains("chain-042", StringComparison.Ordinal)
+            || closeSelected.IsEnabled
+            || closeAll.IsEnabled)
+        {
+            throw new InvalidOperationException("Connection selection details or read-only action state was incorrect.");
+        }
+
+        System.Diagnostics.Stopwatch connectionSortFilter = System.Diagnostics.Stopwatch.StartNew();
+        connectionSort.SelectedIndex = 1;
+        if ((connectionList.Items[0] as ConnectionRowViewModel)?.Id != "conn-399"
+            || !ReferenceEquals(connectionList.SelectedItem, selectedConnection))
+        {
+            throw new InvalidOperationException("Upload sorting lost the selected connection.");
+        }
+
+        connectionSort.SelectedIndex = 2;
+        if ((connectionList.Items[0] as ConnectionRowViewModel)?.Id != "conn-000"
+            || !ReferenceEquals(connectionList.SelectedItem, selectedConnection))
+        {
+            throw new InvalidOperationException("Download sorting lost the selected connection.");
+        }
+
+        connectionSearch.Text = "needle-connection";
+        await Task.Delay(50);
+        if (connectionList.Items.Count != 1
+            || (connectionList.Items[0] as ConnectionRowViewModel)?.Id != "conn-042"
+            || !ReferenceEquals(connectionList.SelectedItem, selectedConnection))
+        {
+            throw new InvalidOperationException("Connection text filtering did not preserve the matching selected item.");
+        }
+
+        connectionSearch.Text = string.Empty;
+        await Task.Delay(50);
+        connectionSortFilter.Stop();
+        if (connectionList.Items.Count != connectionCount
+            || !ReferenceEquals(connectionList.SelectedItem, selectedConnection))
+        {
+            throw new InvalidOperationException("Clearing connection search did not restore the selected full list.");
+        }
+
+        ConnectionInfo[] nextGenerationConnections = connections
+            .Select(connection => connection with { Destination = $"generation-two-{connection.Destination}" })
+            .ToArray();
+        System.Diagnostics.Stopwatch connectionGeneration = System.Diagnostics.Stopwatch.StartNew();
+        _connectionsPage.UpdateSnapshot(
+            sample with { Connections = nextGenerationConnections },
+            false,
+            EndpointCapability.None,
+            "smoke-controller:generation-2");
+        connectionGeneration.Stop();
+        ConnectionRowViewModel regeneratedConnection = connectionList.Items
+            .Cast<ConnectionRowViewModel>()
+            .Single(row => row.Id == "conn-042");
+        if (connectionList.SelectedItem is not null
+            || ReferenceEquals(selectedConnection, regeneratedConnection)
+            || !regeneratedConnection.Connection.Destination.StartsWith("generation-two-", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Connection generation switch retained selection or reused an old row.");
+        }
+
+        connectionList.ScrollIntoView(connectionList.Items[^1]);
+        connectionList.UpdateLayout();
+        await Task.Delay(150);
+        ScrollViewer? connectionScroll = VisualDescendants<ScrollViewer>(connectionList)
+            .FirstOrDefault(viewer => viewer.ScrollableHeight > 1);
+        if (connectionScroll is null)
+        {
+            throw new InvalidOperationException("Connections list did not expose a scrollable viewport.");
+        }
+
+        double connectionScrollRange = connectionScroll.ScrollableHeight;
+        connectionScroll.ChangeView(null, connectionScrollRange, null, true);
+        await Task.Delay(100);
+        if (connectionScroll.VerticalOffset <= 0)
+        {
+            throw new InvalidOperationException("Connections list could not scroll to its tail.");
+        }
+
+        await SaveDiagnosticFrameAsync(directory, "connections-interactions");
+
+        LogEntry[] logs = Enumerable.Range(1, logCapacity)
+            .Select(sequence => new LogEntry(
+                now.AddSeconds(sequence),
+                sequence % 2 == 0 ? "mihomo" : "ClashTray",
+                (sequence % 3) switch { 0 => "info", 1 => "warning", _ => "error" },
+                sequence == 78 ? "needle-log-078" : $"event-bucket-{sequence % 10:00}",
+                Sequence: sequence))
+            .ToArray();
+        NavigateTo(_logsPage!, PanelPage.Logs);
+        System.Diagnostics.Stopwatch logUpdate = System.Diagnostics.Stopwatch.StartNew();
+        _logsPage!.UpdateSnapshot(
+            sample with { Logs = logs },
+            false,
+            EndpointCapability.None,
+            "smoke-logs:generation-1");
+        logUpdate.Stop();
+        RootGrid.UpdateLayout();
+        ListView logList = (ListView)_logsPage.FindName("LogsListView");
+        TextBox logSearch = (TextBox)_logsPage.FindName("SearchBox");
+        ComboBox logLevel = (ComboBox)_logsPage.FindName("LevelBox");
+        ComboBox logSource = (ComboBox)_logsPage.FindName("SourceBox");
+        Button clearLogs = (Button)_logsPage.FindName("ClearLogsButton");
+        if (logList.Items.Count != logCapacity || clearLogs.IsEnabled)
+        {
+            throw new InvalidOperationException("Logs initial bounded view or read-only clear state was incorrect.");
+        }
+
+        System.Diagnostics.Stopwatch logFiltering = System.Diagnostics.Stopwatch.StartNew();
+        logLevel.SelectedIndex = 2;
+        if (logList.Items.Count != 167
+            || logList.Items.Cast<LogRowViewModel>().Any(row => row.Log.Level != "warning"))
+        {
+            throw new InvalidOperationException("Warning level filtering returned an unexpected log set.");
+        }
+
+        logLevel.SelectedIndex = 0;
+        logSource.SelectedIndex = 2;
+        if (logList.Items.Count != 250
+            || logList.Items.Cast<LogRowViewModel>().Any(row => row.Log.Source != "mihomo"))
+        {
+            throw new InvalidOperationException("Mihomo source filtering returned an unexpected log set.");
+        }
+
+        logSource.SelectedIndex = 0;
+        logSearch.Text = "needle-log-078";
+        await Task.Delay(50);
+        if (logList.Items.Count != 1
+            || (logList.Items[0] as LogRowViewModel)?.Sequence != 78)
+        {
+            throw new InvalidOperationException("Log text filtering did not isolate its matching sequence.");
+        }
+
+        logSearch.Text = string.Empty;
+        await Task.Delay(50);
+        logFiltering.Stop();
+        if (logList.Items.Count != logCapacity)
+        {
+            throw new InvalidOperationException("Clearing log filters did not restore the full bounded view.");
+        }
+
+        LogRowViewModel oldGenerationLog = logList.Items
+            .Cast<LogRowViewModel>()
+            .Single(row => row.Sequence == 78);
+        logList.ScrollIntoView(logList.Items[^1]);
+        logList.UpdateLayout();
+        await Task.Delay(150);
+        ScrollViewer? logScroll = VisualDescendants<ScrollViewer>(logList)
+            .FirstOrDefault(viewer => viewer.ScrollableHeight > 1);
+        if (logScroll is null)
+        {
+            throw new InvalidOperationException("Logs list did not expose a scrollable viewport.");
+        }
+
+        double logScrollRange = logScroll.ScrollableHeight;
+        logScroll.ChangeView(null, logScrollRange, null, true);
+        await Task.Delay(100);
+        if (logScroll.VerticalOffset <= 0)
+        {
+            throw new InvalidOperationException("Logs list could not scroll to its tail.");
+        }
+
+        LogEntry[] nextGenerationLogs = logs
+            .Select(entry => entry with { Message = $"generation-two-{entry.Message}" })
+            .ToArray();
+        System.Diagnostics.Stopwatch logGeneration = System.Diagnostics.Stopwatch.StartNew();
+        _logsPage.UpdateSnapshot(
+            sample with { Logs = nextGenerationLogs },
+            false,
+            EndpointCapability.None,
+            "smoke-logs:generation-2");
+        logGeneration.Stop();
+        LogRowViewModel regeneratedLog = logList.Items
+            .Cast<LogRowViewModel>()
+            .Single(row => row.Sequence == 78);
+        if (ReferenceEquals(oldGenerationLog, regeneratedLog)
+            || !regeneratedLog.Log.Message.StartsWith("generation-two-", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Log generation switch reused a row from the previous controller.");
+        }
+
+        LogEntry[] latestBoundedLogs = Enumerable.Range(logCapacity + 1, logCapacity)
+            .Select(sequence => new LogEntry(
+                now.AddSeconds(sequence),
+                sequence % 2 == 0 ? "mihomo" : "ClashTray",
+                (sequence % 3) switch { 0 => "info", 1 => "warning", _ => "error" },
+                $"generation-two-event-{sequence}",
+                Sequence: sequence))
+            .ToArray();
+        System.Diagnostics.Stopwatch logEviction = System.Diagnostics.Stopwatch.StartNew();
+        _logsPage.UpdateSnapshot(
+            sample with { Logs = latestBoundedLogs },
+            false,
+            EndpointCapability.None,
+            "smoke-logs:generation-2");
+        logEviction.Stop();
+        if (logList.Items.Count != logCapacity
+            || logList.Items.Cast<LogRowViewModel>().Min(row => row.Sequence) != logCapacity + 1
+            || logList.Items.Cast<LogRowViewModel>().Max(row => row.Sequence) != logCapacity * 2
+            || clearLogs.IsEnabled)
+        {
+            throw new InvalidOperationException("Log buffer eviction failed to replace the 500-row view or disabled clear state changed.");
+        }
+
+        logList.ScrollIntoView(logList.Items[^1]);
+        logList.UpdateLayout();
+        await Task.Delay(100);
+        await SaveDiagnosticFrameAsync(directory, "logs-interactions");
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "connections-logs-checks.json"),
+            JsonSerializer.Serialize(new
+            {
+                Safety = "synthetic snapshots; isolated smoke storage; no core, service, proxy or TUN actions",
+                Connections = new
+                {
+                    Rows = connectionCount,
+                    NewestSort = true,
+                    UploadSort = true,
+                    DownloadSort = true,
+                    SelectedDetails = true,
+                    SelectionRetainedThroughSortAndFilter = true,
+                    GenerationSwitchClearedSelection = true,
+                    GenerationSwitchRecreatedRows = true,
+                    ScrollableHeight = connectionScrollRange,
+                    ScrolledToTail = true,
+                    ReadOnlyActionsRemainDisabled = true,
+                    InitialUpdateMilliseconds = connectionUpdate.Elapsed.TotalMilliseconds,
+                    SortAndFilterMilliseconds = connectionSortFilter.Elapsed.TotalMilliseconds,
+                    GenerationUpdateMilliseconds = connectionGeneration.Elapsed.TotalMilliseconds
+                },
+                Logs = new
+                {
+                    Capacity = logCapacity,
+                    WarningRows = 167,
+                    MihomoRows = 250,
+                    SearchIsolatedSequence = 78,
+                    GenerationSwitchRecreatedRows = true,
+                    ScrollableHeight = logScrollRange,
+                    ScrolledToTail = true,
+                    OldestSequenceAfterEviction = logCapacity + 1,
+                    NewestSequenceAfterEviction = logCapacity * 2,
+                    EvictedOldRows = true,
+                    ClearRemainsDisabled = true,
+                    InitialUpdateMilliseconds = logUpdate.Elapsed.TotalMilliseconds,
+                    FilteringMilliseconds = logFiltering.Elapsed.TotalMilliseconds,
+                    GenerationUpdateMilliseconds = logGeneration.Elapsed.TotalMilliseconds,
+                    EvictionUpdateMilliseconds = logEviction.Elapsed.TotalMilliseconds
+                }
+            }, DiagnosticJsonOptions));
+    }
     private async Task VerifyRemoteFreshnessPresentationAsync(string directory, RuntimeSnapshot sample)
     {
         AppSnapshot local = _runtime!.AppSnapshot;

@@ -131,10 +131,23 @@ jobs:
       - name: Restore
         run: dotnet restore ClashTray.sln
 
-      - name: Build and test
-        run: |
-          dotnet build ClashTray.sln --configuration Release --property:Platform=x64 --property:Version=$env:RELEASE_VERSION --no-restore
-          dotnet test ClashTray.sln --configuration Release --property:Platform=x64 --no-build
+      - name: Build
+        run: dotnet build ClashTray.sln --configuration Release --property:Platform=x64 --property:Version=$env:RELEASE_VERSION --no-restore
+
+      - name: Official Mihomo interoperability gate
+        shell: pwsh
+        run: .\packaging\Test-OfficialMihomo.ps1 -Configuration Release
+
+      - name: Test solution
+        run: dotnet test ClashTray.sln --configuration Release --property:Platform=x64 --no-build
+
+      - name: Upload official Mihomo gate result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: official-mihomo-test-results
+          path: ${{ runner.temp }}/official-mihomo-results/*.trx
+          if-no-files-found: ignore
 
       - name: Build compressed variants
         shell: pwsh

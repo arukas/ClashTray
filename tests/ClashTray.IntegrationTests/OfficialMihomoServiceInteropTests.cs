@@ -12,7 +12,7 @@ namespace ClashTray.IntegrationTests;
 public sealed class OfficialMihomoServiceInteropTests
 {
     private const string PinnedArchiveSha256 =
-        "22c09fd67673895ef7cd6b1820563918275c3d316f2462b306208675118db3c0";
+        "38b2420799d9e7cde77ec1a19c7150dd17ca77f7fb82d9f62cb8763a307eee67";
 
     [TestMethod]
     [TestCategory("RequiresOfficialMihomo")]
@@ -221,34 +221,7 @@ public sealed class OfficialMihomoServiceInteropTests
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    private static string? FindMihomoExecutable()
-    {
-        string? configured = Environment.GetEnvironmentVariable("CLASHTRAY_MIHOMO_PATH");
-        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
-        {
-            return Path.GetFullPath(configured);
-        }
-
-        DirectoryInfo? directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            string candidate = Path.Combine(
-                directory.FullName,
-                "packaging",
-                "out",
-                "payload-local-full",
-                "Core",
-                "mihomo.exe");
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            directory = directory.Parent;
-        }
-
-        return null;
-    }
+    private static string? FindMihomoExecutable() => OfficialMihomoTestSupport.FindMihomoExecutable();
 
     private sealed class DisabledTunNetworkHealthProbe : ITunNetworkHealthProbe
     {

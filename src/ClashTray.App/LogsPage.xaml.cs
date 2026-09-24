@@ -12,27 +12,53 @@ namespace ClashTray.App;
 public sealed partial class LogsPage : UserControl
 {
     private readonly ClashTrayRuntime _runtime;
-    private readonly StableRowReconciler<long, LogEntry, LogRowViewModel> _rows = new(
-        log => log.Sequence);
+    private readonly StableRowReconciler<LogRowIdentity, LogEntry, LogRowViewModel> _rows;
     private IReadOnlyList<LogEntry> _logs = [];
+    private string _controllerIdentity = EndpointId.Local.Value;
     private bool _controllerWritable = true;
 
     public LogsPage(ClashTrayRuntime runtime)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
+        _rows = new(log => new LogRowIdentity(_controllerIdentity, log.Sequence));
         InitializeComponent();
         LogsListView.ItemsSource = _rows.Rows;
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
-        UpdateSnapshot(snapshot, controllerWritable: true);
+        UpdateSnapshot(snapshot, controllerWritable: true, EndpointCapabilityDefaults.Local, EndpointId.Local.Value);
     }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
     {
+        UpdateSnapshot(
+            snapshot,
+            controllerWritable,
+            controllerWritable ? EndpointCapabilityDefaults.Local : EndpointCapability.None,
+            EndpointId.Local.Value);
+    }
+
+    public void UpdateSnapshot(
+        RuntimeSnapshot snapshot,
+        bool controllerWritable,
+        EndpointCapability capabilities) =>
+        UpdateSnapshot(snapshot, controllerWritable, capabilities, EndpointId.Local.Value);
+
+    public void UpdateSnapshot(
+        RuntimeSnapshot snapshot,
+        bool controllerWritable,
+        EndpointCapability capabilities,
+        string controllerIdentity)
+    {
         ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(controllerIdentity);
+        bool controllerChanged = !string.Equals(
+            _controllerIdentity,
+            controllerIdentity,
+            StringComparison.Ordinal);
+        _controllerIdentity = controllerIdentity;
         bool interactivityChanged = _controllerWritable != controllerWritable;
         _controllerWritable = controllerWritable;
         ClearLogsButton.IsEnabled = _controllerWritable;
@@ -41,7 +67,7 @@ public sealed partial class LogsPage : UserControl
             _controllerWritable
                 ? null
                 : LocalizationService.Get("RemoteControllerReadOnly"));
-        if (ReferenceEquals(_logs, snapshot.Logs) && !interactivityChanged)
+        if (ReferenceEquals(_logs, snapshot.Logs) && !interactivityChanged && !controllerChanged)
         {
             return;
         }
@@ -49,12 +75,6 @@ public sealed partial class LogsPage : UserControl
         _logs = snapshot.Logs;
         ApplyFilter();
     }
-
-    public void UpdateSnapshot(
-        RuntimeSnapshot snapshot,
-        bool controllerWritable,
-        EndpointCapability capabilities) =>
-        UpdateSnapshot(snapshot, controllerWritable);
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
 
@@ -78,7 +98,7 @@ public sealed partial class LogsPage : UserControl
             source);
         _rows.Reconcile(
             _logs,
-            filtered.Select(log => log.Sequence).ToArray(),
+            filtered.Select(log => new LogRowIdentity(_controllerIdentity, log.Sequence)).ToArray(),
             log => new LogRowViewModel(log),
             (row, log) => row.Update(log));
         EmptyListText.Visibility = _rows.Rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -105,6 +125,8 @@ public sealed partial class LogsPage : UserControl
         }
     }
 }
+
+internal readonly record struct LogRowIdentity(string ControllerIdentity, long Sequence);
 
 public sealed class LogRowViewModel : INotifyPropertyChanged
 {

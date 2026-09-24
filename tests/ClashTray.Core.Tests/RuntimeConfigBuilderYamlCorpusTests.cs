@@ -26,6 +26,38 @@ public sealed class RuntimeConfigBuilderYamlCorpusTests
     }
 
     [TestMethod]
+    public async Task RepeatedManagedRootKeysAreRemovedAcrossWholeNodesAndKeepNeighborComments()
+    {
+        string source = "mode: direct" + Environment.NewLine
+            + "# keep comment between controller values" + Environment.NewLine
+            + "external-controller: 0.0.0.0:1" + Environment.NewLine
+            + "external-controller: |-" + Environment.NewLine
+            + "  0.0.0.0:2" + Environment.NewLine
+            + "  stale controller" + Environment.NewLine
+            + "# keep comment between secret values" + Environment.NewLine
+            + "secret: stale-first" + Environment.NewLine
+            + "secret: >-" + Environment.NewLine
+            + "  stale-secret" + Environment.NewLine
+            + "proxies: []" + Environment.NewLine
+            + "proxy-groups: []" + Environment.NewLine
+            + "rules: []";
+
+        string output = await BuildAsync(source, new AppSettings(ControllerPort: 9193));
+
+        Assert.AreEqual(1, CountRootKey(output, "external-controller"));
+        Assert.AreEqual(1, CountRootKey(output, "secret"));
+        Assert.IsTrue(output.Contains("# keep comment between controller values", StringComparison.Ordinal));
+        Assert.IsTrue(output.Contains("# keep comment between secret values", StringComparison.Ordinal));
+        Assert.IsFalse(output.Contains("0.0.0.0:1", StringComparison.Ordinal));
+        Assert.IsFalse(output.Contains("0.0.0.0:2", StringComparison.Ordinal));
+        Assert.IsFalse(output.Contains("stale controller", StringComparison.Ordinal));
+        Assert.IsFalse(output.Contains("stale-first", StringComparison.Ordinal));
+        Assert.IsFalse(output.Contains("stale-secret", StringComparison.Ordinal));
+        Assert.IsTrue(output.Contains("external-controller: 127.0.0.1:9193", StringComparison.Ordinal));
+        Assert.IsTrue(output.Contains("secret: ''", StringComparison.Ordinal));
+        Assert.IsTrue(output.Contains("proxies: []", StringComparison.Ordinal));
+    }
+    [TestMethod]
     public async Task BlockTunMappingChangesOnlyDirectPropertiesAndPreservesNestedAndBlockScalars()
     {
         const string source = """
@@ -155,6 +187,133 @@ public sealed class RuntimeConfigBuilderYamlCorpusTests
         Assert.IsTrue(output.Contains("mode: rule", StringComparison.Ordinal));
         Assert.IsTrue(output.Contains("proxies: []", StringComparison.Ordinal));
         Assert.IsTrue(output.Contains("rules: []", StringComparison.Ordinal));
+    }
+
+
+    [TestMethod]
+    public async Task ExplicitDocumentEndKeepsManagedSettingsInsideDocumentAndReplacesTunBlockValue()
+    {
+        string source = "---" + Environment.NewLine
+            + "mode: direct" + Environment.NewLine
+            + "allow-lan: true" + Environment.NewLine
+            + "tun:" + Environment.NewLine
+            + "  enable: false" + Environment.NewLine
+            + "  stack: |-" + Environment.NewLine
+            + "    gvisor" + Environment.NewLine
+            + "proxies: []" + Environment.NewLine
+            + "proxy-groups: []" + Environment.NewLine
+            + "rules: []" + Environment.NewLine
+            + "..." + Environment.NewLine
+            + "# trailing comment";
+
+        string output = await BuildAsync(
+            source,
+            new AppSettings(AllowLan: false, TunEnabled: false, TunStack: "system"));
+        string[] lines = output.Split(["\r\n", "\n"], StringSplitOptions.None);
+        int endMarker = Array.IndexOf(lines, "...");
+
+        Assert.IsTrue(endMarker > 0, "The explicit document end marker must be retained.");
+        Assert.IsTrue(lines.Take(endMarker).Any(line => line == "external-controller: 127.0.0.1:9090"));
+        Assert.IsTrue(lines.Take(endMarker).Any(line => line == "allow-lan: false"));
+        Assert.IsTrue(lines.Take(endMarker).Any(line => line == "  stack: system"));
+        Assert.IsFalse(output.Contains("gvisor", StringComparison.Ordinal));
+        Assert.IsTrue(output.TrimEnd().EndsWith("# trailing comment", StringComparison.Ordinal));
+        Assert.AreEqual(1, CountRootKey(output, "tun"));
+    }
+
+    [TestMethod]
+    public async Task IndentedRootMappingIsRejectedBeforeReplacingLastSuccessfulOutput()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string sourcePath = Path.Combine(root, "source.yaml");
+        string destinationPath = Path.Combine(root, "effective.yaml");
+        string source = "---" + Environment.NewLine
+            + "  mode: direct" + Environment.NewLine
+            + "  allow-lan: true" + Environment.NewLine
+            + "  tun:" + Environment.NewLine
+            + "    enable: false" + Environment.NewLine
+            + "    stack: |" + Environment.NewLine
+            + "      gvisor" + Environment.NewLine
+            + "  proxies: []" + Environment.NewLine
+            + "  proxy-groups: []" + Environment.NewLine
+            + "  rules: []" + Environment.NewLine
+            + "...";
+        const string lastGood = "last-successful-output";
+
+        try
+        {
+            await File.WriteAllTextAsync(sourcePath, source);
+            await File.WriteAllTextAsync(destinationPath, lastGood);
+
+            InvalidDataException exception = await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+                RuntimeConfigBuilder.BuildAsync(sourcePath, destinationPath, new AppSettings()));
+
+            StringAssert.Contains(exception.Message, "overall-indented", StringComparison.Ordinal);
+            Assert.AreEqual(source, await File.ReadAllTextAsync(sourcePath));
+            Assert.AreEqual(lastGood, await File.ReadAllTextAsync(destinationPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task MultipleYamlDocumentsAreRejectedBeforeReplacingLastSuccessfulOutput()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string sourcePath = Path.Combine(root, "source.yaml");
+        string destinationPath = Path.Combine(root, "effective.yaml");
+        string source = "---" + Environment.NewLine
+            + "mode: direct" + Environment.NewLine
+            + "..." + Environment.NewLine
+            + "---" + Environment.NewLine
+            + "mode: global";
+        const string lastGood = "last-successful-output";
+
+        try
+        {
+            await File.WriteAllTextAsync(sourcePath, source);
+            await File.WriteAllTextAsync(destinationPath, lastGood);
+
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => RuntimeConfigBuilder.BuildAsync(
+                sourcePath,
+                destinationPath,
+                new AppSettings()));
+
+            Assert.AreEqual(source, await File.ReadAllTextAsync(sourcePath));
+            Assert.AreEqual(lastGood, await File.ReadAllTextAsync(destinationPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task TunQuotedMultilineStackValueIsReplacedAsOneNode()
+    {
+        string source = "mode: direct" + Environment.NewLine
+            + "tun:" + Environment.NewLine
+            + "  enable: false" + Environment.NewLine
+            + "  stack: \"gvisor" + Environment.NewLine
+            + "    stale continuation\"" + Environment.NewLine
+            + "  mtu: 1400 # keep comment" + Environment.NewLine;
+
+        string output = await BuildAsync(source, new AppSettings(TunStack: "system"));
+
+        Assert.IsFalse(output.Contains("gvisor", StringComparison.Ordinal));
+        Assert.IsFalse(output.Contains("stale continuation", StringComparison.Ordinal));
+        Assert.IsTrue(output.Contains("  stack: system", StringComparison.Ordinal));
+        Assert.IsTrue(output.Contains("  mtu: 1400 # keep comment", StringComparison.Ordinal));
     }
 
     [TestMethod]

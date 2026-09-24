@@ -395,7 +395,11 @@ public sealed partial class MainWindow : Window
                     _activeControllerIdentity);
                 break;
             case PanelPage.Logs:
-                _logsPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
+                _logsPage?.UpdateSnapshot(
+                    snapshot,
+                    writable,
+                    activeCapabilities,
+                    _activeControllerIdentity);
                 break;
             case PanelPage.Settings:
                 _settingsPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);

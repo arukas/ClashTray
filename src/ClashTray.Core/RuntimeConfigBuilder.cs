@@ -5,6 +5,20 @@ namespace ClashTray.Core;
 
 public static class RuntimeConfigBuilder
 {
+    public const int MaximumInputBytes = 16 * 1024 * 1024;
+    public const int MaximumInputLines = 250_000;
+    public const int MaximumLineCharacters = 64 * 1024;
+
+    private const int CancellationCheckLineMask = 0x3F;
+    private const int CancellationCheckCharacterMask = 0xFFF;
+    private const int MaximumFlowCollectionDepth = 128;
+
+    private readonly record struct YamlDocumentScope(
+        int RootIndent,
+        int EndMarkerLine,
+        bool HasExplicitStartMarker);
+
+    private readonly record struct YamlNodeRange(int FirstLine, int LastLine);
     public static Task<string> BuildAsync(
         string sourcePath,
         string destinationPath,
@@ -53,6 +67,128 @@ public static class RuntimeConfigBuilder
             cancellationToken);
     }
 
+    private static YamlDocumentScope ValidateYamlDocumentScope(
+        string[] source,
+        CancellationToken cancellationToken)
+    {
+        bool hasExplicitStartMarker = false;
+        bool hasDocumentContent = false;
+        bool ended = false;
+        int endMarkerLine = -1;
+        for (int index = 0; index < source.Length; index++)
+        {
+            if ((index & CancellationCheckLineMask) == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            string line = source[index];
+            if (IsYamlDocumentStartMarker(line))
+            {
+                if (hasExplicitStartMarker || hasDocumentContent || ended)
+                {
+                    throw new InvalidDataException(
+                        "Multiple YAML documents are not supported by the managed runtime configuration builder.");
+                }
+
+                hasExplicitStartMarker = true;
+                continue;
+            }
+
+            if (IsYamlDocumentEndMarker(line))
+            {
+                if (ended)
+                {
+                    throw new InvalidDataException("The YAML document has more than one end marker.");
+                }
+
+                ended = true;
+                endMarkerLine = index;
+                continue;
+            }
+
+            string trimmed = line.TrimStart();
+            if (trimmed.Length == 0 || trimmed.StartsWith('#'))
+            {
+                continue;
+            }
+
+            if (ended)
+            {
+                throw new InvalidDataException(
+                    "Non-comment YAML content follows the explicit document end marker.");
+            }
+
+            int indentation = GetIndent(line);
+            if (indentation > 0)
+            {
+                if (!hasDocumentContent)
+                {
+                    throw new InvalidDataException(
+                        "An overall-indented YAML root mapping is not supported; remove the leading indentation and retry.");
+                }
+
+                continue;
+            }
+
+            if (!TryGetRootKey(line, out _))
+            {
+                throw new InvalidDataException(
+                    "The managed runtime configuration builder requires a single block-mapping YAML document.");
+            }
+
+            hasDocumentContent = true;
+        }
+
+        return new YamlDocumentScope(RootIndent: 0, endMarkerLine, hasExplicitStartMarker);
+    }
+
+    private static bool IsYamlDocumentStartMarker(string line) =>
+        IsYamlDocumentMarker(line, "---");
+
+    private static bool IsYamlDocumentEndMarker(string line) =>
+        IsYamlDocumentMarker(line, "...");
+
+    private static bool IsYamlDocumentMarker(string line, string marker)
+    {
+        if (line.Length < marker.Length
+            || !line.AsSpan().StartsWith(marker, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return line.Length == marker.Length || char.IsWhiteSpace(line[marker.Length]);
+    }
+
+    private static void InsertBeforeDocumentEnd(
+        List<string> destination,
+        List<string> additions,
+        YamlDocumentScope documentScope)
+    {
+        if (additions.Count == 0)
+        {
+            return;
+        }
+
+        int insertionIndex = documentScope.EndMarkerLine >= 0
+            ? destination.FindIndex(IsYamlDocumentEndMarker)
+            : destination.Count;
+        if (insertionIndex < 0)
+        {
+            throw new InvalidDataException(
+                "The YAML document end marker was lost while building the managed runtime configuration.");
+        }
+
+        if (insertionIndex > 0
+            && !string.IsNullOrWhiteSpace(destination[insertionIndex - 1])
+            && (additions.Count == 0 || !string.IsNullOrWhiteSpace(additions[0])))
+        {
+            additions.Insert(0, string.Empty);
+        }
+
+        destination.InsertRange(insertionIndex, additions);
+    }
+
     private static async Task<string> BuildAsyncCore(
         string sourcePath,
         string destinationPath,
@@ -65,30 +201,72 @@ public static class RuntimeConfigBuilder
         ArgumentNullException.ThrowIfNull(destinationPath);
         ArgumentNullException.ThrowIfNull(settings);
         SettingsValidator.Validate(settings);
-        string[] source = await File.ReadAllLinesAsync(sourcePath, cancellationToken);
-        List<string> withTunOverride = ApplyTunOverride(source, tunEnabled, settings.TunStack);
-        List<string> filtered = RemoveManagedRootEntries(withTunOverride);
-        filtered.Add(string.Empty);
-        filtered.Add($"external-controller: 127.0.0.1:{settings.ControllerPort}");
-        filtered.Add("secret: ''");
-        if (TryResolveExternalUiPath(externalUiPath, out string resolvedExternalUiPath))
+        cancellationToken.ThrowIfCancellationRequested();
+
+        FileInfo sourceInfo = new(sourcePath);
+        if (sourceInfo.Exists && sourceInfo.Length > MaximumInputBytes)
         {
-            filtered.Add($"external-ui: '{EscapeYamlSingleQuoted(resolvedExternalUiPath)}'");
+            throw new InvalidDataException($"Configuration exceeds the {MaximumInputBytes}-byte runtime builder limit.");
         }
 
-        filtered.Add($"allow-lan: {(settings.AllowLan ? "true" : "false")}");
-        filtered.Add($"ipv6: {(settings.Ipv6 ? "true" : "false")}");
-        filtered.Add($"tcp-concurrent: {(settings.TcpConcurrent ? "true" : "false")}");
-        filtered.Add($"log-level: {settings.LogLevel.Trim().ToLowerInvariant()}");
-        filtered.Add($"port: {settings.HttpPort}");
-        filtered.Add($"mixed-port: {settings.MixedPort}");
-        filtered.Add($"socks-port: {settings.SocksPort}");
+        string[] source = await File.ReadAllLinesAsync(sourcePath, cancellationToken);
+        if (source.Length > MaximumInputLines)
+        {
+            throw new InvalidDataException($"Configuration exceeds the {MaximumInputLines}-line runtime builder limit.");
+        }
+
+        for (int index = 0; index < source.Length; index++)
+        {
+            if ((index & CancellationCheckLineMask) == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            if (source[index].Length > MaximumLineCharacters)
+            {
+                throw new InvalidDataException(
+                    $"Configuration line {index + 1} exceeds the {MaximumLineCharacters}-character runtime builder limit.");
+            }
+        }
+
+        sourceInfo.Refresh();
+        if (sourceInfo.Exists && sourceInfo.Length > MaximumInputBytes)
+        {
+            throw new InvalidDataException($"Configuration exceeds the {MaximumInputBytes}-byte runtime builder limit.");
+        }
+
+        YamlDocumentScope documentScope = ValidateYamlDocumentScope(source, cancellationToken);
+        List<string> withTunOverride = ApplyTunOverride(
+            source,
+            documentScope,
+            tunEnabled,
+            settings.TunStack,
+            cancellationToken);
+        List<string> filtered = RemoveManagedRootEntries(withTunOverride, cancellationToken);
+        List<string> managedSettings = [string.Empty, $"external-controller: 127.0.0.1:{settings.ControllerPort}", "secret: ''"];
+        if (TryResolveExternalUiPath(externalUiPath, out string resolvedExternalUiPath))
+        {
+            managedSettings.Add($"external-ui: '{EscapeYamlSingleQuoted(resolvedExternalUiPath)}'");
+        }
+
+        managedSettings.Add($"allow-lan: {(settings.AllowLan ? "true" : "false")}");
+        managedSettings.Add($"ipv6: {(settings.Ipv6 ? "true" : "false")}");
+        managedSettings.Add($"tcp-concurrent: {(settings.TcpConcurrent ? "true" : "false")}");
+        managedSettings.Add($"log-level: {settings.LogLevel.Trim().ToLowerInvariant()}");
+        managedSettings.Add($"port: {settings.HttpPort}");
+        managedSettings.Add($"mixed-port: {settings.MixedPort}");
+        managedSettings.Add($"socks-port: {settings.SocksPort}");
+        InsertBeforeDocumentEnd(filtered, managedSettings, documentScope);
 
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
         string tempPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
         try
         {
-            await File.WriteAllLinesAsync(tempPath, filtered, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), cancellationToken);
+            await File.WriteAllLinesAsync(
+                tempPath,
+                filtered,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                cancellationToken);
             WindowsPathSecurity.ProtectRuntimeFile(tempPath);
             File.Move(tempPath, destinationPath, overwrite: true);
         }
@@ -103,12 +281,17 @@ public static class RuntimeConfigBuilder
         return destinationPath;
     }
 
-    private static List<string> ApplyTunOverride(string[] source, bool enabled, string stack)
+    private static List<string> ApplyTunOverride(
+        string[] source,
+        YamlDocumentScope documentScope,
+        bool enabled,
+        string stack,
+        CancellationToken cancellationToken)
     {
         string? managedStack = string.Equals(stack, "configuration", StringComparison.OrdinalIgnoreCase)
             ? null
             : stack.Trim().ToLowerInvariant();
-        List<string> result = new List<string>(source.Length + 4);
+        List<string> result = new(source.Length + 4);
         bool inTunBlock = false;
         int tunIndent = -1;
         int tunChildIndent = -1;
@@ -116,8 +299,14 @@ public static class RuntimeConfigBuilder
         bool tunHasStack = false;
         bool foundTunBlock = false;
 
-        foreach (string line in source)
+        for (int index = 0; index < source.Length; index++)
         {
+            if ((index & CancellationCheckLineMask) == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
+            string line = source[index];
             if (TryGetRootKey(line, out string? key) && key.Equals("tun", StringComparison.OrdinalIgnoreCase))
             {
                 if (inTunBlock)
@@ -135,8 +324,6 @@ public static class RuntimeConfigBuilder
                 foundTunBlock = true;
                 tunIndent = GetIndent(line);
                 tunChildIndent = -1;
-                tunHasEnable = false;
-                tunHasStack = false;
                 inTunBlock = !TryOverrideInlineTun(
                     line,
                     enabled,
@@ -168,8 +355,10 @@ public static class RuntimeConfigBuilder
 
             if (inTunBlock && IsTunPropertyLine(line, tunChildIndent, "enable"))
             {
+                YamlNodeRange range = FindYamlNodeRange(source, index, "enable", cancellationToken);
                 result.Add(ReplaceTunPropertyLine(line, "enable", enabled ? "true" : "false"));
                 tunHasEnable = true;
+                index = range.LastLine;
                 continue;
             }
 
@@ -177,8 +366,10 @@ public static class RuntimeConfigBuilder
                 && managedStack is not null
                 && IsTunPropertyLine(line, tunChildIndent, "stack"))
             {
+                YamlNodeRange range = FindYamlNodeRange(source, index, "stack", cancellationToken);
                 result.Add(ReplaceTunPropertyLine(line, "stack", managedStack));
                 tunHasStack = true;
+                index = range.LastLine;
                 continue;
             }
 
@@ -198,13 +389,13 @@ public static class RuntimeConfigBuilder
 
         if (!foundTunBlock)
         {
-            result.Add(string.Empty);
-            result.Add("tun:");
-            result.Add(CreateTunPropertyLine(2, "enable", enabled ? "true" : "false"));
+            List<string> newTun = [string.Empty, new string(' ', documentScope.RootIndent) + "tun:", CreateTunPropertyLine(documentScope.RootIndent + 2, "enable", enabled ? "true" : "false")];
             if (managedStack is not null)
             {
-                result.Add(CreateTunPropertyLine(2, "stack", managedStack));
+                newTun.Add(CreateTunPropertyLine(documentScope.RootIndent + 2, "stack", managedStack));
             }
+
+            InsertBeforeDocumentEnd(result, newTun, documentScope);
         }
 
         return result;
@@ -694,11 +885,18 @@ public static class RuntimeConfigBuilder
             "TUN must use a block mapping or a balanced inline mapping before its managed settings can be changed.");
     }
 
-    private static List<string> RemoveManagedRootEntries(List<string> source)
+    private static List<string> RemoveManagedRootEntries(
+        List<string> source,
+        CancellationToken cancellationToken)
     {
         List<string> result = new(source.Count + 12);
         for (int index = 0; index < source.Count;)
         {
+            if ((index & CancellationCheckLineMask) == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
             string line = source[index];
             if (!TryGetRootKey(line, out string key) || !IsManagedRootKey(key))
             {
@@ -707,52 +905,49 @@ public static class RuntimeConfigBuilder
                 continue;
             }
 
-            int finalNodeLine = FindManagedNodeEnd(source, index, key);
-            index = finalNodeLine + 1;
+            YamlNodeRange range = FindYamlNodeRange(source, index, key, cancellationToken);
+            index = range.LastLine + 1;
         }
 
         return result;
     }
 
-    private static int FindManagedNodeEnd(List<string> source, int rootLineIndex, string key)
+    private static YamlNodeRange FindYamlNodeRange(
+        IReadOnlyList<string> source,
+        int firstLine,
+        string key,
+        CancellationToken cancellationToken)
     {
-        string value = GetRootValue(source[rootLineIndex]);
+        cancellationToken.ThrowIfCancellationRequested();
+        int nodeIndent = GetIndent(source[firstLine]);
+        string value = GetRootValue(source[firstLine]);
         if (value.StartsWith('&'))
         {
             throw new InvalidDataException(
-                $"受管 YAML 字段 {key} 定义了 anchor，无法保证删除其引用；请移除该 anchor 后重试。");
+                $"受管 YAML 字段 {key} 定义了 anchor，无法安全替换；请移除该 anchor 后重试。");
         }
 
         if (value.StartsWith('|') || value.StartsWith('>'))
         {
             if (!IsBlockScalarHeader(value))
             {
-                throw new InvalidDataException($"受管 YAML 字段 {key} 的块标量标记无法识别，已保留现有运行配置。");
+                throw new InvalidDataException($"受管 YAML 字段 {key} 的块标量标记无法识别；已保留现有运行配置。");
             }
 
-            return FindIndentedNodeEnd(source, rootLineIndex);
+            return new YamlNodeRange(firstLine, FindIndentedNodeEnd(source, firstLine, nodeIndent, cancellationToken));
         }
 
         if (value.StartsWith('\'') || value.StartsWith('"'))
         {
-            char quote = value[0];
-            int lastLine = rootLineIndex;
-            string scalar = value;
-            while (FindQuotedScalarEnd(scalar, quote) < 0)
-            {
-                int nextLine = lastLine + 1;
-                if (nextLine >= source.Count
-                    || !IsIndentedYamlContinuation(source[nextLine]))
-                {
-                    throw new InvalidDataException(
-                        $"受管 YAML 字段 {key} 的多行引号值未闭合；已保留现有运行配置。");
-                }
-
-                scalar += "\n" + source[nextLine].TrimStart();
-                lastLine = nextLine;
-            }
-
-            return Math.Max(lastLine, FindIndentedNodeEnd(source, lastLine));
+            int lastLine = FindQuotedScalarEnd(
+                source,
+                firstLine,
+                nodeIndent,
+                value[0],
+                cancellationToken);
+            return new YamlNodeRange(
+                firstLine,
+                FindIndentedNodeEnd(source, lastLine, nodeIndent, cancellationToken));
         }
 
         if ((value.StartsWith('{') || value.StartsWith('['))
@@ -762,16 +957,25 @@ public static class RuntimeConfigBuilder
                 $"受管 YAML 字段 {key} 使用不平衡的 flow 集合，无法安全替换；已保留现有运行配置。");
         }
 
-        return FindIndentedNodeEnd(source, rootLineIndex);
+        return new YamlNodeRange(firstLine, FindIndentedNodeEnd(source, firstLine, nodeIndent, cancellationToken));
     }
 
-    private static int FindIndentedNodeEnd(List<string> source, int rootLineIndex)
+    private static int FindIndentedNodeEnd(
+        IReadOnlyList<string> source,
+        int firstLine,
+        int parentIndent,
+        CancellationToken cancellationToken)
     {
-        int lastNodeLine = rootLineIndex;
-        for (int index = rootLineIndex + 1; index < source.Count; index++)
+        int lastNodeLine = firstLine;
+        for (int index = firstLine + 1; index < source.Count; index++)
         {
+            if ((index & CancellationCheckLineMask) == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+
             string line = source[index];
-            if (string.IsNullOrWhiteSpace(line) || GetIndent(line) > 0)
+            if (string.IsNullOrWhiteSpace(line) || GetIndent(line) > parentIndent)
             {
                 lastNodeLine = index;
                 continue;
@@ -783,8 +987,8 @@ public static class RuntimeConfigBuilder
         return lastNodeLine;
     }
 
-    private static bool IsIndentedYamlContinuation(string line) =>
-        string.IsNullOrWhiteSpace(line) || GetIndent(line) > 0;
+    private static bool IsIndentedYamlContinuation(string line, int parentIndent) =>
+        string.IsNullOrWhiteSpace(line) || GetIndent(line) > parentIndent;
 
     private static string GetRootValue(string line)
     {
@@ -804,41 +1008,93 @@ public static class RuntimeConfigBuilder
         return value.Trim();
     }
 
-    private static int FindQuotedScalarEnd(string value, char quote)
+    internal static int FindQuotedScalarEnd(
+        IReadOnlyList<string> source,
+        int firstLine,
+        int parentIndent,
+        char quote,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         bool escaped = false;
-        for (int index = 1; index < value.Length; index++)
+        int scannedCharacters = 0;
+        for (int lineIndex = firstLine; lineIndex < source.Count; lineIndex++)
         {
-            char current = value[index];
-            if (quote == '"')
+            if ((lineIndex & CancellationCheckLineMask) == 0)
             {
-                if (escaped)
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            string line = source[lineIndex];
+            int scanStart;
+            if (lineIndex == firstLine)
+            {
+                int separator = FindYamlKeySeparator(line);
+                scanStart = separator + 1;
+                while (scanStart < line.Length && char.IsWhiteSpace(line[scanStart]))
                 {
-                    escaped = false;
-                }
-                else if (current == '\\')
-                {
-                    escaped = true;
-                }
-                else if (current == '"')
-                {
-                    return index;
+                    scanStart++;
                 }
 
-                continue;
+                if (scanStart >= line.Length || line[scanStart] != quote)
+                {
+                    throw new InvalidDataException("受管 YAML 引号标量无法安全定位；已保留现有运行配置。");
+                }
+
+                scanStart++;
+            }
+            else
+            {
+                if (!IsIndentedYamlContinuation(line, parentIndent))
+                {
+                    throw new InvalidDataException(
+                        "受管 YAML 多行引号值未闭合；已保留现有运行配置。");
+                }
+
+                scanStart = GetIndent(line);
             }
 
-            if (current == '\'' && index + 1 < value.Length && value[index + 1] == '\'')
+            for (int index = scanStart; index < line.Length; index++)
             {
-                index++;
+                if ((++scannedCharacters & CancellationCheckCharacterMask) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                char current = line[index];
+                if (quote == '"')
+                {
+                    if (escaped)
+                    {
+                        escaped = false;
+                    }
+                    else if (current == '\\')
+                    {
+                        escaped = true;
+                    }
+                    else if (current == '"')
+                    {
+                        return lineIndex;
+                    }
+
+                    continue;
+                }
+
+                if (current == '\'' && index + 1 < line.Length && line[index + 1] == '\'')
+                {
+                    index++;
+                    scannedCharacters++;
+                }
+                else if (current == '\'')
+                {
+                    return lineIndex;
+                }
             }
-            else if (current == '\'')
-            {
-                return index;
-            }
+
+            // In YAML, a trailing backslash escapes the line break itself.
+            escaped = false;
         }
 
-        return -1;
+        throw new InvalidDataException("受管 YAML 多行引号值未闭合；已保留现有运行配置。");
     }
 
     private static bool IsBlockScalarHeader(string value)
@@ -925,10 +1181,18 @@ public static class RuntimeConfigBuilder
             }
             else if (current == '{')
             {
+                if (closing.Count >= MaximumFlowCollectionDepth)
+                {
+                    return false;
+                }
                 closing.Push('}');
             }
             else if (current == '[')
             {
+                if (closing.Count >= MaximumFlowCollectionDepth)
+                {
+                    return false;
+                }
                 closing.Push(']');
             }
             else if (current is '}' or ']')
