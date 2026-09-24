@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using ClashTray.Contracts;
 
@@ -213,6 +215,56 @@ public sealed class RuntimeStateTests
                 () => runtime.CloseAllConnectionsAsync());
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(
                 () => runtime.CloseConnectionAsync("connection-id"));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task SubscriptionSuccessIsPublishedOnlyAfterSwitchCompletes()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        byte[] body = "port: 17890\nsocks-port: 17891\nmode: rule\nlog-level: info\n"u8.ToArray();
+        using LoopbackSubscriptionServer server = new(body);
+        Uri subscriptionUri = new($"http://127.0.0.1:{server.Port}/subscription.yaml");
+        ConfigurationStore setupStore = new(paths);
+        ConfigurationProfile imported = await setupStore.ImportSubscriptionAsync(subscriptionUri, "sub");
+        TestSettingsStore settings = new TestSettingsStore(new AppSettings(ActiveConfigurationId: "other-config"));
+        await using ClashTrayRuntime runtime = new ClashTrayRuntime(
+            paths, null, null, settings, null, new FailingCandidateValidator());
+
+        try
+        {
+            List<SubscriptionState> transitions = new();
+            object gate = new();
+            runtime.SnapshotChanged += (_, snapshot) =>
+            {
+                lock (gate)
+                {
+                    if (transitions.Count == 0 || transitions[^1] != snapshot.Subscription)
+                    {
+                        transitions.Add(snapshot.Subscription);
+                    }
+                }
+            };
+
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(
+                () => runtime.RefreshSubscriptionAsync(imported with { IsActive = true }));
+
+            lock (gate)
+            {
+                CollectionAssert.Contains(transitions, SubscriptionState.Applying);
+                CollectionAssert.Contains(transitions, SubscriptionState.Failed);
+                Assert.IsFalse(
+                    transitions.Contains(SubscriptionState.Succeeded),
+                    "Succeeded must not be published before the configuration switch commits.");
+            }
         }
         finally
         {
@@ -1830,6 +1882,85 @@ public sealed class RuntimeStateTests
             SaveCount++;
             Settings = settings;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FailingCandidateValidator : IConfigurationCandidateValidator
+    {
+        public Task ValidateAsync(string candidatePath, CancellationToken cancellationToken = default) =>
+            throw new InvalidDataException("candidate rejected by test");
+    }
+
+    private sealed class LoopbackSubscriptionServer : IDisposable
+    {
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "TcpListener has no Dispose; Stop() in Dispose releases the socket.")]
+        private readonly TcpListener _listener;
+        private readonly CancellationTokenSource _dispose = new();
+        private readonly byte[] _body;
+
+        public LoopbackSubscriptionServer(byte[] body)
+        {
+            _body = body;
+            _listener = new TcpListener(IPAddress.Loopback, 0);
+            _listener.Start();
+            Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+            _ = Task.Run(ServeAsync);
+        }
+
+        public int Port { get; }
+
+        private async Task ServeAsync()
+        {
+            try
+            {
+                while (!_dispose.IsCancellationRequested)
+                {
+                    using TcpClient client = await _listener.AcceptTcpClientAsync(_dispose.Token);
+                    using NetworkStream stream = client.GetStream();
+                    byte[] buffer = new byte[4096];
+                    int total = 0;
+                    while (total < buffer.Length)
+                    {
+                        int read = await stream.ReadAsync(
+                            buffer.AsMemory(total, buffer.Length - total),
+                            _dispose.Token);
+                        if (read == 0)
+                        {
+                            break;
+                        }
+
+                        total += read;
+                        if (Encoding.ASCII.GetString(buffer, 0, total).Contains("\r\n\r\n", StringComparison.Ordinal))
+                        {
+                            break;
+                        }
+                    }
+
+                    string header =
+                        $"HTTP/1.1 200 OK\r\nContent-Type: application/yaml\r\nContent-Length: {_body.Length}\r\nConnection: close\r\n\r\n";
+                    await stream.WriteAsync(Encoding.ASCII.GetBytes(header), _dispose.Token);
+                    await stream.WriteAsync(_body, _dispose.Token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (SocketException)
+            {
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        public void Dispose()
+        {
+            _dispose.Cancel();
+            _listener.Stop();
+            _dispose.Dispose();
         }
     }
 

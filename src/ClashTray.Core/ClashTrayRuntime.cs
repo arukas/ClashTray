@@ -1026,7 +1026,6 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 cancellationToken);
             contentChanged = update.ContentChanged;
             UpdateSubscriptionState(SubscriptionState.Applying, null);
-            UpdateSubscriptionState(SubscriptionState.Succeeded, null);
             if (shouldRemainActive)
             {
                 ConfigurationSwitchRequest request = new(
@@ -1069,6 +1068,8 @@ public sealed class ClashTrayRuntime : IAsyncDisposable
                 _stateStore.Update(snapshot => snapshot with { Logs = _logs.Snapshot() });
                 Publish();
             }
+
+            UpdateSubscriptionState(SubscriptionState.Succeeded, null);
         }
         catch (Exception exception)
         {
