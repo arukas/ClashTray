@@ -239,8 +239,8 @@ public sealed class LocalCoreShutdownJournalTests
     {
         ProcessStartInfo startInfo = new()
         {
-            FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe"),
-            Arguments = "/c timeout /t 60 /nobreak > nul",
+            FileName = Path.Combine(Environment.SystemDirectory, "ping.exe"),
+            Arguments = "-t 127.0.0.1",
             UseShellExecute = false,
             CreateNoWindow = true
         };
