@@ -37,15 +37,24 @@ jobs:
         shell: pwsh
         run: .\packaging\Test-OfficialMihomo.ps1 -Configuration Release
 
-      - name: Test
-        run: dotnet test ClashTray.sln --configuration Release --property:Platform=x64 --no-build --logger "trx;LogFileName=test-results.trx"
+      - name: Test (integration)
+        run: dotnet test tests/ClashTray.IntegrationTests/ClashTray.IntegrationTests.csproj --configuration Release --no-build --logger "trx;LogFileName=integration-test-results.trx"
+
+      - name: Test (core, with coverage)
+        run: dotnet test tests/ClashTray.Core.Tests/ClashTray.Core.Tests.csproj --configuration Release --no-build --collect:"XPlat Code Coverage" --logger "trx;LogFileName=core-test-results.trx" -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+
+      - name: Coverage gate (ClashTray.Core)
+        shell: pwsh
+        run: .\packaging\Test-CoverageGate.ps1 -CoverageDirectory tests/ClashTray.Core.Tests/TestResults
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: test-results
-          path: '**/TestResults/*.trx'
+          path: |
+            **/TestResults/*.trx
+            **/TestResults/**/coverage.cobertura.xml
           if-no-files-found: ignore
 
       - name: Upload official Mihomo gate result
