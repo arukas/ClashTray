@@ -251,6 +251,9 @@ public sealed class LocalCoreShutdownJournalTests
 
     private static async Task<LocalCoreProcessIdentity> CaptureIdentityAsync(Process process)
     {
+        // A freshly created process can expose ntdll.dll as its main module for the
+        // first few milliseconds; wait until the image is the launched executable.
+        string expectedImageName = Path.GetFileName(process.StartInfo.FileName);
         Stopwatch timeout = Stopwatch.StartNew();
         while (timeout.Elapsed < TimeSpan.FromSeconds(2))
         {
@@ -263,7 +266,8 @@ public sealed class LocalCoreShutdownJournalTests
             try
             {
                 string? imagePath = process.MainModule?.FileName;
-                if (!string.IsNullOrWhiteSpace(imagePath))
+                if (!string.IsNullOrWhiteSpace(imagePath)
+                    && string.Equals(Path.GetFileName(imagePath), expectedImageName, StringComparison.OrdinalIgnoreCase))
                 {
                     return new LocalCoreProcessIdentity(
                         process.Id,

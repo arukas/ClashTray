@@ -246,7 +246,7 @@ internal sealed class LocalCoreShutdownJournal
                         StringComparison.OrdinalIgnoreCase)
                     || startTimeUtcTicks != identity.StartTimeUtcTicks)
                 {
-                    return new(true, true, "进程身份已变化；保留当前进程并清除陈旧恢复记录。");
+                    return new(true, true, $"进程身份已变化(记录: {identity.ExecutablePath}|{identity.StartTimeUtcTicks};实际: {executablePath}|{startTimeUtcTicks});保留当前进程并清除陈旧恢复记录。");
                 }
 
                 process.Kill(entireProcessTree: true);
