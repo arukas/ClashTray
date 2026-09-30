@@ -14,7 +14,7 @@ namespace ClashTray.Core;
 /// </summary>
 internal sealed class SettingsFileDto
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -31,6 +31,10 @@ internal sealed class SettingsFileDto
     public int MixedPort { get; set; } = 7890;
 
     public int ControllerPort { get; set; } = 9090;
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public ControllerPortConflictPolicy ControllerPortConflictPolicy { get; set; }
+        = ControllerPortConflictPolicy.AutomaticFallback;
 
     public bool AllowLan { get; set; }
 
@@ -76,6 +80,7 @@ internal sealed class SettingsFileDto
             SocksPort = settings.SocksPort,
             MixedPort = settings.MixedPort,
             ControllerPort = settings.ControllerPort,
+            ControllerPortConflictPolicy = settings.ControllerPortConflictPolicy,
             AllowLan = settings.AllowLan,
             Ipv6 = settings.Ipv6,
             TcpConcurrent = settings.TcpConcurrent,
@@ -115,5 +120,6 @@ internal sealed class SettingsFileDto
         DisconnectConnectionsAfterProxySwitch: DisconnectConnectionsAfterProxySwitch,
         NakhimovUnlocked: NakhimovUnlocked,
         Language: Language,
-        TunStack: TunStack);
+        TunStack: TunStack,
+        ControllerPortConflictPolicy: ControllerPortConflictPolicy);
 }

@@ -20,6 +20,7 @@ internal sealed class EndpointCatalogCoordinator
     private readonly EndpointRemovalCoordinator _removalCoordinator;
     private readonly EndpointProvisioningCoordinator _provisioningCoordinator;
     private readonly Func<AppSettings> _settingsAccessor;
+    private readonly Func<int> _localControllerPortAccessor;
     private readonly Action _publish;
     private IReadOnlyList<EndpointDescriptor> _remoteEndpointDescriptors = [];
     private EndpointStoreLoadStatus _storeStatus = EndpointStoreLoadStatus.FirstRun;
@@ -32,7 +33,8 @@ internal sealed class EndpointCatalogCoordinator
         EndpointSecretStore secretStore,
         EndpointCertificateStore certificateStore,
         Func<AppSettings> settingsAccessor,
-        Action publish)
+        Action publish,
+        Func<int>? localControllerPortAccessor = null)
     {
         ArgumentNullException.ThrowIfNull(operationGate);
         ArgumentNullException.ThrowIfNull(sessions);
@@ -47,6 +49,8 @@ internal sealed class EndpointCatalogCoordinator
         _secretStore = secretStore;
         _certificateStore = certificateStore;
         _settingsAccessor = settingsAccessor;
+        _localControllerPortAccessor = localControllerPortAccessor
+            ?? (() => _settingsAccessor().ControllerPort);
         _publish = publish;
         _removalCoordinator = new EndpointRemovalCoordinator(
             store,
@@ -64,7 +68,7 @@ internal sealed class EndpointCatalogCoordinator
         get
         {
             List<EndpointDescriptor> endpoints =
-            [ControllerEndpointFactory.CreateLocal(_settingsAccessor().ControllerPort)];
+            [ControllerEndpointFactory.CreateLocal(_localControllerPortAccessor())];
             endpoints.AddRange(_remoteEndpointDescriptors);
             return endpoints;
         }
@@ -78,7 +82,7 @@ internal sealed class EndpointCatalogCoordinator
     {
         EndpointCatalog catalog = new(
             _store,
-            ControllerEndpointFactory.CreateLocal(_settingsAccessor().ControllerPort));
+            ControllerEndpointFactory.CreateLocal(_localControllerPortAccessor()));
         EndpointCatalogLoadResult result = await catalog.LoadAsync(cancellationToken)
             .ConfigureAwait(false);
         _remoteEndpointDescriptors = result.Endpoints

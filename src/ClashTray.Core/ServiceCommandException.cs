@@ -29,5 +29,11 @@ public sealed class ServiceCommandException : InvalidOperationException
         ErrorCode = errorCode;
     }
 
+    public ServiceCommandException(ServiceErrorCode errorCode, string message, Exception innerException)
+        : base(message, innerException)
+    {
+        ErrorCode = errorCode;
+    }
+
     public ServiceErrorCode ErrorCode { get; }
 }

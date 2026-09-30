@@ -165,6 +165,16 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="MixedPortLabel" xml:space="preserve"><value>Mixed</value></data>
   <data name="ControllerPortBox.Header" xml:space="preserve"><value>Controller</value></data>
   <data name="ControllerPortLabel" xml:space="preserve"><value>Controller</value></data>
+  <data name="ControllerPortPolicyBox.Header" xml:space="preserve"><value>Controller port conflict policy</value></data>
+  <data name="ControllerPortAutomaticItem.Content" xml:space="preserve"><value>Choose a free high port when the preferred port is busy</value></data>
+  <data name="ControllerPortFixedItem.Content" xml:space="preserve"><value>Keep the fixed port and report conflicts</value></data>
+  <data name="ControllerPortPolicyHint.Text" xml:space="preserve"><value>Startup probes the controller and HTTP, SOCKS, and Mixed listeners. Fixed-IP DNS listeners and HTTP, SOCKS, Mixed, redir, and tproxy listeners are checked by transport. Unrecognized syntax is preserved and a coverage warning is written to core logs.</value></data>
+  <data name="ActiveControllerAddressText.Text" xml:space="preserve"><value>The active controller address is not confirmed.</value></data>
+  <data name="ControllerActualAddressFormat" xml:space="preserve"><value>Active controller address: 127.0.0.1:{0}</value></data>
+  <data name="ControllerActualAddressNotConfirmed" xml:space="preserve"><value>The active controller address is not confirmed.</value></data>
+  <data name="StartWithAvailableControllerPortButton.Content" xml:space="preserve"><value>Start once with an available controller port</value></data>
+  <data name="ControllerPortOneTimeStartSucceeded" xml:space="preserve"><value>Core started on the confirmed available controller port; the saved preferred port is unchanged.</value></data>
+  <data name="ControllerPortOneTimeStartFailedFormat" xml:space="preserve"><value>Could not start with an available port: {0}</value></data>
   <data name="BypassListBox.Header" xml:space="preserve"><value>System proxy bypass list</value></data>
   <data name="BypassListBox.PlaceholderText" xml:space="preserve"><value>Separate with semicolons, e.g. localhost;127.*</value></data>
   <data name="SubscriptionRefreshHeader.Text" xml:space="preserve"><value>Subscription refresh interval</value></data>

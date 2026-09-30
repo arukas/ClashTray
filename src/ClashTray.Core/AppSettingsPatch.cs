@@ -26,6 +26,7 @@ public sealed record AppSettingsPatch(
     SettingPatchValue<int> SocksPort = default,
     SettingPatchValue<int> MixedPort = default,
     SettingPatchValue<int> ControllerPort = default,
+    SettingPatchValue<ControllerPortConflictPolicy> ControllerPortConflictPolicy = default,
     SettingPatchValue<bool> AllowLan = default,
     SettingPatchValue<bool> Ipv6 = default,
     SettingPatchValue<bool> TcpConcurrent = default,
@@ -48,6 +49,7 @@ public sealed record AppSettingsPatch(
         && !SocksPort.IsSpecified
         && !MixedPort.IsSpecified
         && !ControllerPort.IsSpecified
+        && !ControllerPortConflictPolicy.IsSpecified
         && !AllowLan.IsSpecified
         && !Ipv6.IsSpecified
         && !TcpConcurrent.IsSpecified
@@ -74,6 +76,7 @@ public sealed record AppSettingsPatch(
             SocksPort = SocksPort.Merge(latest.SocksPort),
             MixedPort = MixedPort.Merge(latest.MixedPort),
             ControllerPort = ControllerPort.Merge(latest.ControllerPort),
+            ControllerPortConflictPolicy = ControllerPortConflictPolicy.Merge(latest.ControllerPortConflictPolicy),
             AllowLan = AllowLan.Merge(latest.AllowLan),
             Ipv6 = Ipv6.Merge(latest.Ipv6),
             TcpConcurrent = TcpConcurrent.Merge(latest.TcpConcurrent),
@@ -103,6 +106,7 @@ public sealed record AppSettingsPatch(
             Changed(baseline.SocksPort, proposed.SocksPort),
             Changed(baseline.MixedPort, proposed.MixedPort),
             Changed(baseline.ControllerPort, proposed.ControllerPort),
+            Changed(baseline.ControllerPortConflictPolicy, proposed.ControllerPortConflictPolicy),
             Changed(baseline.AllowLan, proposed.AllowLan),
             Changed(baseline.Ipv6, proposed.Ipv6),
             Changed(baseline.TcpConcurrent, proposed.TcpConcurrent),

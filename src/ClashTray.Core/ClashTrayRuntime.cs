@@ -53,6 +53,8 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
     private readonly ProxyOperationCoordinator _proxyOps;
     private readonly SubscriptionRefreshCoordinator _subscriptionRefresh;
     private readonly Func<MihomoApiClient>? _controllerApiFactory;
+    private int _controllerSessionInjectedForTesting;
+    private CoreRuntimeBinding? _runtimeBinding;
     private bool _usingServiceCore;
     private long _confirmedCoreLifecycleEpoch = long.MinValue;
     private long _confirmedCoreProcessGeneration = long.MinValue;
@@ -135,7 +137,8 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
             endpointSecretStore,
             endpointCertificateStore,
             () => _settings,
-            Publish);
+            Publish,
+            () => ActiveRuntimeBinding?.ControllerPort ?? _settings.ControllerPort);
         _coreDiscovery = new CoreDiscovery(_paths);
         _configurationStore = new ConfigurationStore(
             _paths,
@@ -231,6 +234,8 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
 
     public RuntimeSnapshot Snapshot => _stateStore.Snapshot;
 
+    public CoreRuntimeBinding? ActiveRuntimeBinding => Volatile.Read(ref _runtimeBinding);
+
     public long SnapshotRevision => _stateStore.Revision;
 
     public AppSnapshot AppSnapshot => ComposeAppSnapshot(Snapshot);
@@ -298,12 +303,50 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
         appSnapshotChanged?.Invoke(this, appSnapshot);
     }
 
+    private void SetRuntimeBinding(CoreRuntimeBinding? binding)
+    {
+        if (binding is not null
+            && (binding.ControllerPort is < 1 or > 65535
+                || binding.PreferredControllerPort is < 1 or > 65535
+                || binding.InstanceId == Guid.Empty
+                || binding.OwnerInstanceId == Guid.Empty
+                || binding.ProcessId <= 0
+                || binding.ProcessStartedUtcTicks <= 0
+                || binding.ProcessGeneration <= 0
+                || string.IsNullOrWhiteSpace(binding.ExecutablePath)
+                || !binding.ControllerReady
+                || binding.AdditionalListeners is { Count: > 256 }
+                || binding.AdditionalListeners?.Any(listener =>
+                    string.IsNullOrWhiteSpace(listener.Name)
+                    || listener.Name.Length > 64
+                    || listener.Port is < 1 or > 65535
+                    || !Enum.IsDefined(listener.Transport)
+                    || !System.Net.IPAddress.TryParse(listener.Address, out _)) == true
+                || binding.ListenerPlanWarning is { Length: > 512 }))
+        {
+            throw new InvalidDataException("服务返回了无效或未确认的 Mihomo 运行绑定。");
+        }
+
+        Interlocked.Exchange(ref _runtimeBinding, binding);
+        _endpointSessions.UpdateLocalEndpoint(
+            ControllerEndpointFactory.CreateLocal(binding?.ControllerPort ?? _settings.ControllerPort));
+        if (!string.IsNullOrWhiteSpace(binding?.ListenerPlanWarning))
+        {
+            _logs.AddApplicationLog(new LogEntry(
+                DateTimeOffset.UtcNow,
+                "ClashTray",
+                "warning",
+                ErrorSanitizer.Sanitize(binding.ListenerPlanWarning)));
+        }
+    }
+
     private AppSnapshot ComposeAppSnapshot(RuntimeSnapshot snapshot) => AppSnapshotComposer.Compose(
         snapshot,
         _settings,
         Endpoints,
         activeController: _remoteRefresh.BuildActiveControllerSnapshot(),
-        controllerGeneration: ControllerGeneration);
+        controllerGeneration: ControllerGeneration,
+        localControllerPort: ActiveRuntimeBinding?.ControllerPort);
 
     private static RuntimeSnapshot CreateInitialSnapshot() => new(
         new CoreStatus(CoreState.Missing, null, null, ProxyMode.Rule, 0, 0, 0, 0, 0, 0, null),

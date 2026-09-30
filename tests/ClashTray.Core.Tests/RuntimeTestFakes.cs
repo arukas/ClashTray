@@ -9,6 +9,42 @@ namespace ClashTray.Core.Tests;
 
 internal static class RuntimeTestHelpers
 {
+    public static AppSettings CreatePortSafeSettings(string? activeConfigurationId = null)
+    {
+        HashSet<int> reserved = [];
+        int controllerPort = ReserveTestPort(reserved);
+        int httpPort = ReserveTestPort(reserved);
+        int socksPort = ReserveTestPort(reserved);
+        int mixedPort = ReserveTestPort(reserved);
+        return new AppSettings(
+            ActiveConfigurationId: activeConfigurationId,
+            ControllerPort: controllerPort,
+            HttpPort: httpPort,
+            SocksPort: socksPort,
+            MixedPort: mixedPort);
+    }
+
+    public static CoreRuntimeBinding CreateRuntimeBinding(AppSettings settings)
+    {
+        using System.Diagnostics.Process process = System.Diagnostics.Process.GetCurrentProcess();
+        return new CoreRuntimeBinding(
+            settings.ControllerPort,
+            settings.ControllerPort,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            process.Id,
+            process.StartTime.ToUniversalTime().Ticks,
+            1,
+            settings.HttpPort,
+            settings.SocksPort,
+            settings.MixedPort,
+            ControllerReady: true,
+            HttpReady: true,
+            SocksReady: true,
+            MixedReady: true,
+            Environment.ProcessPath ?? string.Empty);
+    }
+
     public static async Task<string> WriteConfigAsync(string root, string name)
     {
         string path = Path.Combine(root, name);
@@ -22,6 +58,33 @@ internal static class RuntimeTestHelpers
         await File.WriteAllTextAsync(
             Path.Combine(paths.ConfigurationsRoot, $"{profile.Id}.json"),
             System.Text.Json.JsonSerializer.Serialize(profile));
+    }
+
+    private static int ReserveTestPort(HashSet<int> reserved)
+    {
+        for (int attempt = 0; attempt < 32; attempt++)
+        {
+            using TcpListener tcp = new(IPAddress.Loopback, 0);
+            tcp.Start();
+            int port = ((IPEndPoint)tcp.LocalEndpoint).Port;
+            if (reserved.Contains(port))
+            {
+                continue;
+            }
+
+            try
+            {
+                using UdpClient udp = new(new IPEndPoint(IPAddress.Loopback, port));
+                reserved.Add(port);
+                return port;
+            }
+            catch (SocketException)
+            {
+                // A test-only ephemeral port must be bindable for both listener transports.
+            }
+        }
+
+        throw new InvalidOperationException("无法为运行时测试分配隔离端口。");
     }
 }
 

@@ -4,6 +4,8 @@ using ClashTray.Contracts;
 
 namespace ClashTray.Core;
 
+public sealed record MihomoListenerPorts(int? Http, int? Socks, int? Mixed);
+
 public static class MihomoDataParser
 {
     private const int MaxProxyEntries = 2_000;
@@ -199,6 +201,16 @@ public static class MihomoDataParser
     {
         ArgumentNullException.ThrowIfNull(document);
         return GetBoolean(document.RootElement, "ipv6");
+    }
+
+    public static MihomoListenerPorts ParseListenerPorts(JsonDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        JsonElement root = document.RootElement;
+        return new MihomoListenerPorts(
+            GetPortOrNull(root, "port"),
+            GetPortOrNull(root, "socks-port"),
+            GetPortOrNull(root, "mixed-port"));
     }
 
     public static IReadOnlyList<ConnectionInfo> ParseConnections(JsonDocument document)
@@ -492,6 +504,19 @@ public static class MihomoDataParser
         element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out JsonElement value) && value.TryGetInt32(out int number)
             ? number
             : 0;
+
+    private static int? GetPortOrNull(JsonElement element, string property)
+    {
+        if (element.ValueKind != JsonValueKind.Object
+            || !element.TryGetProperty(property, out JsonElement value)
+            || !value.TryGetInt32(out int port)
+            || port is < 0 or > 65535)
+        {
+            return null;
+        }
+
+        return port;
+    }
 
     private static int GetInt(JsonElement element, int index) =>
         element.ValueKind == JsonValueKind.Array && element.GetArrayLength() > index && element[index].TryGetInt32(out int number)

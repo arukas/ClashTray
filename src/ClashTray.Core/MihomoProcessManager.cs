@@ -11,12 +11,16 @@ public sealed class MihomoProcessManager : IAsyncDisposable
     private static readonly TimeSpan DefaultStopTimeout = TimeSpan.FromSeconds(10);
     private readonly SemaphoreSlim _operationLock = new(1, 1);
     private readonly object _processGate = new();
+    private readonly object _stateEventGate = new();
     private readonly TimeSpan _validationTimeout;
     private readonly TimeSpan _stopTimeout;
+    private readonly Func<ProcessStartInfo, Process> _processStartInfoFactory;
     private Process? _process;
     private CancellationTokenSource? _lifetimeCts;
     private ProcessJobObject? _processJob;
     private long _generation;
+    private Guid _instanceId;
+    private readonly Guid _ownerInstanceId = Guid.NewGuid();
 
     public CoreState State { get; private set; } = CoreState.Stopped;
 
@@ -26,6 +30,19 @@ public sealed class MihomoProcessManager : IAsyncDisposable
     /// Mihomo process cannot commit state for a newer process.
     /// </summary>
     public long Generation => Interlocked.Read(ref _generation);
+
+    public Guid InstanceId
+    {
+        get
+        {
+            lock (_processGate)
+            {
+                return _instanceId;
+            }
+        }
+    }
+
+    public Guid OwnerInstanceId => _ownerInstanceId;
 
     public event EventHandler<CoreState>? StateChanged;
 
@@ -37,12 +54,25 @@ public sealed class MihomoProcessManager : IAsyncDisposable
     }
 
     internal MihomoProcessManager(TimeSpan validationTimeout, TimeSpan stopTimeout)
+        : this(validationTimeout, stopTimeout, null)
+    {
+    }
+
+    internal MihomoProcessManager(
+        TimeSpan validationTimeout,
+        TimeSpan stopTimeout,
+        Func<ProcessStartInfo, Process>? processStartInfoFactory)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(validationTimeout, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(stopTimeout, TimeSpan.Zero);
 
         _validationTimeout = validationTimeout;
         _stopTimeout = stopTimeout;
+        _processStartInfoFactory = processStartInfoFactory ?? (startInfo => new Process
+        {
+            StartInfo = startInfo,
+            EnableRaisingEvents = true
+        });
     }
 
     public Task<bool> ValidateAsync(string executablePath, string configurationPath, CancellationToken cancellationToken = default)
@@ -183,6 +213,24 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
     }
 
+    internal bool TryMarkReady(long expectedGeneration)
+    {
+        lock (_processGate)
+        {
+            if (expectedGeneration != Generation
+                || _process is null
+                || HasExited(_process))
+            {
+                return false;
+            }
+
+            State = CoreState.Running;
+        }
+
+        OnStateChanged();
+        return State == CoreState.Running && expectedGeneration == Generation;
+    }
+
     public Task RestartAsync(
         string executablePath,
         string configurationPath,
@@ -293,6 +341,11 @@ public sealed class MihomoProcessManager : IAsyncDisposable
                 _processJob = null;
             }
 
+            if (stopped)
+            {
+                _instanceId = Guid.Empty;
+            }
+
             State = stopped ? CoreState.Stopped : CoreState.Failed;
         }
 
@@ -320,7 +373,19 @@ public sealed class MihomoProcessManager : IAsyncDisposable
                 return null;
             }
 
-            string? executablePath = process.MainModule?.FileName;
+            string? executablePath = null;
+            try
+            {
+                executablePath = process.MainModule?.FileName;
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                // The process was created by this manager; its immutable
+                // StartInfo path is a safe fallback if module enumeration is
+                // temporarily denied by the OS.
+            }
+
+            executablePath ??= process.StartInfo.FileName;
             if (string.IsNullOrWhiteSpace(executablePath))
             {
                 throw new InvalidOperationException("无法读取本地 Mihomo 进程路径。");
@@ -350,13 +415,15 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             RedirectStandardError = true
         };
         ApplySafePaths(startInfo, safePaths);
-        Process process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        Process process = _processStartInfoFactory(startInfo);
+        process.EnableRaisingEvents = true;
         CancellationTokenSource lifetime = new CancellationTokenSource();
         process.Exited += ProcessExited;
         lock (_processGate)
         {
             _process = process;
             _lifetimeCts = lifetime;
+            _instanceId = Guid.NewGuid();
         }
 
         try
@@ -400,7 +467,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             {
                 if (ReferenceEquals(_process, process))
                 {
-                    State = running ? CoreState.Running : CoreState.Failed;
+                    State = running ? CoreState.Starting : CoreState.Failed;
                 }
             }
 
@@ -421,6 +488,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
                 {
                     _process = null;
                     _lifetimeCts = null;
+                    _instanceId = Guid.Empty;
                     failedJob = _processJob;
                     _processJob = null;
                     State = CoreState.Failed;
@@ -627,6 +695,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             }
 
             _lifetimeCts?.Cancel();
+            _instanceId = Guid.Empty;
             if (State is not (CoreState.Stopping or CoreState.Restarting))
             {
                 State = CoreState.Failed;
@@ -664,5 +733,11 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         lifetime?.Dispose();
     }
 
-    private void OnStateChanged() => StateChanged?.Invoke(this, State);
+    private void OnStateChanged()
+    {
+        lock (_stateEventGate)
+        {
+            StateChanged?.Invoke(this, State);
+        }
+    }
 }

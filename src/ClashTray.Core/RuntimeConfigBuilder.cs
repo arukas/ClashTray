@@ -50,6 +50,78 @@ public static class RuntimeConfigBuilder
             tunEnabled: false,
             cancellationToken: cancellationToken);
 
+    /// <summary>
+    /// Writes a service-owned candidate runtime config with the controller
+    /// pinned to loopback and the only supported controller secret (empty).
+    /// The managed listener settings and user profile are otherwise preserved.
+    /// </summary>
+    public static async Task<string> BuildControllerCandidateAsync(
+        string sourcePath,
+        string destinationPath,
+        int controllerPort,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        if (controllerPort is < 1 or > 65535)
+        {
+            throw new ArgumentOutOfRangeException(nameof(controllerPort));
+        }
+
+        FileInfo sourceInfo = new(sourcePath);
+        if (!sourceInfo.Exists || sourceInfo.Length > MaximumInputBytes)
+        {
+            throw new InvalidDataException("The managed runtime configuration is missing or exceeds its size limit.");
+        }
+
+        string[] source = await File.ReadAllLinesAsync(sourcePath, cancellationToken).ConfigureAwait(false);
+        if (source.Length > MaximumInputLines || source.Any(line => line.Length > MaximumLineCharacters))
+        {
+            throw new InvalidDataException("The managed runtime configuration exceeds its line limits.");
+        }
+
+        YamlDocumentScope scope = ValidateYamlDocumentScope(source, cancellationToken);
+        List<string> filtered = RemoveSpecificRootEntries(
+            source.ToList(),
+            new HashSet<string>(["external-controller", "secret"], StringComparer.OrdinalIgnoreCase),
+            cancellationToken);
+        List<string> managed =
+        [
+            string.Empty,
+            $"external-controller: 127.0.0.1:{controllerPort}",
+            "secret: ''"
+        ];
+        InsertBeforeDocumentEnd(filtered, managed, scope);
+
+        string? directory = Path.GetDirectoryName(destinationPath);
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            throw new InvalidOperationException("A managed candidate configuration must have a parent directory.");
+        }
+
+        Directory.CreateDirectory(directory);
+        string temporaryPath = $"{destinationPath}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await File.WriteAllLinesAsync(
+                temporaryPath,
+                filtered,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                cancellationToken).ConfigureAwait(false);
+            WindowsPathSecurity.ProtectRuntimeFile(temporaryPath);
+            File.Move(temporaryPath, destinationPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+
+        return destinationPath;
+    }
+
     public static Task<string> BuildAsync(
         string sourcePath,
         string destinationPath,
@@ -899,6 +971,30 @@ public static class RuntimeConfigBuilder
 
             string line = source[index];
             if (!TryGetRootKey(line, out string key) || !IsManagedRootKey(key))
+            {
+                result.Add(line);
+                index++;
+                continue;
+            }
+
+            YamlNodeRange range = FindYamlNodeRange(source, index, key, cancellationToken);
+            index = range.LastLine + 1;
+        }
+
+        return result;
+    }
+
+    private static List<string> RemoveSpecificRootEntries(
+        List<string> source,
+        HashSet<string> keys,
+        CancellationToken cancellationToken)
+    {
+        List<string> result = new(source.Count + keys.Count);
+        for (int index = 0; index < source.Count;)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string line = source[index];
+            if (!TryGetRootKey(line, out string key) || !keys.Contains(key))
             {
                 result.Add(line);
                 index++;

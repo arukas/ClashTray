@@ -83,7 +83,7 @@ public sealed partial class ClashTrayRuntime
             if (systemProxyBindingChanged)
             {
                 await ReconcileSystemProxyAsync(
-                    coreRunning: Snapshot.Core.State == CoreState.Running && CoreHealthConfirmed,
+                    coreRunning: CanEnableSystemProxy,
                     cancellationToken);
             }
 
@@ -386,7 +386,7 @@ public sealed partial class ClashTrayRuntime
 
     private async Task ReconcileSystemProxyAsync(bool coreRunning, CancellationToken cancellationToken)
     {
-        if (_settings.SystemProxyEnabled && coreRunning && CoreHealthConfirmed)
+        if (_settings.SystemProxyEnabled && coreRunning && CoreHealthConfirmed && IsMixedListenerReady)
         {
             if (_localDevice.SystemProxyState is (SystemProxyState.Off or SystemProxyState.Failed))
             {
@@ -442,7 +442,7 @@ public sealed partial class ClashTrayRuntime
         if (systemProxyBindingChanged)
         {
             await ReconcileSystemProxyAsync(
-                coreRunning: Snapshot.Core.State == CoreState.Running && CoreHealthConfirmed,
+                coreRunning: CanEnableSystemProxy,
                 CancellationToken.None);
         }
     }
@@ -525,6 +525,7 @@ public sealed partial class ClashTrayRuntime
         || previous.SocksPort != next.SocksPort
         || previous.MixedPort != next.MixedPort
         || previous.ControllerPort != next.ControllerPort
+        || previous.ControllerPortConflictPolicy != next.ControllerPortConflictPolicy
         || previous.TcpConcurrent != next.TcpConcurrent
         || !string.Equals(previous.TunStack, next.TunStack, StringComparison.OrdinalIgnoreCase)
         || !string.Equals(previous.LogLevel, next.LogLevel, StringComparison.OrdinalIgnoreCase);

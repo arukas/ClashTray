@@ -151,6 +151,12 @@ public sealed record RuntimeSnapshot(
     string? ErrorMessage,
     NetworkSwitchStatus? NetworkSwitch = null);
 
+public enum ControllerPortConflictPolicy
+{
+    AutomaticFallback,
+    Fixed
+}
+
 public sealed record AppSettings(
     string? ActiveConfigurationId = null,
     bool StartWithWindows = false,
@@ -171,7 +177,8 @@ public sealed record AppSettings(
     bool DisconnectConnectionsAfterProxySwitch = false,
     bool NakhimovUnlocked = false,
     string Language = "system",
-    string TunStack = "configuration");
+    string TunStack = "configuration",
+    ControllerPortConflictPolicy ControllerPortConflictPolicy = ControllerPortConflictPolicy.AutomaticFallback);
 
 public enum ServiceCommand
 {
@@ -187,7 +194,7 @@ public enum ServiceCommand
 
 public static class ServiceProtocol
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 }
 
 public enum ServiceDispatchState
@@ -212,8 +219,50 @@ public enum ServiceErrorCode
     OperationBusy,
     TunConfigurationMissingAddress,
     TunMissingInterfaceAddress,
-    TunStateUnknown
+    TunStateUnknown,
+    ControllerPortConflict,
+    ProxyPortConflict,
+    ControllerOwnershipUnconfirmed,
+    CoreReadinessFailed,
+    ControllerCandidatesExhausted
 }
+
+/// <summary>
+/// Facts confirmed by the process owner for one running local Mihomo instance.
+/// ControllerPort is the actual bound port; ControllerPortPreference remains a
+/// user setting and is never inferred from an unconfirmed service response.
+/// </summary>
+public sealed record CoreRuntimeBinding(
+    int PreferredControllerPort,
+    int ControllerPort,
+    Guid InstanceId,
+    Guid OwnerInstanceId,
+    int ProcessId,
+    long ProcessStartedUtcTicks,
+    long ProcessGeneration,
+    int HttpPort,
+    int SocksPort,
+    int MixedPort,
+    bool ControllerReady,
+    bool HttpReady,
+    bool SocksReady,
+    bool MixedReady,
+    string ExecutablePath = "",
+    bool ListenerPlanComplete = true,
+    IReadOnlyList<RuntimeListenerBinding>? AdditionalListeners = null,
+    string? ListenerPlanWarning = null);
+
+public enum RuntimeListenerTransport
+{
+    Tcp,
+    Udp
+}
+
+public sealed record RuntimeListenerBinding(
+    string Name,
+    string Address,
+    int Port,
+    RuntimeListenerTransport Transport);
 
 public sealed record ServiceResponse(
     Guid RequestId,
@@ -224,13 +273,21 @@ public sealed record ServiceResponse(
     CoreState Core = CoreState.Stopped,
     ServiceErrorCode ErrorCode = ServiceErrorCode.None,
     ServiceDispatchState DispatchState = ServiceDispatchState.Completed,
-    int ProtocolVersion = 0);
+    int ProtocolVersion = 0,
+    CoreRuntimeBinding? RuntimeBinding = null);
 
 public sealed record ServiceCorePayload(
     string ConfigurationPath,
     string WorkingDirectory,
     int ControllerPort,
-    string ControllerSecret);
+    string ControllerSecret,
+    ControllerPortConflictPolicy ControllerPortConflictPolicy = ControllerPortConflictPolicy.AutomaticFallback,
+    bool UseAvailableControllerPortOnce = false,
+    int HttpPort = 0,
+    int SocksPort = 0,
+    int MixedPort = 0,
+    bool AllowLan = false,
+    bool Ipv6 = false);
 
 public sealed record ServiceCoreUpdatePayload(
     string Version,
@@ -240,4 +297,6 @@ public sealed record ServiceCoreUpdatePayload(
 public sealed record ServiceTunPayload(
     int ControllerPort,
     string ControllerSecret,
-    bool Enabled);
+    bool Enabled,
+    Guid InstanceId = default,
+    Guid OwnerInstanceId = default);

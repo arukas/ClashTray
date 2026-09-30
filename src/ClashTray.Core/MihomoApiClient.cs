@@ -48,6 +48,30 @@ public sealed class MihomoStreamException : IOException
     public MihomoStreamFailureKind Kind { get; }
 }
 
+/// <summary>
+/// A managed local controller request was blocked because this process can no
+/// longer prove that the configured listener belongs to its current core.
+/// </summary>
+public sealed class ManagedCoreOwnershipException : IOException
+{
+    private const string DefaultMessage = "无法确认 Mihomo 控制器端口属于当前受管核心；已阻止控制器请求。";
+
+    public ManagedCoreOwnershipException()
+        : this(DefaultMessage)
+    {
+    }
+
+    public ManagedCoreOwnershipException(string message)
+        : base(message)
+    {
+    }
+
+    public ManagedCoreOwnershipException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
 public sealed class MihomoApiClient
 {
     public static readonly TimeSpan DefaultRestTimeout = EndpointTransportPolicy.DefaultRestTimeout;
@@ -74,6 +98,9 @@ public sealed class MihomoApiClient
     private readonly int _maxJsonResponseBytes;
     private readonly TimeSpan _streamingFirstRecordTimeout;
     private readonly int _maxStreamingRecordBytes;
+    private readonly Func<bool>? _controllerOwnershipValidator;
+
+    public Uri ControllerUri => _controllerUri;
 
     public MihomoApiClient(
         HttpClient httpClient,
@@ -86,7 +113,8 @@ public sealed class MihomoApiClient
         TimeSpan? restTimeout = null,
         TimeSpan? writeTimeout = null,
         TimeSpan? webSocketHandshakeTimeout = null,
-        int maxJsonResponseBytes = DefaultMaxJsonResponseBytes)
+        int maxJsonResponseBytes = DefaultMaxJsonResponseBytes,
+        Func<bool>? controllerOwnershipValidator = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(controllerUri);
@@ -119,6 +147,7 @@ public sealed class MihomoApiClient
         _maxJsonResponseBytes = maxJsonResponseBytes;
         _streamingFirstRecordTimeout = streamingFirstRecordTimeout ?? DefaultStreamingFirstRecordTimeout;
         _maxStreamingRecordBytes = maxStreamingRecordBytes;
+        _controllerOwnershipValidator = controllerOwnershipValidator;
     }
 
     public async Task<JsonDocument> GetAsync(string path, CancellationToken cancellationToken = default)
@@ -303,6 +332,7 @@ public sealed class MihomoApiClient
 
     public async Task<ClientWebSocket> ConnectWebSocketAsync(string path, CancellationToken cancellationToken = default)
     {
+        EnsureControllerOwnership();
         ClientWebSocket? socket = null;
         using CancellationTokenSource timeout = CreateTimeoutSource(
             _webSocketHandshakeTimeout,
@@ -388,6 +418,7 @@ public sealed class MihomoApiClient
         using CancellationTokenSource timeoutSource = CreateTimeoutSource(timeout, cancellationToken);
         try
         {
+            EnsureControllerOwnership();
             using HttpResponseMessage response = await _httpClient.SendAsync(
                     request,
                     completionOption,
@@ -412,6 +443,7 @@ public sealed class MihomoApiClient
         using CancellationTokenSource timeoutSource = CreateTimeoutSource(timeout, cancellationToken);
         try
         {
+            EnsureControllerOwnership();
             using HttpResponseMessage response = await _httpClient.SendAsync(
                     request,
                     completionOption,
@@ -480,6 +512,7 @@ public sealed class MihomoApiClient
 
         try
         {
+            EnsureControllerOwnership();
             using HttpResponseMessage response = await _httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
@@ -495,6 +528,28 @@ public sealed class MihomoApiClient
                 $"Mihomo {path} 首条指标记录读取超时。",
                 exception);
         }
+    }
+
+    private void EnsureControllerOwnership()
+    {
+        if (_controllerOwnershipValidator is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_controllerOwnershipValidator())
+            {
+                return;
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new ManagedCoreOwnershipException();
+        }
+
+        throw new ManagedCoreOwnershipException();
     }
 
     private async Task<JsonDocument> ReadFirstJsonLineAsync(

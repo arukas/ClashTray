@@ -244,7 +244,8 @@ public sealed class OfficialMihomoInteropTests
             Assert.IsTrue(valid, "The pinned Mihomo executable rejected the controller-only configuration.");
 
             await manager.StartAsync(executablePath, configurationPath, root);
-            Assert.AreEqual(CoreState.Running, manager.State);
+            long generation = manager.Generation;
+            Assert.AreEqual(CoreState.Starting, manager.State);
 
             using HttpClient httpClient = new HttpClient();
             MihomoApiClient api = new(
@@ -253,6 +254,27 @@ public sealed class OfficialMihomoInteropTests
                 string.Empty);
             string version = await WaitForVersionAsync(api);
             Assert.AreEqual(BundledMihomo.Version, version);
+
+            LocalCoreProcessIdentity processIdentity = manager.CaptureRunningProcessIdentity()
+                ?? throw new AssertFailedException("The managed Mihomo process identity was not available.");
+            using (JsonDocument readinessConfiguration = await api.GetConfigurationAsync(force: false))
+            {
+                MihomoListenerPorts readinessPorts = MihomoDataParser.ParseListenerPorts(readinessConfiguration);
+                Assert.AreEqual(mixedPort, readinessPorts.Mixed);
+            }
+
+            Assert.IsTrue(
+                WindowsListenerOwnerTable.IsOwnedBy(
+                    IPAddress.Loopback,
+                    controllerPort,
+                    PortTransport.Tcp,
+                    processIdentity),
+                "The controller listener must belong to the just-started managed process.");
+            Assert.IsTrue(
+                WindowsListenerOwnerTable.IsPortOwnedBy(mixedPort, PortTransport.Tcp, processIdentity),
+                "The configured Mixed listener must belong to the just-started managed process.");
+            Assert.IsTrue(manager.TryMarkReady(generation), "Only the current generation may be marked ready.");
+            Assert.AreEqual(CoreState.Running, manager.State);
 
             using JsonDocument configuration = await api.GetConfigurationAsync(force: false);
             bool? tunEnabled = MihomoDataParser.ParseTunEnabled(configuration);

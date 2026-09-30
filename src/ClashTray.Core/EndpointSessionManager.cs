@@ -121,7 +121,7 @@ public sealed class EndpointSessionManager : IAsyncDisposable
     private readonly IEndpointSessionConnector _connector;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
-    private readonly EndpointDescriptor _localEndpoint;
+    private EndpointDescriptor _localEndpoint;
     private EndpointSession? _current;
     private long _generation;
     private long _probeGeneration;
@@ -154,7 +154,50 @@ public sealed class EndpointSessionManager : IAsyncDisposable
 
     public event EventHandler<EndpointSessionStatusEventArgs>? StatusChanged;
 
-    public EndpointDescriptor LocalEndpoint => _localEndpoint;
+    public EndpointDescriptor LocalEndpoint
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _localEndpoint;
+            }
+        }
+    }
+
+    public void UpdateLocalEndpoint(EndpointDescriptor endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ValidateLocalEndpoint(endpoint);
+        EndpointSessionStatusEventArgs? updatedStatus = null;
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (_localEndpoint == endpoint)
+            {
+                return;
+            }
+
+            _localEndpoint = endpoint;
+            if (_status.Endpoint.Kind == EndpointKind.Local)
+            {
+                updatedStatus = _status = new EndpointSessionStatusEventArgs(
+                    endpoint,
+                    EndpointSessionState.Disconnected,
+                    Interlocked.Increment(ref _generation),
+                    _status.SelectionRevision + 1,
+                    lastConfirmedAt: null,
+                    attempt: 0,
+                    nextRetryDelay: null,
+                    errorMessage: null);
+            }
+        }
+
+        if (updatedStatus is not null)
+        {
+            RaiseStatusChanged(updatedStatus);
+        }
+    }
 
     public EndpointSession? Current
     {

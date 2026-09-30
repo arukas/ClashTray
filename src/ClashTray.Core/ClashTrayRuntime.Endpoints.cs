@@ -1,3 +1,4 @@
+using System.Net;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core;
@@ -351,8 +352,24 @@ public sealed partial class ClashTrayRuntime
             return _controllerApiFactory();
         }
 
-        Uri controllerUri = new Uri($"http://127.0.0.1:{_settings.ControllerPort}/");
-        return new MihomoApiClient(_httpClient, controllerUri, string.Empty);
+        CoreRuntimeBinding binding = ActiveRuntimeBinding
+            ?? throw new InvalidOperationException("Mihomo 控制器地址尚未经过进程所有权确认。");
+        LocalCoreProcessIdentity identity = new(
+            binding.ProcessId,
+            binding.ProcessStartedUtcTicks,
+            binding.ExecutablePath);
+        Uri controllerUri = new Uri($"http://127.0.0.1:{binding.ControllerPort}/");
+        return new MihomoApiClient(
+            _httpClient,
+            controllerUri,
+            string.Empty,
+            controllerOwnershipValidator: () =>
+                ReferenceEquals(ActiveRuntimeBinding, binding)
+                && WindowsListenerOwnerTable.IsOwnedBy(
+                    IPAddress.Loopback,
+                    binding.ControllerPort,
+                    PortTransport.Tcp,
+                    identity));
     }
 
     private Task<EndpointRecord?> ResolveEndpointRecordAsync(
@@ -496,7 +513,8 @@ if (expectedTarget.EndpointId == EndpointId.Local)
 
         _controllerSessions.Attach(
             api,
-            ControllerEndpointFactory.CreateLocal(_settings.ControllerPort),
+            ControllerEndpointFactory.CreateLocal(
+                ActiveRuntimeBinding?.ControllerPort ?? _settings.ControllerPort),
             EndpointCapabilityDefaults.Local);
     }
 

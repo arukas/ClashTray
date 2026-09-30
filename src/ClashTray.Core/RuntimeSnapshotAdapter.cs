@@ -42,7 +42,8 @@ public static class RuntimeSnapshotAdapter
         AppSettings settings,
         long controllerGeneration = 0,
         DateTimeOffset? lastConfirmedAt = null,
-        IReadOnlyList<EndpointDescriptor>? endpoints = null)
+        IReadOnlyList<EndpointDescriptor>? endpoints = null,
+        int? localControllerPort = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(settings);
@@ -51,7 +52,7 @@ public static class RuntimeSnapshotAdapter
             EndpointId.Local,
             EndpointKind.Local,
             EndpointId.Local.Value,
-            new Uri($"http://127.0.0.1:{settings.ControllerPort}/"),
+            new Uri($"http://127.0.0.1:{localControllerPort ?? settings.ControllerPort}/"),
             EndpointTransportSecurity.Loopback);
 
         EndpointSessionState sessionState = snapshot.Core.State switch

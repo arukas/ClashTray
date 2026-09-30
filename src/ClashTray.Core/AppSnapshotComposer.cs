@@ -13,14 +13,16 @@ public static class AppSnapshotComposer
         IReadOnlyList<EndpointDescriptor>? endpoints = null,
         ControllerSessionSnapshot? activeController = null,
         long controllerGeneration = 0,
-        DateTimeOffset? lastConfirmedAt = null)
+        DateTimeOffset? lastConfirmedAt = null,
+        int? localControllerPort = null)
     {
         AppSnapshot localProjection = RuntimeSnapshotAdapter.ToAppSnapshot(
             localSnapshot,
             settings,
             controllerGeneration,
             lastConfirmedAt,
-            endpoints);
+            endpoints,
+            localControllerPort);
         if (activeController is null)
         {
             return localProjection;

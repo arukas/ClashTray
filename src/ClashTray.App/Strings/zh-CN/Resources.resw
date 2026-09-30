@@ -165,6 +165,16 @@
   <data name="MixedPortLabel" xml:space="preserve"><value>Mixed</value></data>
   <data name="ControllerPortBox.Header" xml:space="preserve"><value>控制器</value></data>
   <data name="ControllerPortLabel" xml:space="preserve"><value>控制器</value></data>
+  <data name="ControllerPortPolicyBox.Header" xml:space="preserve"><value>控制器端口冲突策略</value></data>
+  <data name="ControllerPortAutomaticItem.Content" xml:space="preserve"><value>自动避让（首选端口冲突时选择可用高位端口）</value></data>
+  <data name="ControllerPortFixedItem.Content" xml:space="preserve"><value>固定端口（冲突时停止并提示）</value></data>
+  <data name="ControllerPortPolicyHint.Text" xml:space="preserve"><value>启动前会探测控制器及 HTTP、SOCKS、Mixed 监听。固定 IP 的 DNS listen 和 HTTP、SOCKS、Mixed、redir、tproxy listener 会按 TCP/UDP 预检；无法静态识别的语法会保留配置，并在核心日志中提示检查限制。</value></data>
+  <data name="ActiveControllerAddressText.Text" xml:space="preserve"><value>当前实际管理地址尚未确认。</value></data>
+  <data name="ControllerActualAddressFormat" xml:space="preserve"><value>当前实际管理地址：127.0.0.1:{0}</value></data>
+  <data name="ControllerActualAddressNotConfirmed" xml:space="preserve"><value>当前实际管理地址尚未确认。</value></data>
+  <data name="StartWithAvailableControllerPortButton.Content" xml:space="preserve"><value>本次使用可用控制器端口并启动</value></data>
+  <data name="ControllerPortOneTimeStartSucceeded" xml:space="preserve"><value>已使用本次确认的可用控制器端口启动核心；保存的首选端口未更改。</value></data>
+  <data name="ControllerPortOneTimeStartFailedFormat" xml:space="preserve"><value>使用可用端口启动失败：{0}</value></data>
   <data name="BypassListBox.Header" xml:space="preserve"><value>系统代理绕过列表</value></data>
   <data name="BypassListBox.PlaceholderText" xml:space="preserve"><value>使用分号分隔，例如 localhost;127.*</value></data>
   <data name="SubscriptionRefreshHeader.Text" xml:space="preserve"><value>订阅刷新间隔</value></data>

@@ -146,10 +146,17 @@ public sealed partial class ClashTrayRuntime
                     cancellationToken);
             }
 
-            if (enabled && !CoreHealthConfirmed)
+            if (enabled && !CanEnableSystemProxy)
             {
                 await RevokeSystemProxyForCoreLossAsync(operationLease ?? ownedLease!);
-                _stateStore.Update(snapshot => snapshot with { SystemProxy = _localDevice.SystemProxyState });
+                string? message = CoreHealthConfirmed
+                    ? "Mixed 监听尚未由当前 Mihomo 进程确认，系统代理保持关闭。"
+                    : null;
+                _stateStore.Update(snapshot => snapshot with
+                {
+                    SystemProxy = _localDevice.SystemProxyState,
+                    ErrorMessage = message
+                });
                 Publish();
                 return;
             }
@@ -234,10 +241,14 @@ public sealed partial class ClashTrayRuntime
         {
             _stateStore.Update(snapshot => snapshot with { Tun = enabled ? TunState.Enabling : TunState.Disabling });
             Publish();
+            CoreRuntimeBinding binding = ActiveRuntimeBinding
+                ?? throw new InvalidOperationException("TUN 操作需要已经确认的 Mihomo 运行绑定。");
             ServiceTunPayload payload = new(
-                _settings.ControllerPort,
+                binding.ControllerPort,
                 string.Empty,
-                enabled);
+                enabled,
+                binding.InstanceId,
+                binding.OwnerInstanceId);
             ServiceResponse response = await _localDevice.SetTunAsync(payload, cancellationToken)
                 .ConfigureAwait(false);
             serviceResponseState = response.Tun;

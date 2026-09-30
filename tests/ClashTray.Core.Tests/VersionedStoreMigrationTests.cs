@@ -159,4 +159,40 @@ public sealed class VersionedStoreMigrationTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [TestMethod]
+    public async Task MissingControllerConflictPolicyMigratesToAutomaticFallbackAndSurvivesFieldPatches()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        await File.WriteAllTextAsync(paths.SettingsFile, """{"schemaVersion":2,"controllerPort":19090,"allowLan":true}""");
+
+        try
+        {
+            SettingsStore store = new(paths);
+            AppSettings settings = await store.LoadAsync();
+
+            Assert.AreEqual(19090, settings.ControllerPort);
+            Assert.AreEqual(ControllerPortConflictPolicy.AutomaticFallback, settings.ControllerPortConflictPolicy);
+
+            AppSettings fixedPort = new AppSettingsPatch(
+                ControllerPortConflictPolicy: SettingPatchValue.Set(ControllerPortConflictPolicy.Fixed))
+                .Apply(settings);
+            AppSettings unrelatedPatch = new AppSettingsPatch(AllowLan: SettingPatchValue.Set(false)).Apply(fixedPort);
+            Assert.AreEqual(ControllerPortConflictPolicy.Fixed, unrelatedPatch.ControllerPortConflictPolicy);
+
+            await store.SaveAsync(unrelatedPatch);
+            using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(paths.SettingsFile));
+            Assert.AreEqual(
+                ControllerPortConflictPolicy.Fixed,
+                Enum.Parse<ControllerPortConflictPolicy>(
+                    document.RootElement.GetProperty("controllerPortConflictPolicy").GetString()!,
+                    ignoreCase: true));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

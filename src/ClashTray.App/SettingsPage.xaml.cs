@@ -600,6 +600,8 @@ public sealed partial class SettingsPage : UserControl
             SocksPort = socksPort,
             MixedPort = mixedPort,
             ControllerPort = controllerPort,
+            ControllerPortConflictPolicy = ParseControllerPortConflictPolicy(
+                (ControllerPortPolicyBox.SelectedItem as ComboBoxItem)?.Tag?.ToString()),
             LogLevel = logLevel,
             Theme = theme,
             Language = language,
@@ -642,6 +644,37 @@ public sealed partial class SettingsPage : UserControl
             _saving = false;
             SaveSettingsButton.IsEnabled = true;
             SaveNetworkSettingsButton.IsEnabled = true;
+        }
+    }
+
+    private static ControllerPortConflictPolicy ParseControllerPortConflictPolicy(string? value) =>
+        string.Equals(value, "fixed", StringComparison.OrdinalIgnoreCase)
+            ? ControllerPortConflictPolicy.Fixed
+            : ControllerPortConflictPolicy.AutomaticFallback;
+
+    private async void StartWithAvailableControllerPortButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_saving || _runtime.Snapshot.Core.State is CoreState.Running or CoreState.Starting or CoreState.Restarting)
+        {
+            return;
+        }
+
+        StartWithAvailableControllerPortButton.IsEnabled = false;
+        try
+        {
+            await _runtime.StartCoreUsingAvailableControllerPortOnceAsync();
+            StatusText.Text = LocalizationService.Get("ControllerPortOneTimeStartSucceeded");
+        }
+        catch (Exception exception)
+        {
+            StatusText.Text = LocalizationService.Format(
+                "ControllerPortOneTimeStartFailedFormat",
+                ErrorSanitizer.Sanitize(exception));
+        }
+        finally
+        {
+            StartWithAvailableControllerPortButton.IsEnabled =
+                _runtime.Snapshot.Core.State is not (CoreState.Running or CoreState.Starting or CoreState.Restarting);
         }
     }
 
@@ -942,6 +975,19 @@ public sealed partial class SettingsPage : UserControl
             ControllerPortBox.Value = settings.ControllerPort;
         }
 
+        if (ShouldRefresh(
+            (ControllerPortPolicyBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
+            value => value.ControllerPortConflictPolicy == ControllerPortConflictPolicy.Fixed ? "fixed" : "automatic"))
+        {
+            string policyTag = settings.ControllerPortConflictPolicy == ControllerPortConflictPolicy.Fixed
+                ? "fixed"
+                : "automatic";
+            ControllerPortPolicyBox.SelectedItem = ControllerPortPolicyBox.Items
+                .OfType<ComboBoxItem>()
+                .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), policyTag, StringComparison.Ordinal))
+                ?? ControllerPortPolicyBox.Items.FirstOrDefault();
+        }
+
         if (ShouldRefresh(BypassListBox.Text, value => value.BypassList))
         {
             BypassListBox.Text = settings.BypassList;
@@ -998,11 +1044,16 @@ public sealed partial class SettingsPage : UserControl
         }
 
         bool coreRunning = snapshot.Core.State == CoreState.Running;
+        ActiveControllerAddressText.Text = _runtime.ActiveRuntimeBinding is { ControllerReady: true } binding
+            ? LocalizationService.Format("ControllerActualAddressFormat", binding.ControllerPort)
+            : LocalizationService.Get("ControllerActualAddressNotConfirmed");
         bool canControlSystemProxy = HasControllerCapability(EndpointCapability.ControlSystemProxy);
         bool canControlTun = HasControllerCapability(EndpointCapability.ControlTun);
         _updatingNetworkControls = true;
         try
         {
+            StartWithAvailableControllerPortButton.IsEnabled = !_saving
+                && snapshot.Core.State is not (CoreState.Running or CoreState.Starting or CoreState.Restarting);
             SystemProxyStateText.Text = snapshot.SystemProxy switch
             {
                 SystemProxyState.On => LocalizationService.Get("SwitchStateOn"),

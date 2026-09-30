@@ -84,6 +84,20 @@
                     <NumberBox x:Name="MixedPortBox" x:Uid="MixedPortBox" Minimum="1" Maximum="65535" />
                     <NumberBox x:Name="ControllerPortBox" Grid.Column="1" x:Uid="ControllerPortBox" Minimum="1" Maximum="65535" />
                 </Grid>
+                <ComboBox x:Name="ControllerPortPolicyBox" x:Uid="ControllerPortPolicyBox">
+                    <ComboBoxItem x:Uid="ControllerPortAutomaticItem" Tag="automatic" />
+                    <ComboBoxItem x:Uid="ControllerPortFixedItem" Tag="fixed" />
+                </ComboBox>
+                <TextBlock x:Name="ActiveControllerAddressText"
+                           x:Uid="ActiveControllerAddressText"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+                <TextBlock x:Uid="ControllerPortPolicyHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <Button x:Name="StartWithAvailableControllerPortButton"
+                        x:Uid="StartWithAvailableControllerPortButton"
+                        Style="{StaticResource ClashTrayCompactButtonStyle}"
+                        Click="StartWithAvailableControllerPortButton_Click"
+                        HorizontalAlignment="Left" />
                 <TextBox x:Name="BypassListBox" x:Uid="BypassListBox" />
                 <Button x:Name="SaveNetworkSettingsButton" x:Uid="SaveNetworkSettingsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" HorizontalAlignment="Left" />
             </StackPanel>

@@ -13,19 +13,20 @@ public sealed class RuntimeServiceReconciliationTests
     {
         string root = CreateRoot();
         AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
-        UnknownStartService service = new(reportRunningAfterUnknown: true);
+        TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings());
+        UnknownStartService service = new(reportRunningAfterUnknown: true, settings.Settings);
         using ControllerHandler handler = new();
         using HttpClient httpClient = new(handler);
         MihomoApiClient api = new(
             httpClient,
-            new Uri("http://127.0.0.1:19090/"),
+            new Uri($"http://127.0.0.1:{settings.Settings.ControllerPort}/"),
             string.Empty);
         await PrepareManagedCoreAsync(paths);
         await using ClashTrayRuntime runtime = new(
             paths,
             null,
             service,
-            null,
+            settings,
             candidateValidator: new AcceptingCandidateValidator(),
             controllerApiFactory: () => api);
 
@@ -57,13 +58,14 @@ public sealed class RuntimeServiceReconciliationTests
     {
         string root = CreateRoot();
         AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
-        UnknownStartService service = new(reportRunningAfterUnknown: false);
+        TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings());
+        UnknownStartService service = new(reportRunningAfterUnknown: false, settings.Settings);
         await PrepareManagedCoreAsync(paths);
         await using ClashTrayRuntime runtime = new(
             paths,
             null,
             service,
-            null,
+            settings,
             candidateValidator: new AcceptingCandidateValidator());
 
         try
@@ -133,11 +135,13 @@ public sealed class RuntimeServiceReconciliationTests
     private sealed class UnknownStartService : IServicePipeClient
     {
         private readonly bool _reportRunningAfterUnknown;
+        private readonly AppSettings _settings;
         private int _running;
 
-        public UnknownStartService(bool reportRunningAfterUnknown)
+        public UnknownStartService(bool reportRunningAfterUnknown, AppSettings settings)
         {
             _reportRunningAfterUnknown = reportRunningAfterUnknown;
+            _settings = settings;
         }
 
         public ConcurrentQueue<ServiceCommand> Commands { get; } = new();
@@ -175,7 +179,10 @@ public sealed class RuntimeServiceReconciliationTests
                 Guid.NewGuid(),
                 true,
                 TunState.Off,
-                Core: core));
+                Core: core,
+                RuntimeBinding: core == CoreState.Running
+                    ? RuntimeTestHelpers.CreateRuntimeBinding(_settings)
+                    : null));
         }
     }
 

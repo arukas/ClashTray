@@ -31,17 +31,17 @@ public sealed class RuntimeRecoveryTests
         Guid backupId = Guid.NewGuid();
         await store.SavePersistentBackupAsync(backupId, profile, backup);
         await File.WriteAllTextAsync(configurationPath, "mixed-port: 7891\n");
-        TestSettingsStore settings = new(new AppSettings(ActiveConfigurationId: id));
+        TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings(id));
         ConfigurationSwitchJournalStore journalStore = new(paths);
         await journalStore.SaveAsync(CreateRecoveryJournal(
             id,
             id,
             previousCoreWasRunning: true,
             contentBackupId: backupId));
-        RecordingServicePipeClient service = new(CoreState.Running);
+        RecordingServicePipeClient service = new(CoreState.Running, settings.Settings);
         using RecoveryControllerHandler handler = new();
         using HttpClient httpClient = new(handler);
-        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        MihomoApiClient api = new(httpClient, new Uri($"http://127.0.0.1:{settings.Settings.ControllerPort}/"), string.Empty);
         await using ClashTrayRuntime runtime = new(
             paths,
             null,
@@ -78,17 +78,17 @@ public sealed class RuntimeRecoveryTests
         AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
         await PrepareManagedCoreAsync(paths);
         ConfigurationProfile first = await ImportConfigurationAsync(paths, root, "first");
-        TestSettingsStore settings = new(new AppSettings(ActiveConfigurationId: first.Id));
+        TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings(first.Id));
         ConfigurationSwitchJournalStore journalStore = new(paths);
         await journalStore.SaveAsync(CreateRecoveryJournal(
             first.Id,
             first.Id,
             previousCoreWasRunning: true));
-        RecordingServicePipeClient service = new(CoreState.Running);
+        RecordingServicePipeClient service = new(CoreState.Running, settings.Settings);
         using RecoveryControllerHandler handler = new();
         handler.FailAllVersionRequests();
         using HttpClient httpClient = new(handler);
-        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        MihomoApiClient api = new(httpClient, new Uri($"http://127.0.0.1:{settings.Settings.ControllerPort}/"), string.Empty);
         await using ClashTrayRuntime runtime = new(
             paths,
             null,
@@ -139,17 +139,17 @@ public sealed class RuntimeRecoveryTests
         AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
         ConfigurationProfile first = await ImportConfigurationAsync(paths, root, "first");
         ConfigurationProfile second = await ImportConfigurationAsync(paths, root, "second");
-        TestSettingsStore settings = new(new AppSettings(ActiveConfigurationId: second.Id));
+        TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings(second.Id));
         ConfigurationSwitchJournalStore journalStore = new(paths);
         await journalStore.SaveAsync(CreateRecoveryJournal(
             first.Id,
             second.Id,
             previousCoreWasRunning: true,
             contentBackupId: Guid.NewGuid()));
-        RecordingServicePipeClient service = new(CoreState.Running);
+        RecordingServicePipeClient service = new(CoreState.Running, settings.Settings);
         using RecoveryControllerHandler handler = new();
         using HttpClient httpClient = new(handler);
-        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        MihomoApiClient api = new(httpClient, new Uri($"http://127.0.0.1:{settings.Settings.ControllerPort}/"), string.Empty);
         await using ClashTrayRuntime runtime = new(
             paths,
             null,
@@ -184,16 +184,16 @@ public sealed class RuntimeRecoveryTests
         await PrepareManagedCoreAsync(paths);
         ConfigurationProfile first = await ImportConfigurationAsync(paths, root, "first");
         ConfigurationProfile second = await ImportConfigurationAsync(paths, root, "second");
-        TestSettingsStore settings = new(new AppSettings(ActiveConfigurationId: first.Id));
+        TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings(first.Id));
         ConfigurationSwitchJournalStore journalStore = new(paths);
         await journalStore.SaveAsync(CreateRecoveryJournal(
             first.Id,
             second.Id,
             previousCoreWasRunning: true));
-        RecordingServicePipeClient service = new(CoreState.Stopped);
+        RecordingServicePipeClient service = new(CoreState.Stopped, settings.Settings);
         using RecoveryControllerHandler handler = new();
         using HttpClient httpClient = new(handler);
-        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        MihomoApiClient api = new(httpClient, new Uri($"http://127.0.0.1:{settings.Settings.ControllerPort}/"), string.Empty);
         await using ClashTrayRuntime runtime = new(
             paths,
             null,
@@ -228,12 +228,12 @@ public sealed class RuntimeRecoveryTests
         await PrepareManagedCoreAsync(paths);
         ConfigurationProfile first = await ImportConfigurationAsync(paths, root, "first");
         ConfigurationProfile second = await ImportConfigurationAsync(paths, root, "second");
-        TestSettingsStore settings = new(new AppSettings(ActiveConfigurationId: first.Id));
-        RecordingServicePipeClient service = new(CoreState.Stopped);
+        TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings(first.Id));
+        RecordingServicePipeClient service = new(CoreState.Stopped, settings.Settings);
         using RecoveryControllerHandler handler = new();
         handler.FailAllVersionRequests();
         using HttpClient httpClient = new(handler);
-        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        MihomoApiClient api = new(httpClient, new Uri($"http://127.0.0.1:{settings.Settings.ControllerPort}/"), string.Empty);
         await using ClashTrayRuntime runtime = new(
             paths,
             null,
@@ -275,12 +275,12 @@ public sealed class RuntimeRecoveryTests
         AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
         await PrepareManagedCoreAsync(paths);
         ConfigurationProfile profile = await ImportConfigurationAsync(paths, root, "active");
-        TestSettingsStore settings = new(new AppSettings(ActiveConfigurationId: profile.Id));
-        RecordingServicePipeClient service = new(CoreState.Stopped);
+        TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings(profile.Id));
+        RecordingServicePipeClient service = new(CoreState.Stopped, settings.Settings);
         using RecoveryControllerHandler handler = new();
         handler.FailNextVersionRequests(5);
         using HttpClient httpClient = new(handler);
-        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        MihomoApiClient api = new(httpClient, new Uri($"http://127.0.0.1:{settings.Settings.ControllerPort}/"), string.Empty);
         await using ClashTrayRuntime runtime = new(
             paths,
             null,
@@ -380,9 +380,12 @@ public sealed class RuntimeRecoveryTests
     {
         private int _running;
 
-        public RecordingServicePipeClient(CoreState initialCoreState)
+        private readonly AppSettings _settings;
+
+        public RecordingServicePipeClient(CoreState initialCoreState, AppSettings settings)
         {
             _running = initialCoreState == CoreState.Running ? 1 : 0;
+            _settings = settings;
         }
 
         public ConcurrentQueue<ServiceCommand> Commands { get; } = new();
@@ -411,7 +414,10 @@ public sealed class RuntimeRecoveryTests
                 true,
                 TunState.Off,
                 Payload: "mihomo.exe",
-                Core: core));
+                Core: core,
+                RuntimeBinding: core == CoreState.Running
+                    ? RuntimeTestHelpers.CreateRuntimeBinding(_settings)
+                    : null));
         }
     }
 

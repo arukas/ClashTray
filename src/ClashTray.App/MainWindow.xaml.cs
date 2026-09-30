@@ -248,14 +248,17 @@ public sealed partial class MainWindow : Window
             ? LocalizationService.Format("CoreVersionIdleFormat", appVersion)
             : LocalizationService.Format("CoreVersionRunningFormat", core.Version, appVersion);
         bool dashboardAvailable = localController && coreRunning && _runtime?.DashboardAvailable == true;
+        int? runtimeControllerPort = _runtime?.ActiveRuntimeBinding is { ControllerReady: true } binding
+            ? binding.ControllerPort
+            : null;
         ControllerEndpointButton.Content = !localController
             ? LocalizationService.Format(
                 "ControllerRemoteFormat",
                 _activeEndpointDisplayName)
-            : coreRunning
-                ? $"127.0.0.1:{_runtime?.Settings.ControllerPort ?? 9090}/ui/"
+            : coreRunning && runtimeControllerPort is int controllerPort
+                ? $"127.0.0.1:{controllerPort}/ui/"
                 : LocalizationService.Get("ControllerCoreNotRunning");
-        ControllerEndpointButton.IsEnabled = localController && coreRunning;
+        ControllerEndpointButton.IsEnabled = localController && coreRunning && runtimeControllerPort is not null;
         ToolTipService.SetToolTip(
             ControllerEndpointButton,
             !localController
@@ -727,14 +730,16 @@ public sealed partial class MainWindow : Window
 
     private async void ControllerEndpointButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_runtime is null || _runtime.Snapshot.Core.State != CoreState.Running)
+        if (_runtime is null
+            || _runtime.Snapshot.Core.State != CoreState.Running
+            || _runtime.ActiveRuntimeBinding is not { ControllerReady: true } binding)
         {
             return;
         }
 
         try
         {
-            Uri controllerUri = new Uri($"http://127.0.0.1:{_runtime.Settings.ControllerPort}/");
+            Uri controllerUri = new Uri($"http://127.0.0.1:{binding.ControllerPort}/");
             if (!_runtime.DashboardAvailable)
             {
                 DataPackage package = new DataPackage();

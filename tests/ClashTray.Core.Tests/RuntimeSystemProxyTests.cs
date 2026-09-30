@@ -68,6 +68,49 @@ public sealed class RuntimeSystemProxyTests
     }
 
     [TestMethod]
+    public async Task MixedListenerNotReadyKeepsSystemProxyOffEvenWhenControllerIsHealthy()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        FakeSystemProxyController proxy = new(SystemProxyState.Off);
+        using RuntimeControllerHandler handler = new();
+        using HttpClient httpClient = new(handler);
+        MihomoApiClient api = new(httpClient, new Uri("http://127.0.0.1:19090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new(
+            paths,
+            null,
+            null,
+            null,
+            proxy,
+            controllerApiFactory: () => api);
+
+        try
+        {
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            CoreRuntimeBinding binding = runtime.ActiveRuntimeBinding!;
+            runtime.SetRuntimeBindingForTesting(binding with
+            {
+                MixedPort = 0,
+                MixedReady = false
+            });
+
+            await runtime.SetSystemProxyAsync(true);
+
+            Assert.AreEqual(0, proxy.EnableCount);
+            Assert.AreEqual(SystemProxyState.Off, proxy.State);
+            Assert.IsTrue(runtime.Settings.SystemProxyEnabled);
+            StringAssert.Contains(runtime.Snapshot.ErrorMessage, "Mixed", StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task CoreUnavailableRestoresActualProxyButPreservesPreference()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));

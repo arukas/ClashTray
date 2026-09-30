@@ -6,6 +6,43 @@ namespace ClashTray.Core.Tests;
 public sealed class RuntimeConfigBuilderRuntimeTests
 {
     [TestMethod]
+    public async Task ControllerCandidateRewritePreservesOtherListenersAndForcesLoopbackEmptySecret()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string source = Path.Combine(root, "runtime", "active.yaml");
+        string candidate = Path.Combine(root, "runtime", "candidate.yaml");
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        await File.WriteAllTextAsync(
+            source,
+            "external-controller: 0.0.0.0:9191\nsecret: 'old'\nmixed-port: 7890\n"
+            + "dns:\n  listen: 127.0.0.1:5353\ncustom-listener:\n  port: 5354\nproxies: []\n");
+
+        try
+        {
+            await RuntimeConfigBuilder.BuildControllerCandidateAsync(source, candidate, 52341);
+            string generated = await File.ReadAllTextAsync(candidate);
+
+            StringAssert.Contains(generated, "external-controller: 127.0.0.1:52341", StringComparison.Ordinal);
+            StringAssert.Contains(generated, "secret: ''", StringComparison.Ordinal);
+            StringAssert.Contains(generated, "mixed-port: 7890", StringComparison.Ordinal);
+            StringAssert.Contains(generated, "listen: 127.0.0.1:5353", StringComparison.Ordinal);
+            StringAssert.Contains(generated, "port: 5354", StringComparison.Ordinal);
+            Assert.IsFalse(generated.Contains("0.0.0.0:9191", StringComparison.Ordinal));
+            Assert.IsFalse(generated.Contains("secret: 'old'", StringComparison.Ordinal));
+            Assert.AreEqual("external-controller: 0.0.0.0:9191\nsecret: 'old'\nmixed-port: 7890\n"
+                + "dns:\n  listen: 127.0.0.1:5353\ncustom-listener:\n  port: 5354\nproxies: []\n",
+                await File.ReadAllTextAsync(source));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [TestMethod]
     public async Task RuntimeConfigBuilderReplacesManagedSettings()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
