@@ -14,7 +14,7 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
     private readonly CancellationTokenSource _runtimeCts = new();
     private readonly object _disposeGate = new();
     private readonly object _publishGate = new();
-    private readonly HttpClient _httpClient = EndpointTransportPolicy.CreateControllerHttpClient();
+    private readonly HttpClient _httpClient;
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "Released only after shutdown workers settle; timed out workers retain the runtime and its resources.")]
     private readonly SnapshotPublishThrottle _throttledPublisher;
     private readonly AppPaths _paths;
@@ -108,8 +108,12 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
         Func<string, CancellationToken, Task>? shutdownStepTestHook = null,
         Func<LocalCoreProcessIdentity?>? localCoreProcessIdentityProvider = null,
         Func<LocalCoreProcessIdentity, CancellationToken, Task<LocalCoreShutdownJournalResult>>? localCoreRecoveryAction = null,
-        TimeSpan? coreStartupBudget = null)
+        TimeSpan? coreStartupBudget = null,
+        HttpMessageHandler? controllerHttpMessageHandler = null)
     {
+        _httpClient = controllerHttpMessageHandler is null
+            ? EndpointTransportPolicy.CreateControllerHttpClient()
+            : new HttpClient(controllerHttpMessageHandler, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan };
         bool useDefaultEnvironment = paths is null;
         _disposeCleanupTimeout = disposeCleanupTimeout ?? DisposeCleanupTimeout;
         _coreStartupBudget = coreStartupBudget ?? TimeSpan.FromSeconds(30);

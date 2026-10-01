@@ -1053,13 +1053,9 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 && binding.ProcessStartedUtcTicks == identity.StartTimeUtcTicks
                 && binding.ProcessGeneration == _processManager.Generation
                 && IsProcessIdentityCurrent(identity, binding.ProcessGeneration, binding.InstanceId)
-                && WindowsListenerOwnerTable.IsOwnedBy(
-                    IPAddress.Loopback,
-                    binding.ControllerPort,
-                    PortTransport.Tcp,
-                    identity)
-                && AreRuntimeAdditionalListenersOwned(binding.AdditionalListeners, identity)
-                && AreRuntimeListenerBindingsOwned(binding.ListenerBindings, binding.ControllerPort, identity);
+                && RuntimeBindingValidator.AreListenersOwned(binding,
+                    listener => WindowsListenerOwnerTable.InspectListener(listener.Address, listener.Port,
+                        listener.Transport, identity, listener.DualMode));
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
@@ -1068,85 +1064,6 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         {
             return false;
         }
-    }
-
-    private static bool AreRuntimeAdditionalListenersOwned(
-        IReadOnlyList<RuntimeListenerBinding>? listeners,
-        LocalCoreProcessIdentity identity)
-    {
-        if (listeners is null)
-        {
-            return true;
-        }
-
-        if (listeners.Count > 256)
-        {
-            return false;
-        }
-
-        foreach (RuntimeListenerBinding listener in listeners)
-        {
-            if (string.IsNullOrWhiteSpace(listener.Name)
-                || listener.Name.Length > 64
-                || listener.Port is < 1 or > 65535
-                || !Enum.IsDefined(listener.Transport)
-                || !IPAddress.TryParse(listener.Address, out IPAddress? address)
-                || !WindowsListenerOwnerTable.IsOwnedBy(
-                    address,
-                    listener.Port,
-                    listener.Transport == RuntimeListenerTransport.Tcp ? PortTransport.Tcp : PortTransport.Udp,
-                    identity))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool AreRuntimeListenerBindingsOwned(
-        IReadOnlyList<RuntimeListenerBinding>? listeners,
-        int controllerPort,
-        LocalCoreProcessIdentity identity)
-    {
-        if (listeners is null || listeners.Count is < 1 or > 256)
-        {
-            return false;
-        }
-
-        bool controllerDescribed = false;
-        foreach (RuntimeListenerBinding listener in listeners)
-        {
-            if (string.IsNullOrWhiteSpace(listener.Name)
-                || listener.Name.Length > 64
-                || listener.Port is < 1 or > 65535
-                || !Enum.IsDefined(listener.Transport)
-                || !IPAddress.TryParse(listener.Address, out IPAddress? address)
-                || listener.DualMode && !address.Equals(IPAddress.IPv6Any))
-            {
-                return false;
-            }
-
-            if (listener.Name.Equals("controller", StringComparison.Ordinal)
-                && address.Equals(IPAddress.Loopback)
-                && listener.Port == controllerPort
-                && listener.Transport == RuntimeListenerTransport.Tcp)
-            {
-                controllerDescribed = true;
-            }
-
-            if (WindowsListenerOwnerTable.InspectListener(
-                address,
-                listener.Port,
-                listener.Transport == RuntimeListenerTransport.Tcp ? PortTransport.Tcp : PortTransport.Udp,
-                identity,
-                listener.DualMode).State != ListenerOwnerState.Owned)
-            {
-                return false;
-            }
-        }
-
-        return controllerDescribed;
     }
 
     private async Task CleanupFailedCoreStartAsync()

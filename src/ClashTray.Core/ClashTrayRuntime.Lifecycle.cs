@@ -980,39 +980,9 @@ public sealed partial class ClashTrayRuntime
                 binding.ProcessId,
                 binding.ProcessStartedUtcTicks,
                 binding.ExecutablePath);
-            bool controllerDescribed = false;
-            foreach (RuntimeListenerBinding listener in binding.ListenerBindings)
-            {
-                if (string.IsNullOrWhiteSpace(listener.Name)
-                    || listener.Name.Length > 64
-                    || listener.Port is < 1 or > 65535
-                    || !Enum.IsDefined(listener.Transport)
-                    || !IPAddress.TryParse(listener.Address, out IPAddress? address)
-                    || listener.DualMode && !address.Equals(IPAddress.IPv6Any))
-                {
-                    return false;
-                }
-
-                if (listener.Name.Equals("controller", StringComparison.Ordinal)
-                    && address.Equals(IPAddress.Loopback)
-                    && listener.Port == binding.ControllerPort
-                    && listener.Transport == RuntimeListenerTransport.Tcp)
-                {
-                    controllerDescribed = true;
-                }
-
-                if (WindowsListenerOwnerTable.InspectListener(
-                    address,
-                    listener.Port,
-                    listener.Transport == RuntimeListenerTransport.Tcp ? PortTransport.Tcp : PortTransport.Udp,
-                    identity,
-                    listener.DualMode).State != ListenerOwnerState.Owned)
-                {
-                    return false;
-                }
-            }
-
-            return controllerDescribed;
+            return RuntimeBindingValidator.AreListenersOwned(binding,
+                listener => WindowsListenerOwnerTable.InspectListener(listener.Address, listener.Port,
+                    listener.Transport, identity, listener.DualMode));
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
