@@ -1521,7 +1521,7 @@ public sealed partial class ClashTrayRuntime
                         continue;
                     }
 
-                    SetController(CreateApiClient());
+                    AdoptServiceController(pendingStatus);
                     SetCoreRunningPendingHealth(pendingStatus.Tun);
                 }
 
@@ -1611,8 +1611,7 @@ public sealed partial class ClashTrayRuntime
                         continue;
                     }
 
-                    SetRuntimeBinding(serviceStatus.RuntimeBinding);
-                    SetController(CreateApiClient());
+                    AdoptServiceController(serviceStatus);
                     await RevokeSystemProxyForCoreLossWithLeaseAsync();
                     _stateStore.Update(snapshot => snapshot with { Tun = AdoptServiceTunState(serviceStatus.Tun) });
                     MarkCoreHealthUnconfirmed("控制器重连", exception, retryCount);
@@ -1641,6 +1640,13 @@ public sealed partial class ClashTrayRuntime
     private bool ShouldContinuePolling() =>
         !_runtimeCts.IsCancellationRequested
         && (_usingServiceCore || (_api is not null && _processManager.State == CoreState.Running));
+
+    private void AdoptServiceController(ServiceResponse status)
+    {
+        CoreRuntimeBinding binding = status.RuntimeBinding ?? throw new ManagedCoreOwnershipException();
+        SetRuntimeBinding(binding);
+        SetController(CreateApiClient());
+    }
 
     private static TimeSpan IncreaseRetryDelay(TimeSpan current) =>
         TimeSpan.FromSeconds(Math.Min(30, Math.Max(2, current.TotalSeconds * 2)));

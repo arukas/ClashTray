@@ -88,6 +88,60 @@ public sealed class RuntimeServiceReconciliationTests
         }
     }
 
+    [TestMethod]
+    public async Task DelayedServiceStartAdoptsBindingBeforeCreatingController()
+    {
+        string root = CreateRoot();
+        AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings());
+        UnknownStartService service = new(reportRunningAfterUnknown: false, settings.Settings);
+        using ControllerHandler handler = new();
+        using HttpClient httpClient = new(handler);
+        MihomoApiClient api = new(httpClient,
+            new Uri($"http://127.0.0.1:{settings.Settings.ControllerPort}/"), string.Empty);
+        TaskCompletionSource<CoreRuntimeBinding?> firstControllerBinding = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource healthy = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        ClashTrayRuntime? observedRuntime = null;
+        await PrepareManagedCoreAsync(paths);
+        await using ClashTrayRuntime runtime = new(paths, null, service, settings,
+            candidateValidator: new AcceptingCandidateValidator(),
+            controllerApiFactory: () =>
+            {
+                firstControllerBinding.TrySetResult(observedRuntime!.ActiveRuntimeBinding);
+                return api;
+            });
+        observedRuntime = runtime;
+        runtime.SnapshotChanged += (_, _) =>
+        {
+            if (runtime.IsCoreHealthConfirmedForTesting)
+            {
+                healthy.TrySetResult();
+            }
+        };
+
+        try
+        {
+            await runtime.InitializeAsync();
+            await ImportConfigurationAsync(runtime, root);
+            await runtime.StartCoreAsync().WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.AreEqual(CoreState.Failed, runtime.Snapshot.Core.State);
+
+            service.ReportRunning();
+            CoreRuntimeBinding? adopted = await firstControllerBinding.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreSame(service.RuntimeBinding, adopted,
+                "The first polling status must be adopted before the controller is created.");
+            await healthy.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(CoreState.Running, runtime.Snapshot.Core.State);
+            Assert.AreEqual(3, service.Commands.Count(command => command == ServiceCommand.GetStatus),
+                "Recovery must not require a second status query through the exception path.");
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+            DeleteRoot(root);
+        }
+    }
+
     private static async Task PrepareManagedCoreAsync(AppPaths paths)
     {
         paths.EnsureDirectories();
@@ -135,16 +189,19 @@ public sealed class RuntimeServiceReconciliationTests
     private sealed class UnknownStartService : IServicePipeClient
     {
         private readonly bool _reportRunningAfterUnknown;
-        private readonly AppSettings _settings;
         private int _running;
 
         public UnknownStartService(bool reportRunningAfterUnknown, AppSettings settings)
         {
             _reportRunningAfterUnknown = reportRunningAfterUnknown;
-            _settings = settings;
+            RuntimeBinding = RuntimeTestHelpers.CreateRuntimeBinding(settings);
         }
 
         public ConcurrentQueue<ServiceCommand> Commands { get; } = new();
+
+        public CoreRuntimeBinding RuntimeBinding { get; }
+
+        public void ReportRunning() => Volatile.Write(ref _running, 1);
 
         public Task<ServiceResponse> SendAsync(
             ServiceCommand command,
@@ -181,7 +238,7 @@ public sealed class RuntimeServiceReconciliationTests
                 TunState.Off,
                 Core: core,
                 RuntimeBinding: core == CoreState.Running
-                    ? RuntimeTestHelpers.CreateRuntimeBinding(_settings)
+                    ? RuntimeBinding
                     : null));
         }
     }
