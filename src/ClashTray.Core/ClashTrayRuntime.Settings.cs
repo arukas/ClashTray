@@ -83,7 +83,7 @@ public sealed partial class ClashTrayRuntime
             if (systemProxyBindingChanged)
             {
                 await ReconcileSystemProxyAsync(
-                    coreRunning: CanEnableSystemProxy,
+                    coreRunning: IsCoreHealthy(),
                     cancellationToken);
             }
 
@@ -386,9 +386,13 @@ public sealed partial class ClashTrayRuntime
 
     private async Task ReconcileSystemProxyAsync(bool coreRunning, CancellationToken cancellationToken)
     {
+        bool listenerConfirmed = TryGetConfirmedMixedPort(out int confirmedMixedPort);
+        string? listenerError = _settings.SystemProxyEnabled && coreRunning && !listenerConfirmed
+            ? SystemProxyListenerUnavailableMessage
+            : null;
         if (_settings.SystemProxyEnabled
             && coreRunning
-            && TryGetConfirmedMixedPort(out int confirmedMixedPort))
+            && listenerConfirmed)
         {
             if (_localDevice.SystemProxyState is (SystemProxyState.Off or SystemProxyState.Failed))
             {
@@ -409,9 +413,16 @@ public sealed partial class ClashTrayRuntime
         }
 
         SystemProxyState state = _localDevice.SystemProxyState;
-        if (Snapshot.SystemProxy != state)
+        if (Snapshot.SystemProxy != state
+            || listenerError is not null && Snapshot.ErrorMessage != listenerError
+            || listenerError is null && Snapshot.ErrorMessage == SystemProxyListenerUnavailableMessage)
         {
-            _stateStore.Update(snapshot => snapshot with { SystemProxy = state });
+            _stateStore.Update(snapshot => snapshot with
+            {
+                SystemProxy = state,
+                ErrorMessage = listenerError ?? (snapshot.ErrorMessage == SystemProxyListenerUnavailableMessage
+                    ? null : snapshot.ErrorMessage)
+            });
             Publish();
         }
     }
@@ -444,7 +455,7 @@ public sealed partial class ClashTrayRuntime
         if (systemProxyBindingChanged)
         {
             await ReconcileSystemProxyAsync(
-                coreRunning: CanEnableSystemProxy,
+                coreRunning: IsCoreHealthy(),
                 CancellationToken.None);
         }
     }

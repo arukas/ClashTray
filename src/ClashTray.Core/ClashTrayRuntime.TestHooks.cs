@@ -27,7 +27,8 @@ public sealed partial class ClashTrayRuntime
             HttpReady: _settings.HttpPort > 0,
             SocksReady: _settings.SocksPort > 0,
             MixedReady: _settings.MixedPort > 0,
-            Environment.ProcessPath ?? string.Empty));
+            Environment.ProcessPath ?? string.Empty,
+            ListenerBindings: CreateLoopbackListenerBindingsForTesting(controllerPort)));
         SetController(api);
         _usingServiceCore = usingServiceCore;
         ConfirmCoreHealth(
@@ -69,7 +70,8 @@ public sealed partial class ClashTrayRuntime
                 HttpReady: true,
                 SocksReady: true,
                 MixedReady: true,
-                Environment.ProcessPath ?? string.Empty));
+                Environment.ProcessPath ?? string.Empty,
+                ListenerBindings: CreateLoopbackListenerBindingsForTesting(_settings.ControllerPort)));
         }
 
         _confirmedTunState = tun;
@@ -81,6 +83,15 @@ public sealed partial class ClashTrayRuntime
         });
     }
     internal bool IsCoreHealthConfirmedForTesting => CoreHealthConfirmed;
+
+    private List<RuntimeListenerBinding> CreateLoopbackListenerBindingsForTesting(int controllerPort) =>
+        CreateRuntimeListenerBindings(controllerPort, MihomoListenerPlanAnalyzer.AnalyzeEffectiveLines(
+        [
+            "allow-lan: false",
+            $"port: {_settings.HttpPort}",
+            $"socks-port: {_settings.SocksPort}",
+            $"mixed-port: {_settings.MixedPort}"
+        ]));
 
     internal Task<OperationGate.Lease> AcquireSharedOperationForTestingAsync() =>
         _operationLock.AcquireSharedAsync();

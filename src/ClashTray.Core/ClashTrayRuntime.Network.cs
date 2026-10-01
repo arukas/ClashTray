@@ -152,7 +152,7 @@ public sealed partial class ClashTrayRuntime
             {
                 await RevokeSystemProxyForCoreLossAsync(operationLease ?? ownedLease!);
                 string? message = CoreHealthConfirmed
-                    ? "Mixed 监听尚未由当前 Mihomo 进程确认，系统代理保持关闭。"
+                    ? SystemProxyListenerUnavailableMessage
                     : null;
                 _stateStore.Update(snapshot => snapshot with
                 {

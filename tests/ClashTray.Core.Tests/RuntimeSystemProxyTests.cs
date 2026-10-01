@@ -132,7 +132,15 @@ public sealed class RuntimeSystemProxyTests
         try
         {
             runtime.AttachControllerForTesting(api, usingServiceCore: true);
-            CoreRuntimeBinding binding = runtime.ActiveRuntimeBinding! with { MixedPort = 58991, MixedReady = true };
+            CoreRuntimeBinding previousBinding = runtime.ActiveRuntimeBinding!;
+            CoreRuntimeBinding binding = previousBinding with
+            {
+                MixedPort = 58991,
+                MixedReady = true,
+                ListenerBindings = previousBinding.ListenerBindings!.Select(listener =>
+                    listener.Name.StartsWith("mixed-", StringComparison.Ordinal)
+                        ? listener with { Port = 58991 } : listener).ToArray()
+            };
             runtime.SetRuntimeBindingForTesting(binding);
 
             await runtime.SetSystemProxyAsync(true);
@@ -159,10 +167,8 @@ public sealed class RuntimeSystemProxyTests
             SystemProxyEnabled = true
         };
         const int runningCoreMixedPort = 58991;
-        CoreRuntimeBinding runningBinding = RuntimeTestHelpers.CreateRuntimeBinding(persistedSettings) with
-        {
-            MixedPort = runningCoreMixedPort
-        };
+        CoreRuntimeBinding runningBinding = RuntimeTestHelpers.CreateRuntimeBinding(
+            persistedSettings with { MixedPort = runningCoreMixedPort });
         RunningServiceStatusClient service = new(runningBinding);
         FakeSystemProxyController proxy = new(SystemProxyState.Off);
         using AppReopenControllerHandler handler = new();

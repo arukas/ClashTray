@@ -42,7 +42,16 @@ internal static class RuntimeTestHelpers
             HttpReady: true,
             SocksReady: true,
             MixedReady: true,
-            Environment.ProcessPath ?? string.Empty);
+            Environment.ProcessPath ?? string.Empty,
+            ListenerBindings:
+            [
+                new RuntimeListenerBinding("controller", "127.0.0.1", settings.ControllerPort, RuntimeListenerTransport.Tcp),
+                new RuntimeListenerBinding("http-tcp", "127.0.0.1", settings.HttpPort, RuntimeListenerTransport.Tcp),
+                new RuntimeListenerBinding("socks-tcp", "127.0.0.1", settings.SocksPort, RuntimeListenerTransport.Tcp),
+                new RuntimeListenerBinding("socks-udp", "127.0.0.1", settings.SocksPort, RuntimeListenerTransport.Udp),
+                new RuntimeListenerBinding("mixed-tcp", "127.0.0.1", settings.MixedPort, RuntimeListenerTransport.Tcp),
+                new RuntimeListenerBinding("mixed-udp", "127.0.0.1", settings.MixedPort, RuntimeListenerTransport.Udp)
+            ]);
     }
 
     public static async Task<string> WriteConfigAsync(string root, string name)

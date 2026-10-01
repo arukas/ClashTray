@@ -134,7 +134,7 @@ public sealed partial class ClashTrayRuntime
                     }
 
                     await ApplyProgramOverridesWithLeaseAsync(
-                        coreRunning: CanEnableSystemProxy,
+                        coreRunning: IsCoreHealthy(),
                         cancellationToken: cancellationToken);
                     StartPolling();
                     StartOptionalRefreshInBackground(_api);
@@ -657,7 +657,7 @@ public sealed partial class ClashTrayRuntime
             }
 
             await ApplyProgramOverridesAsync(
-                coreRunning: CanEnableSystemProxy,
+                coreRunning: IsCoreHealthy(),
                 cancellationToken: coreStartOperationToken,
                 operationLease: operationLease);
             StartPolling();
@@ -1256,16 +1256,23 @@ public sealed partial class ClashTrayRuntime
     private bool IsCoreHealthy() =>
         Snapshot.Core.State == CoreState.Running && CoreHealthConfirmed;
 
-    private bool IsMixedListenerReady => TryGetConfirmedMixedPort(out _);
-
-    private bool CanEnableSystemProxy => TryGetConfirmedMixedPort(out _);
+    private const string SystemProxyListenerUnavailableMessage =
+        "当前 Mixed TCP 监听未确认覆盖 127.0.0.1；系统代理保持关闭。请检查配置的 bind-address。";
 
     private bool TryGetConfirmedMixedPort(out int port)
     {
         CoreRuntimeBinding? binding = ActiveRuntimeBinding;
         if (Snapshot.Core.State == CoreState.Running
             && CoreHealthConfirmed
-            && binding is { MixedReady: true, MixedPort: >= 1 and <= 65535 })
+            && binding is { MixedReady: true, MixedPort: >= 1 and <= 65535, ListenerBindings.Count: >= 1 and <= 256 }
+            && binding.ListenerBindings.Any(listener =>
+                string.Equals(listener.Name, "mixed-tcp", StringComparison.Ordinal)
+                && listener.Port == binding.MixedPort
+                && listener.Transport == RuntimeListenerTransport.Tcp
+                && IPAddress.TryParse(listener.Address, out IPAddress? address)
+                && (listener.DualMode
+                    ? address.Equals(IPAddress.IPv6Any)
+                    : address.Equals(IPAddress.Loopback) || address.Equals(IPAddress.Any))))
         {
             port = binding.MixedPort;
             return true;
