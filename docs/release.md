@@ -35,5 +35,6 @@ Get-FileHash .\packaging\out\0.3.1\full\ClashTray-0.3.1-win-x64-Full.exe -Algori
 - `ci.yml` 在 push、Pull Request 和手动触发时运行 restore、build、test。
 - `release.yml` 在 `v*.*.*` tag 或手动输入版本时运行 CI 检查，随后构建 Full / NoCET，下载同一 Mihomo tag 的 source archive，将其加入 `SHA256SUMS.txt`，并用仓库的 `GITHUB_TOKEN` 创建 Release。
 - Actions 不读取订阅、密钥或签名证书。签名证书若以后启用，应通过 GitHub Actions secret 注入，不能放进仓库。
+- tag 发布默认只创建 GitHub Release。Telegram 通知仅在手动运行 Release workflow 时显式选择 `notify_telegram` 才发送；默认关闭。多行发布说明写入临时文件并通过 `gh --notes-file` 提交。
 
 当前 workflow 只发布 x64；ARM64、MSIX 和带企业签名的渠道保留在后续计划中。

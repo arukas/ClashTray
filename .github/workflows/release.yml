@@ -10,6 +10,11 @@ on:
         description: 'Release version without the v prefix, for example 1.0.0'
         required: true
         type: string
+      notify_telegram:
+        description: 'Explicitly send a Telegram release notification'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -294,9 +299,14 @@ jobs:
             '--title',
             "ClashTray $env:RELEASE_VERSION",
             '--generate-notes',
-            '--notes',
-            ($notesLines -join [Environment]::NewLine)
+            '--notes-file',
+            (Join-Path $env:RUNNER_TEMP 'clashtray-release-notes.md')
           )
+
+          [IO.File]::WriteAllText(
+            (Join-Path $env:RUNNER_TEMP 'clashtray-release-notes.md'),
+            ($notesLines -join [Environment]::NewLine),
+            [Text.UTF8Encoding]::new($false))
 
           if ($env:RELEASE_VERSION -match '-') {
             $releaseArgs += '--prerelease'
@@ -307,7 +317,7 @@ jobs:
           gh release create @releaseArgs
 
       - name: Notify Telegram
-        if: success()
+        if: success() && inputs.notify_telegram
         continue-on-error: true
         shell: pwsh
         env:
