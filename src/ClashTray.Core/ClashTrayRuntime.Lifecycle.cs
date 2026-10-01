@@ -9,8 +9,6 @@ namespace ClashTray.Core;
 
 public sealed partial class ClashTrayRuntime
 {
-    private static readonly TimeSpan CoreStartupBudget = TimeSpan.FromSeconds(30);
-
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Startup recovery converts journal cleanup, backup restore, and health-confirmation failures into degraded-state messages so initialization always completes.")]
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -267,11 +265,89 @@ public sealed partial class ClashTrayRuntime
             (operationLease, token) => StartCoreCoreAsync(operationLease, token, useAvailableControllerPortOnce: false),
             cancellationToken);
 
-    public Task StartCoreUsingAvailableControllerPortOnceAsync(CancellationToken cancellationToken = default) =>
-        AdmitCoreLifecycleAsync(
-            "核心",
-            (operationLease, token) => StartCoreCoreAsync(operationLease, token, useAvailableControllerPortOnce: true),
-            cancellationToken);
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "This public one-time UI operation returns a typed failed outcome for any unexpected startup exception so the caller cannot mistake normal Task completion for success.")]
+    [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "The acquired lifecycle lease is disposed by the using scope on every non-null path; a null lease means no ownership was acquired.")]
+    public async Task<CoreStartOperationResult> StartCoreUsingAvailableControllerPortOnceAsync(
+        CancellationToken cancellationToken = default)
+    {
+        Guid operationId = Guid.NewGuid();
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return new CoreStartOperationResult(operationId, CoreStartOutcome.Cancelled);
+        }
+
+        OperationGate.Lease? lease = _operationLock.TryAcquire();
+        if (lease is null)
+        {
+            return new CoreStartOperationResult(operationId, CoreStartOutcome.Busy);
+        }
+
+        using (lease)
+        {
+            if (Snapshot.Core.State == CoreState.Running)
+            {
+                return new CoreStartOperationResult(
+                    operationId,
+                    CoreStartOutcome.AlreadyRunning,
+                    ActiveRuntimeBinding?.ControllerPort);
+            }
+
+            try
+            {
+                await StartCoreCoreAsync(lease, cancellationToken, useAvailableControllerPortOnce: true)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return new CoreStartOperationResult(operationId, CoreStartOutcome.Cancelled);
+            }
+            catch (Exception exception)
+            {
+                return CreateFailedCoreStartResult(operationId, exception.Message);
+            }
+
+            CoreRuntimeBinding? binding = ActiveRuntimeBinding;
+            if (Snapshot.Core.State == CoreState.Running
+                && CoreHealthConfirmed
+                && binding is { ControllerReady: true, ControllerPort: >= 1 and <= 65535 })
+            {
+                return new CoreStartOperationResult(
+                    operationId,
+                    CoreStartOutcome.Started,
+                    binding.ControllerPort);
+            }
+
+            return CreateFailedCoreStartResult(
+                operationId,
+                Snapshot.Core.ErrorMessage ?? "核心启动操作结束时未确认运行绑定。");
+        }
+    }
+
+    private CoreStartOperationResult CreateFailedCoreStartResult(Guid operationId, string? errorMessage)
+    {
+        string error = string.IsNullOrWhiteSpace(errorMessage)
+            ? Snapshot.Core.ErrorMessage ?? string.Empty
+            : errorMessage;
+        CoreStartOutcome outcome = Snapshot.Core.State == CoreState.Missing
+            ? CoreStartOutcome.CoreMissing
+            : error.Contains("导入", StringComparison.Ordinal)
+                ? CoreStartOutcome.ConfigurationMissing
+                : error.Contains("没有找到可用", StringComparison.Ordinal)
+                    || error.Contains("候选", StringComparison.Ordinal)
+                    ? CoreStartOutcome.ControllerCandidatesExhausted
+                    : error.Contains("启动事务超过", StringComparison.Ordinal)
+                        || error.Contains("内未完成", StringComparison.Ordinal)
+                        ? CoreStartOutcome.TimedOut
+                        : error.Contains("验证失败", StringComparison.Ordinal)
+                            || error.Contains("YAML", StringComparison.OrdinalIgnoreCase)
+                            ? CoreStartOutcome.InvalidConfiguration
+                            : error.Contains("端口", StringComparison.Ordinal)
+                                || error.Contains("监听", StringComparison.Ordinal)
+                                || error.Contains("占用", StringComparison.Ordinal)
+                                ? CoreStartOutcome.PortConflict
+                                : CoreStartOutcome.Failed;
+        return new CoreStartOperationResult(operationId, outcome, ErrorMessage: error);
+    }
 
     private async Task AdmitCoreLifecycleAsync(
         string operationName,
@@ -299,7 +375,7 @@ public sealed partial class ClashTrayRuntime
         bool useAvailableControllerPortOnce = false)
     {
         using CancellationTokenSource coreStartupDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        coreStartupDeadline.CancelAfter(CoreStartupBudget);
+        coreStartupDeadline.CancelAfter(_coreStartupBudget);
         CancellationToken coreStartOperationToken = cancellationToken;
         bool localCoreStarted = false;
         try
@@ -334,12 +410,29 @@ public sealed partial class ClashTrayRuntime
             }
 
             UpdateCoreState(CoreState.Validating, null);
-            MihomoListenerPlan additionalListenerPlan = await MihomoListenerPlanAnalyzer.AnalyzeFileAsync(
+            string runtimeConfigPath = Path.Combine(_paths.RuntimeRoot, "mihomo", "active-config.yaml");
+            AppSettings runtimeSettings = _settings with
+            {
+                ControllerPort = _settings.ControllerPort,
+                TunEnabled = false
+            };
+            await RuntimeConfigBuilder.BuildForCoreStartAsync(
                 profile.Path,
+                runtimeConfigPath,
+                runtimeSettings,
+                externalUiPath: _paths.ExternalUiRoot,
+                cancellationToken: coreStartupDeadline.Token);
+
+            MihomoEffectiveListenerPlan listenerPlan = await MihomoListenerPlanAnalyzer.AnalyzeEffectiveFileAsync(
+                runtimeConfigPath,
                 coreStartupDeadline.Token).ConfigureAwait(false);
-            List<LocalPortBinding> fixedListeners = BuildManagedListenerBindings(
-                _settings,
-                additionalListenerPlan.Bindings);
+            if (!listenerPlan.ProxyPlanComplete)
+            {
+                throw new InvalidOperationException(
+                    listenerPlan.ProxyPlanWarning ?? "无法确认有效 Mihomo 代理监听计划。");
+            }
+
+            List<LocalPortBinding> fixedListeners = listenerPlan.AllBindings.ToList();
             HashSet<int> attemptedControllerPorts = [];
             ControllerPortAllocationResult controllerAllocation = AllocateControllerPort(
                 _settings,
@@ -350,18 +443,26 @@ public sealed partial class ClashTrayRuntime
                 coreStartupDeadline.Token);
             int inspectedFallbackCandidates = controllerAllocation.FallbackCandidatesExamined;
             int runtimeControllerPort = RequireControllerPort(controllerAllocation);
-            AppSettings runtimeSettings = _settings with
+            if (runtimeControllerPort != runtimeSettings.ControllerPort)
             {
-                ControllerPort = runtimeControllerPort,
-                TunEnabled = false
-            };
-            string runtimeConfigPath = Path.Combine(_paths.RuntimeRoot, "mihomo", "active-config.yaml");
-            await RuntimeConfigBuilder.BuildForCoreStartAsync(
-                profile.Path,
-                runtimeConfigPath,
-                runtimeSettings,
-                externalUiPath: _paths.ExternalUiRoot,
-                cancellationToken: coreStartupDeadline.Token);
+                runtimeSettings = runtimeSettings with { ControllerPort = runtimeControllerPort };
+                await RuntimeConfigBuilder.BuildForCoreStartAsync(
+                    profile.Path,
+                    runtimeConfigPath,
+                    runtimeSettings,
+                    externalUiPath: _paths.ExternalUiRoot,
+                    cancellationToken: coreStartupDeadline.Token).ConfigureAwait(false);
+                listenerPlan = await MihomoListenerPlanAnalyzer.AnalyzeEffectiveFileAsync(
+                    runtimeConfigPath,
+                    coreStartupDeadline.Token).ConfigureAwait(false);
+                if (!listenerPlan.ProxyPlanComplete)
+                {
+                    throw new InvalidOperationException(
+                        listenerPlan.ProxyPlanWarning ?? "无法确认最终 Mihomo 代理监听计划。");
+                }
+
+                fixedListeners = listenerPlan.AllBindings.ToList();
+            }
 
             coreStartupDeadline.Token.ThrowIfCancellationRequested();
             string runtimeDirectory = Path.Combine(_paths.RuntimeRoot, "mihomo");
@@ -381,7 +482,7 @@ public sealed partial class ClashTrayRuntime
             ServiceResponse? serviceResponse = null;
             try
             {
-                serviceResponse = await _localDevice.StartCoreAsync(servicePayload, cancellationToken);
+                serviceResponse = await _localDevice.StartCoreAsync(servicePayload, coreStartupDeadline.Token);
             }
             catch (ServiceUnavailableException exception) when (exception.DispatchState == ServiceDispatchState.NotDispatched)
             {
@@ -447,6 +548,14 @@ public sealed partial class ClashTrayRuntime
                             runtimeSettings,
                             externalUiPath: _paths.ExternalUiRoot,
                             cancellationToken: coreStartOperationToken).ConfigureAwait(false);
+                        listenerPlan = await MihomoListenerPlanAnalyzer.AnalyzeEffectiveFileAsync(
+                            runtimeConfigPath,
+                            coreStartOperationToken).ConfigureAwait(false);
+                        if (!listenerPlan.ProxyPlanComplete)
+                        {
+                            throw new InvalidOperationException(
+                                listenerPlan.ProxyPlanWarning ?? "无法确认最终 Mihomo 代理监听计划。");
+                        }
                     }
 
                     if (!await _processManager.ValidateAsync(
@@ -483,7 +592,7 @@ public sealed partial class ClashTrayRuntime
                             identity,
                             generation,
                             instanceId,
-                            additionalListenerPlan,
+                            listenerPlan,
                             coreStartOperationToken).ConfigureAwait(false);
                     }
                     catch (ServiceCommandException exception)
@@ -564,7 +673,7 @@ public sealed partial class ClashTrayRuntime
                 localCoreStarted = false;
             }
 
-            string failureMessage = $"Mihomo 核心启动事务超过 {CoreStartupBudget.TotalSeconds:0} 秒。";
+            string failureMessage = $"Mihomo 核心启动事务超过 {_coreStartupBudget.TotalSeconds:0} 秒。";
             try
             {
                 await RevokeSystemProxyForCoreLossAsync(
@@ -585,6 +694,11 @@ public sealed partial class ClashTrayRuntime
                 await StopUnreadyLocalCoreAsync().ConfigureAwait(false);
             }
 
+            if (Snapshot.Core.State is CoreState.Validating or CoreState.Starting)
+            {
+                UpdateCoreState(CoreState.Failed, "Mihomo 核心启动已取消，运行结果未确认。");
+            }
+
             throw;
         }
         catch (Exception exception)
@@ -598,37 +712,6 @@ public sealed partial class ClashTrayRuntime
                 operationLease,
                 cancellationToken: cancellationToken);
             UpdateCoreState(CoreState.Failed, ErrorSanitizer.Sanitize(exception));
-        }
-    }
-
-    private static List<LocalPortBinding> BuildManagedListenerBindings(
-        AppSettings settings,
-        IReadOnlyList<LocalPortBinding> additionalListeners)
-    {
-        IPAddress proxyAddress = settings.AllowLan ? IPAddress.Any : IPAddress.Loopback;
-        List<LocalPortBinding> fixedListeners = new(additionalListeners.Count + 5);
-        AddTcp("http", settings.HttpPort);
-        AddTcp("socks-tcp", settings.SocksPort);
-        AddUdp("socks-udp", settings.SocksPort);
-        AddTcp("mixed-tcp", settings.MixedPort);
-        AddUdp("mixed-udp", settings.MixedPort);
-        fixedListeners.AddRange(additionalListeners);
-        return fixedListeners;
-
-        void AddTcp(string name, int port)
-        {
-            if (port > 0)
-            {
-                fixedListeners.Add(new LocalPortBinding(name, proxyAddress, port, PortTransport.Tcp));
-            }
-        }
-
-        void AddUdp(string name, int port)
-        {
-            if (port > 0)
-            {
-                fixedListeners.Add(new LocalPortBinding(name, proxyAddress, port, PortTransport.Udp));
-            }
         }
     }
 
@@ -703,16 +786,17 @@ public sealed partial class ClashTrayRuntime
         LocalCoreProcessIdentity identity,
         long processGeneration,
         Guid instanceId,
-        MihomoListenerPlan additionalListenerPlan,
+        MihomoEffectiveListenerPlan listenerPlan,
         CancellationToken cancellationToken)
     {
         if (_controllerApiFactory is not null)
         {
             return CreateTestRuntimeBinding(settings, controllerPort) with
             {
-                ListenerPlanComplete = additionalListenerPlan.IsComplete,
-                AdditionalListeners = additionalListenerPlan.ToContractBindings(),
-                ListenerPlanWarning = additionalListenerPlan.Warning
+                ListenerPlanComplete = listenerPlan.IsComplete,
+                AdditionalListeners = listenerPlan.AdditionalListenerPlan.ToContractBindings(),
+                ListenerPlanWarning = listenerPlan.Warning,
+                ListenerBindings = CreateRuntimeListenerBindings(controllerPort, listenerPlan)
             };
         }
 
@@ -728,12 +812,26 @@ public sealed partial class ClashTrayRuntime
                 throw new InvalidOperationException("受管 Mihomo 进程在监听就绪前退出或代际发生变化。");
             }
 
-            if (WindowsListenerOwnerTable.HasListener(controllerPort, PortTransport.Tcp)
-                && !WindowsListenerOwnerTable.IsOwnedBy(IPAddress.Loopback, controllerPort, PortTransport.Tcp, identity))
+            ListenerOwnerObservation controllerOwner = WindowsListenerOwnerTable.InspectListener(
+                IPAddress.Loopback,
+                controllerPort,
+                PortTransport.Tcp,
+                identity);
+            if (controllerOwner.State == ListenerOwnerState.Foreign)
             {
                 throw new ServiceCommandException(
                     ServiceErrorCode.ControllerOwnershipUnconfirmed,
                     "控制器端口在预检后被其他进程占用；未向该端口发送控制器请求。");
+            }
+
+            if (controllerOwner.State != ListenerOwnerState.Owned)
+            {
+                lastError = new TimeoutException(
+                    controllerOwner.State == ListenerOwnerState.Unknown
+                        ? $"控制器 owner 尚不可确认：{controllerOwner.Detail}"
+                        : "等待受管 Mihomo 控制器监听就绪。");
+                await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token).ConfigureAwait(false);
+                continue;
             }
 
             try
@@ -764,77 +862,72 @@ public sealed partial class ClashTrayRuntime
                     throw new InvalidOperationException("Mihomo 有效代理端口与本次启动设置不一致。");
                 }
 
-                if (!AreAdditionalListenersOwned(additionalListenerPlan.Bindings, identity))
-                {
-                    if (HasForeignAdditionalListenerOwner(additionalListenerPlan.Bindings, identity))
-                    {
-                        throw new ServiceCommandException(
-                            ServiceErrorCode.ProxyPortConflict,
-                            "DNS 或自定义 listener 端口被其他进程占用。");
-                    }
-
-                    lastError = new TimeoutException("等待 DNS 或自定义 listener 就绪。");
-                    await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token).ConfigureAwait(false);
-                    continue;
-                }
-
                 if (MihomoDataParser.ParseTunEnabled(configuration) is not false)
                 {
                     throw new InvalidOperationException("Mihomo 有效配置未确认 TUN 关闭。");
                 }
 
+                ListenerReadinessResult listenerReadiness = ListenerReadinessEvaluator.Evaluate(
+                    listenerPlan.ProxyBindings,
+                    listenerPlan.AdditionalListenerPlan.Bindings,
+                    listener => WindowsListenerOwnerTable.InspectListener(
+                        listener.Address,
+                        listener.Port,
+                        listener.Transport,
+                        identity,
+                        listener.DualMode));
+                if (listenerReadiness.Disposition == ListenerReadinessDisposition.ForeignOwner)
+                {
+                    throw new ServiceCommandException(
+                        ServiceErrorCode.ProxyPortConflict,
+                        $"{listenerReadiness.ListenerName} 监听 {listenerReadiness.Disposition}：{listenerReadiness.Detail ?? "端口由其他进程占用。"}");
+                }
+
+                if (listenerReadiness.Disposition != ListenerReadinessDisposition.Ready)
+                {
+                    lastError = listenerReadiness.Disposition == ListenerReadinessDisposition.OwnershipUnknown
+                        ? new IOException($"{listenerReadiness.ListenerName} owner 尚不可确认：{listenerReadiness.Detail}")
+                        : new TimeoutException($"等待 {listenerReadiness.ListenerName} 监听就绪。");
+                    await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token).ConfigureAwait(false);
+                    continue;
+                }
+
                 bool httpReady = ports.Http is > 0
-                    && WindowsListenerOwnerTable.IsPortOwnedBy(ports.Http.Value, PortTransport.Tcp, identity);
+                    && settings.HttpPort > 0;
                 bool socksReady = ports.Socks is > 0
-                    && WindowsListenerOwnerTable.IsPortOwnedBy(ports.Socks.Value, PortTransport.Tcp, identity)
-                    && WindowsListenerOwnerTable.IsPortOwnedBy(ports.Socks.Value, PortTransport.Udp, identity);
+                    && settings.SocksPort > 0;
                 bool mixedReady = ports.Mixed is > 0
-                    && WindowsListenerOwnerTable.IsPortOwnedBy(ports.Mixed.Value, PortTransport.Tcp, identity)
-                    && WindowsListenerOwnerTable.IsPortOwnedBy(ports.Mixed.Value, PortTransport.Udp, identity);
+                    && settings.MixedPort > 0;
 
-                if (ports.Http is > 0 && !httpReady
-                    || ports.Socks is > 0 && !socksReady
-                    || ports.Mixed is > 0 && !mixedReady)
-                {
-                    if (ports.Http is > 0 && WindowsListenerOwnerTable.HasListener(ports.Http.Value, PortTransport.Tcp)
-                        || ports.Socks is > 0 && (WindowsListenerOwnerTable.HasListener(ports.Socks.Value, PortTransport.Tcp)
-                            || WindowsListenerOwnerTable.HasListener(ports.Socks.Value, PortTransport.Udp))
-                        || ports.Mixed is > 0 && (WindowsListenerOwnerTable.HasListener(ports.Mixed.Value, PortTransport.Tcp)
-                            || WindowsListenerOwnerTable.HasListener(ports.Mixed.Value, PortTransport.Udp)))
-                    {
-                        throw new ServiceCommandException(
-                            ServiceErrorCode.ProxyPortConflict,
-                            "HTTP、SOCKS 或 Mixed 监听端口并非全部属于本次受管核心。");
-                    }
-
-                    lastError = new TimeoutException("等待 Mihomo 代理监听就绪。");
-                }
-                else
-                {
-                    return new CoreRuntimeBinding(
-                        settings.ControllerPort,
-                        controllerPort,
-                        instanceId,
-                        _processManager.OwnerInstanceId,
-                        identity.ProcessId,
-                        identity.StartTimeUtcTicks,
-                        processGeneration,
-                        ports.Http.Value,
-                        ports.Socks.Value,
-                        ports.Mixed.Value,
-                        ControllerReady: true,
-                        httpReady,
-                        socksReady,
-                        mixedReady,
-                        identity.ExecutablePath,
-                        additionalListenerPlan.IsComplete,
-                        additionalListenerPlan.ToContractBindings(),
-                        additionalListenerPlan.Warning);
-                }
+                return new CoreRuntimeBinding(
+                    settings.ControllerPort,
+                    controllerPort,
+                    instanceId,
+                    _processManager.OwnerInstanceId,
+                    identity.ProcessId,
+                    identity.StartTimeUtcTicks,
+                    processGeneration,
+                    ports.Http ?? 0,
+                    ports.Socks ?? 0,
+                    ports.Mixed ?? 0,
+                    ControllerReady: true,
+                    httpReady,
+                    socksReady,
+                    mixedReady,
+                    identity.ExecutablePath,
+                    listenerPlan.IsComplete,
+                    listenerPlan.AdditionalListenerPlan.ToContractBindings(),
+                    listenerPlan.Warning,
+                    CreateRuntimeListenerBindings(controllerPort, listenerPlan));
             }
             catch (ManagedCoreOwnershipException exception)
             {
-                if (WindowsListenerOwnerTable.HasListener(controllerPort, PortTransport.Tcp))
+                ListenerOwnerObservation controllerAfterRequest = WindowsListenerOwnerTable.InspectListener(
+                    IPAddress.Loopback,
+                    controllerPort,
+                    PortTransport.Tcp,
+                    identity);
+                if (controllerAfterRequest.State == ListenerOwnerState.Foreign)
                 {
                     throw new ServiceCommandException(
                         ServiceErrorCode.ControllerOwnershipUnconfirmed,
@@ -861,30 +954,27 @@ public sealed partial class ClashTrayRuntime
             lastError);
     }
 
-    private static bool AreAdditionalListenersOwned(
-        IReadOnlyList<LocalPortBinding> listeners,
-        LocalCoreProcessIdentity identity) => listeners.All(listener =>
-        WindowsListenerOwnerTable.IsOwnedBy(
-            listener.Address,
-            listener.Port,
-            listener.Transport,
-            identity));
-
-    private static bool HasForeignAdditionalListenerOwner(
-        IReadOnlyList<LocalPortBinding> listeners,
-        LocalCoreProcessIdentity identity) => listeners.Any(listener =>
-        WindowsListenerOwnerTable.HasListener(listener.Port, listener.Transport)
-        && !WindowsListenerOwnerTable.IsOwnedBy(
-            listener.Address,
-            listener.Port,
-            listener.Transport,
-            identity));
-
-    private static bool AreRuntimeAdditionalListenersOwned(CoreRuntimeBinding binding)
+    private static List<RuntimeListenerBinding> CreateRuntimeListenerBindings(
+        int controllerPort,
+        MihomoEffectiveListenerPlan listenerPlan)
     {
-        if (binding.AdditionalListeners is null)
+        List<RuntimeListenerBinding> bindings =
+        [
+            new RuntimeListenerBinding(
+                "controller",
+                IPAddress.Loopback.ToString(),
+                controllerPort,
+                RuntimeListenerTransport.Tcp)
+        ];
+        bindings.AddRange(listenerPlan.ToContractBindings());
+        return bindings;
+    }
+
+    private static bool AreRuntimeListenerBindingsOwned(CoreRuntimeBinding binding)
+    {
+        if (binding.ListenerBindings is null || binding.ListenerBindings.Count is < 1 or > 256)
         {
-            return true;
+            return false;
         }
 
         try
@@ -893,13 +983,39 @@ public sealed partial class ClashTrayRuntime
                 binding.ProcessId,
                 binding.ProcessStartedUtcTicks,
                 binding.ExecutablePath);
-            return binding.AdditionalListeners.All(listener =>
-                IPAddress.TryParse(listener.Address, out IPAddress? address)
-                && WindowsListenerOwnerTable.IsOwnedBy(
+            bool controllerDescribed = false;
+            foreach (RuntimeListenerBinding listener in binding.ListenerBindings)
+            {
+                if (string.IsNullOrWhiteSpace(listener.Name)
+                    || listener.Name.Length > 64
+                    || listener.Port is < 1 or > 65535
+                    || !Enum.IsDefined(listener.Transport)
+                    || !IPAddress.TryParse(listener.Address, out IPAddress? address)
+                    || listener.DualMode && !address.Equals(IPAddress.IPv6Any))
+                {
+                    return false;
+                }
+
+                if (listener.Name.Equals("controller", StringComparison.Ordinal)
+                    && address.Equals(IPAddress.Loopback)
+                    && listener.Port == binding.ControllerPort
+                    && listener.Transport == RuntimeListenerTransport.Tcp)
+                {
+                    controllerDescribed = true;
+                }
+
+                if (WindowsListenerOwnerTable.InspectListener(
                     address,
                     listener.Port,
                     listener.Transport == RuntimeListenerTransport.Tcp ? PortTransport.Tcp : PortTransport.Udp,
-                    identity));
+                    identity,
+                    listener.DualMode).State != ListenerOwnerState.Owned)
+                {
+                    return false;
+                }
+            }
+
+            return controllerDescribed;
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
@@ -1140,12 +1256,24 @@ public sealed partial class ClashTrayRuntime
     private bool IsCoreHealthy() =>
         Snapshot.Core.State == CoreState.Running && CoreHealthConfirmed;
 
-    private bool IsMixedListenerReady =>
-        ActiveRuntimeBinding is CoreRuntimeBinding binding
-        && binding.MixedReady
-        && binding.MixedPort is >= 1 and <= 65535;
+    private bool IsMixedListenerReady => TryGetConfirmedMixedPort(out _);
 
-    private bool CanEnableSystemProxy => CoreHealthConfirmed && IsMixedListenerReady;
+    private bool CanEnableSystemProxy => TryGetConfirmedMixedPort(out _);
+
+    private bool TryGetConfirmedMixedPort(out int port)
+    {
+        CoreRuntimeBinding? binding = ActiveRuntimeBinding;
+        if (Snapshot.Core.State == CoreState.Running
+            && CoreHealthConfirmed
+            && binding is { MixedReady: true, MixedPort: >= 1 and <= 65535 })
+        {
+            port = binding.MixedPort;
+            return true;
+        }
+
+        port = 0;
+        return false;
+    }
 
     public async Task RefreshDataAsync(CancellationToken cancellationToken = default)
     {
@@ -1205,7 +1333,7 @@ public sealed partial class ClashTrayRuntime
         MihomoListenerPorts listenerPorts = MihomoDataParser.ParseListenerPorts(configurationState);
         bool additionalListenerOwnershipConfirmed = _controllerApiFactory is not null
             || Volatile.Read(ref _controllerSessionInjectedForTesting) != 0
-            || AreRuntimeAdditionalListenersOwned(binding);
+            || AreRuntimeListenerBindingsOwned(binding);
         if (_controllerApiFactory is null
             && Volatile.Read(ref _controllerSessionInjectedForTesting) == 0
             && (!binding.ControllerReady

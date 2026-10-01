@@ -1,9 +1,9 @@
-using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security;
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Win32.SafeHandles;
 
 namespace ClashTray.Core;
@@ -18,6 +18,7 @@ internal static class WindowsListenerOwnerTable
     private const uint ErrorNoData = 232;
     private const uint AfInet = 2;
     private const uint AfInet6 = 23;
+    private const uint ProcessQueryLimitedInformation = 0x1000;
     private const int TcpTableOwnerPidListener = 3;
     private const int UdpTableOwnerPid = 1;
     private const int TcpStateListen = 2;
@@ -28,21 +29,79 @@ internal static class WindowsListenerOwnerTable
         PortTransport transport,
         LocalCoreProcessIdentity expectedOwner)
     {
+        return InspectListener(address, port, transport, expectedOwner).State == ListenerOwnerState.Owned;
+    }
+
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Listener table and process identity failures must become an explicit Unknown observation so startup can retry within its existing deadline.")]
+    public static ListenerOwnerObservation InspectListener(
+        IPAddress address,
+        int port,
+        PortTransport transport,
+        LocalCoreProcessIdentity expectedOwner,
+        bool dualMode = false)
+    {
         ArgumentNullException.ThrowIfNull(address);
         ArgumentNullException.ThrowIfNull(expectedOwner);
         if (!OperatingSystem.IsWindows())
         {
-            throw new PlatformNotSupportedException("Mihomo listener ownership confirmation requires Windows IP Helper tables.");
+            return new ListenerOwnerObservation(
+                ListenerOwnerState.Unknown,
+                "Windows IP Helper listener tables are unavailable on this platform.");
         }
 
-        if (port is < 1 or > 65535 || !IsCurrentProcessIdentity(expectedOwner))
+        if (port is < 1 or > 65535
+            || address.AddressFamily is not (AddressFamily.InterNetwork or AddressFamily.InterNetworkV6))
         {
-            return false;
+            return new ListenerOwnerObservation(ListenerOwnerState.Unknown, "The listener address or port is invalid.");
         }
 
-        return transport == PortTransport.Tcp
-            ? FindTcpOwners(address, port).Contains(expectedOwner.ProcessId)
-            : FindUdpOwners(address, port).Contains(expectedOwner.ProcessId);
+        if (dualMode && !address.Equals(IPAddress.IPv6Any))
+        {
+            return new ListenerOwnerObservation(
+                ListenerOwnerState.Unknown,
+                "Dual-mode listener ownership is valid only for the IPv6 wildcard address.");
+        }
+
+        try
+        {
+            HashSet<int> owners = transport == PortTransport.Tcp
+                ? FindTcpOwners(address, port)
+                : FindUdpOwners(address, port);
+            if (dualMode)
+            {
+                HashSet<int> ipv4Owners = transport == PortTransport.Tcp
+                    ? FindTcpOwners(IPAddress.Any, port)
+                    : FindUdpOwners(IPAddress.Any, port);
+                owners.UnionWith(ipv4Owners);
+            }
+            if (owners.Count == 0)
+            {
+                return new ListenerOwnerObservation(ListenerOwnerState.Missing);
+            }
+
+            if (owners.Any(processId => processId != expectedOwner.ProcessId))
+            {
+                return new ListenerOwnerObservation(
+                    ListenerOwnerState.Foreign,
+                    "The exact address, port, and transport has a different owner PID.");
+            }
+
+            if (!owners.Contains(expectedOwner.ProcessId)
+                || !IsCurrentProcessIdentity(expectedOwner))
+            {
+                return new ListenerOwnerObservation(
+                    ListenerOwnerState.Unknown,
+                    "The owner PID could not be joined to the expected process creation time and image.");
+            }
+
+            return new ListenerOwnerObservation(ListenerOwnerState.Owned);
+        }
+        catch (Exception exception)
+        {
+            return new ListenerOwnerObservation(
+                ListenerOwnerState.Unknown,
+                $"Windows listener ownership could not be queried ({exception.GetType().Name}).");
+        }
     }
 
     public static bool IsPortOwnedBy(
@@ -80,33 +139,23 @@ internal static class WindowsListenerOwnerTable
 
     internal static bool IsCurrentProcessIdentity(LocalCoreProcessIdentity identity)
     {
-        if (!OperatingSystem.IsWindows())
+        ArgumentNullException.ThrowIfNull(identity);
+        if (!OperatingSystem.IsWindows()
+            || identity.ProcessId <= 0
+            || identity.StartTimeUtcTicks <= DateTime.MinValue.Ticks
+            || identity.StartTimeUtcTicks >= DateTime.MaxValue.Ticks
+            || string.IsNullOrWhiteSpace(identity.ExecutablePath)
+            || !Path.IsPathFullyQualified(identity.ExecutablePath))
         {
             return false;
         }
 
         try
         {
-            using Process process = Process.GetProcessById(identity.ProcessId);
-            if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != identity.StartTimeUtcTicks)
-            {
-                return false;
-            }
-
-            string? executablePath;
-            try
-            {
-                executablePath = process.MainModule?.FileName;
-            }
-            catch (Win32Exception)
-            {
-                executablePath = QueryProcessImagePath(process.SafeHandle);
-            }
-
-            executablePath ??= QueryProcessImagePath(process.SafeHandle);
-            return !string.IsNullOrWhiteSpace(executablePath)
+            LocalCoreProcessIdentity actual = CaptureProcessIdentity(identity.ProcessId);
+            return actual.StartTimeUtcTicks == identity.StartTimeUtcTicks
                 && string.Equals(
-                    Path.GetFullPath(executablePath),
+                    Path.GetFullPath(actual.ExecutablePath),
                     Path.GetFullPath(identity.ExecutablePath),
                     StringComparison.OrdinalIgnoreCase);
         }
@@ -119,6 +168,43 @@ internal static class WindowsListenerOwnerTable
         {
             return false;
         }
+    }
+
+    internal static LocalCoreProcessIdentity CaptureProcessIdentity(int processId)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Mihomo process identity confirmation requires Windows.");
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(processId);
+
+        using SafeProcessHandle processHandle = OpenProcess(
+            ProcessQueryLimitedInformation,
+            inheritHandle: false,
+            processId);
+        if (processHandle.IsInvalid)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows could not open the Mihomo process for limited identity queries.");
+        }
+
+        string executablePath = QueryProcessImagePath(processHandle);
+        if (!GetProcessTimes(
+            processHandle,
+            out NativeFileTime creationTime,
+            out _,
+            out _,
+            out _))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows could not confirm the Mihomo process creation time.");
+        }
+
+        ulong fileTime = ((ulong)creationTime.HighDateTime << 32) | creationTime.LowDateTime;
+        long startTimeUtcTicks = DateTime.FromFileTimeUtc(unchecked((long)fileTime)).Ticks;
+        return new LocalCoreProcessIdentity(
+            processId,
+            startTimeUtcTicks,
+            Path.GetFullPath(executablePath));
     }
 
     private static string QueryProcessImagePath(SafeProcessHandle processHandle)
@@ -374,4 +460,28 @@ internal static class WindowsListenerOwnerTable
         uint flags,
         [Out, MarshalAs(UnmanagedType.LPArray, SizeParamIndex = 3)] char[] executablePath,
         ref uint size);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeProcessHandle OpenProcess(
+        uint desiredAccess,
+        [MarshalAs(UnmanagedType.Bool)] bool inheritHandle,
+        int processId);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessTimes(
+        SafeProcessHandle process,
+        out NativeFileTime creationTime,
+        out NativeFileTime exitTime,
+        out NativeFileTime kernelTime,
+        out NativeFileTime userTime);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeFileTime
+    {
+        public uint LowDateTime;
+        public uint HighDateTime;
+    }
 }

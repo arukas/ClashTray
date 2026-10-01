@@ -102,6 +102,167 @@ public sealed class OfficialMihomoServiceInteropTests
 
     [TestMethod]
     [TestCategory("RequiresOfficialMihomo")]
+    public async Task ServiceConfirmsProxyListenersOnTheConfiguredBindAddress()
+    {
+        string? executablePath = FindMihomoExecutable();
+        if (executablePath is null)
+        {
+            Assert.Inconclusive("Official pinned Mihomo is required for bind-address listener ownership coverage.");
+            return;
+        }
+
+        (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
+        try
+        {
+            int controllerPort = GetAvailableLoopbackPort();
+            int mixedPort = GetAvailableLoopbackPort();
+            string configurationPath = Path.Combine(runtimeDirectory, "specified-bind-address.yaml");
+            await File.WriteAllTextAsync(
+                configurationPath,
+                $"mixed-port: {mixedPort}{Environment.NewLine}"
+                + $"external-controller: 127.0.0.1:{controllerPort}{Environment.NewLine}"
+                + $"secret: \"\"{Environment.NewLine}"
+                + $"allow-lan: true{Environment.NewLine}"
+                + $"bind-address: 127.0.0.2{Environment.NewLine}"
+                + $"ipv6: false{Environment.NewLine}"
+                + $"mode: rule{Environment.NewLine}"
+                + $"log-level: info{Environment.NewLine}"
+                + $"proxies: []{Environment.NewLine}"
+                + $"proxy-groups: []{Environment.NewLine}"
+                + $"rules: []{Environment.NewLine}"
+                + $"tun:{Environment.NewLine}"
+                + $"  enable: false{Environment.NewLine}");
+
+            await using ServiceRuntimeController controller = new(
+                paths,
+                managedUserSid: null,
+                tunHealthProbe: new DisabledTunNetworkHealthProbe(),
+                restoreOwnedProxyStates: static () => { });
+
+            ServiceResponse start = await StartServiceCoreAsync(
+                controller,
+                new ServiceCorePayload(
+                    configurationPath,
+                    runtimeDirectory,
+                    controllerPort,
+                    string.Empty,
+                    MixedPort: mixedPort,
+                    AllowLan: true));
+
+            Assert.IsTrue(start.Succeeded, start.Error);
+            Assert.IsNotNull(start.RuntimeBinding);
+            Assert.AreEqual(mixedPort, start.RuntimeBinding.MixedPort);
+            Assert.IsNotNull(start.RuntimeBinding.ListenerBindings);
+            RuntimeListenerBinding[] mixedBindings = start.RuntimeBinding.ListenerBindings
+                .Where(binding => binding.Name.StartsWith("mixed-", StringComparison.Ordinal))
+                .ToArray();
+            Assert.AreEqual(2, mixedBindings.Length);
+            Assert.IsTrue(mixedBindings.All(binding => binding.Address == "127.0.0.2"));
+            Assert.IsTrue(mixedBindings.Any(binding => binding.Transport == RuntimeListenerTransport.Tcp));
+            Assert.IsTrue(mixedBindings.Any(binding => binding.Transport == RuntimeListenerTransport.Udp));
+            Assert.IsTrue(start.RuntimeBinding.ListenerBindings.Any(binding =>
+                binding.Name == "controller"
+                && binding.Address == "127.0.0.1"
+                && binding.Port == start.RuntimeBinding.ControllerPort
+                && binding.Transport == RuntimeListenerTransport.Tcp));
+
+            ServiceResponse stop = await controller.HandleAsync(
+                new ServiceRequest(Guid.NewGuid(), ServiceCommand.StopCore, ProtocolVersion: ServiceProtocol.CurrentVersion),
+                CancellationToken.None);
+            Assert.IsTrue(stop.Succeeded, stop.Error);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                await DeleteTemporaryDirectoryAsync(root);
+            }
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
+    public async Task ServiceConfirmsWildcardProxyListenersWithoutChangingLoopbackController()
+    {
+        string? executablePath = FindMihomoExecutable();
+        if (executablePath is null)
+        {
+            Assert.Inconclusive("Official pinned Mihomo is required for wildcard listener ownership coverage.");
+            return;
+        }
+
+        (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
+        try
+        {
+            int controllerPort = GetAvailableLoopbackPort();
+            int mixedPort = GetAvailableLoopbackPort();
+            string configurationPath = Path.Combine(runtimeDirectory, "wildcard-bind-address.yaml");
+            await File.WriteAllTextAsync(
+                configurationPath,
+                $"mixed-port: {mixedPort}{Environment.NewLine}"
+                + $"external-controller: 127.0.0.1:{controllerPort}{Environment.NewLine}"
+                + $"secret: \"\"{Environment.NewLine}"
+                + $"allow-lan: true{Environment.NewLine}"
+                + $"bind-address: \"*\"{Environment.NewLine}"
+                + $"ipv6: false{Environment.NewLine}"
+                + $"mode: rule{Environment.NewLine}"
+                + $"log-level: info{Environment.NewLine}"
+                + $"proxies: []{Environment.NewLine}"
+                + $"proxy-groups: []{Environment.NewLine}"
+                + $"rules: []{Environment.NewLine}"
+                + $"tun:{Environment.NewLine}"
+                + $"  enable: false{Environment.NewLine}");
+
+            await using ServiceRuntimeController controller = new(
+                paths,
+                managedUserSid: null,
+                tunHealthProbe: new DisabledTunNetworkHealthProbe(),
+                restoreOwnedProxyStates: static () => { });
+
+            ServiceResponse start = await StartServiceCoreAsync(
+                controller,
+                new ServiceCorePayload(
+                    configurationPath,
+                    runtimeDirectory,
+                    controllerPort,
+                    string.Empty,
+                    MixedPort: mixedPort,
+                    AllowLan: true));
+
+            Assert.IsTrue(start.Succeeded, start.Error);
+            Assert.IsNotNull(start.RuntimeBinding);
+            Assert.IsNotNull(start.RuntimeBinding.ListenerBindings);
+            RuntimeListenerBinding[] mixedBindings = start.RuntimeBinding.ListenerBindings
+                .Where(binding => binding.Name.StartsWith("mixed-", StringComparison.Ordinal))
+                .ToArray();
+            Assert.AreEqual(2, mixedBindings.Length);
+            Assert.IsTrue(mixedBindings.All(binding => binding.Address == IPAddress.IPv6Any.ToString()));
+            Assert.IsTrue(mixedBindings.All(binding => binding.DualMode));
+            Assert.IsTrue(mixedBindings.Any(binding => binding.Transport == RuntimeListenerTransport.Tcp));
+            Assert.IsTrue(mixedBindings.Any(binding => binding.Transport == RuntimeListenerTransport.Udp));
+            Assert.IsTrue(start.RuntimeBinding.ListenerBindings.Any(binding =>
+                binding.Name == "controller"
+                && binding.Address == IPAddress.Loopback.ToString()
+                && binding.Port == start.RuntimeBinding.ControllerPort
+                && binding.Transport == RuntimeListenerTransport.Tcp
+                && !binding.DualMode));
+
+            ServiceResponse stop = await controller.HandleAsync(
+                new ServiceRequest(Guid.NewGuid(), ServiceCommand.StopCore, ProtocolVersion: ServiceProtocol.CurrentVersion),
+                CancellationToken.None);
+            Assert.IsTrue(stop.Succeeded, stop.Error);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                await DeleteTemporaryDirectoryAsync(root);
+            }
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
     public async Task ServiceRetriesWhenControllerPortIsTakenAfterPreflightWithoutControllingForeignMihomo()
     {
         string? executablePath = FindMihomoExecutable();
@@ -568,8 +729,8 @@ public sealed class OfficialMihomoServiceInteropTests
             string dnsConfiguration = Path.Combine(runtimeDirectory, "dns-conflict.yaml");
             string dnsContent = BuildConflictConfiguration(dnsControllerPort, dnsMixedPort)
                 + $"dns:{Environment.NewLine}"
-                + $"  enable: true{Environment.NewLine}"
-                + $"  listen: 127.0.0.1:{dnsPort}{Environment.NewLine}";
+                + $"    enable: true{Environment.NewLine}"
+                + $"    listen: 127.0.0.1:{dnsPort}{Environment.NewLine}";
             await File.WriteAllTextAsync(dnsConfiguration, dnsContent);
             ServiceResponse dnsResponse = await StartServiceCoreAsync(
                 controller,

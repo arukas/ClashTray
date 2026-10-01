@@ -101,11 +101,14 @@ internal sealed class FakeSystemProxyController : ISystemProxyController
 
     public int DisableCount { get; private set; }
 
+    public List<int> EnabledPorts { get; } = [];
+
     public SystemProxyState DetectState() => State;
 
     public Task EnableAsync(int port, string bypassList, CancellationToken cancellationToken = default)
     {
         EnableCount++;
+        EnabledPorts.Add(port);
         State = SystemProxyState.On;
         return Task.CompletedTask;
     }

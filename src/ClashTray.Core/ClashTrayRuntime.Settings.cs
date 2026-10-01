@@ -386,11 +386,13 @@ public sealed partial class ClashTrayRuntime
 
     private async Task ReconcileSystemProxyAsync(bool coreRunning, CancellationToken cancellationToken)
     {
-        if (_settings.SystemProxyEnabled && coreRunning && CoreHealthConfirmed && IsMixedListenerReady)
+        if (_settings.SystemProxyEnabled
+            && coreRunning
+            && TryGetConfirmedMixedPort(out int confirmedMixedPort))
         {
             if (_localDevice.SystemProxyState is (SystemProxyState.Off or SystemProxyState.Failed))
             {
-                await _localDevice.EnableSystemProxyAsync(_settings.MixedPort, _settings.BypassList, cancellationToken);
+                await _localDevice.EnableSystemProxyAsync(confirmedMixedPort, _settings.BypassList, cancellationToken);
                 Interlocked.Increment(ref _proxyOwnershipRevision);
             }
         }

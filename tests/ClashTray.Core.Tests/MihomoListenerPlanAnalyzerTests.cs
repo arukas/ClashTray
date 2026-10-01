@@ -105,4 +105,159 @@ public sealed class MihomoListenerPlanAnalyzerTests
         Assert.AreEqual(0, plan.Bindings.Count);
         Assert.AreEqual("tuic", yaml[2][10..]);
     }
+
+    [TestMethod]
+    public void DnsWithFourSpaceChildIndentIsPlannedCompletely()
+    {
+        string[] yaml =
+        [
+            "dns:",
+            "    enable: true",
+            "    listen: 127.0.0.1:15355"
+        ];
+
+        MihomoListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeLines(yaml);
+
+        Assert.IsTrue(plan.IsComplete, plan.Warning);
+        Assert.IsNull(plan.Warning);
+        Assert.AreEqual(2, plan.Bindings.Count);
+        Assert.AreEqual(15355, plan.Bindings[0].Port);
+        Assert.IsTrue(plan.Bindings.All(binding => binding.Address.Equals(IPAddress.Loopback)));
+    }
+
+    [TestMethod]
+    public void QuotedDnsRootKeyIsPlannedCompletely()
+    {
+        string[] yaml =
+        [
+            "'dns':",
+            "  enable: true",
+            "  listen: 127.0.0.1:15356"
+        ];
+
+        MihomoListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeLines(yaml);
+
+        Assert.IsTrue(plan.IsComplete, plan.Warning);
+        Assert.AreEqual(2, plan.Bindings.Count);
+        Assert.AreEqual(15356, plan.Bindings[0].Port);
+    }
+
+    [TestMethod]
+    public void DnsMergeAliasIsExplicitlyMarkedIncomplete()
+    {
+        string[] yaml =
+        [
+            "dns:",
+            "  <<: *dnsDefaults"
+        ];
+
+        MihomoListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeLines(yaml);
+
+        Assert.IsFalse(plan.IsComplete);
+        Assert.IsNotNull(plan.Warning);
+        StringAssert.Contains(plan.Warning, "DNS", StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public void EffectivePlanUsesSpecifiedBindAddressAndPreservesTransportOrder()
+    {
+        string[] yaml =
+        [
+            "allow-lan: true",
+            "bind-address: '127.0.0.2'",
+            "port: 18080",
+            "socks-port: 18081",
+            "mixed-port: 18082"
+        ];
+
+        MihomoEffectiveListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeEffectiveLines(yaml);
+
+        Assert.IsTrue(plan.ProxyPlanComplete, plan.ProxyPlanWarning);
+        Assert.AreEqual(5, plan.ProxyBindings.Count);
+        Assert.IsTrue(plan.ProxyBindings.All(binding => binding.Address.Equals(IPAddress.Parse("127.0.0.2"))));
+        CollectionAssert.AreEqual(
+            new List<string> { "http-tcp", "socks-tcp", "socks-udp", "mixed-tcp", "mixed-udp" },
+            plan.ProxyBindings.Select(binding => binding.Name).ToList());
+        Assert.AreEqual(PortTransport.Tcp, plan.ProxyBindings[1].Transport);
+        Assert.AreEqual(PortTransport.Udp, plan.ProxyBindings[2].Transport);
+    }
+
+    [TestMethod]
+    public void EffectiveWildcardBindAddressRecordsDualModeIpv6Family()
+    {
+        string[] yaml =
+        [
+            "allow-lan: true",
+            "bind-address: \"*\"",
+            "port: 18080",
+            "socks-port: 0",
+            "mixed-port: 18082"
+        ];
+
+        MihomoEffectiveListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeEffectiveLines(yaml);
+
+        Assert.IsTrue(plan.ProxyPlanComplete, plan.ProxyPlanWarning);
+        Assert.AreEqual(IPAddress.IPv6Any, plan.ProxyBindings[0].Address);
+        Assert.IsTrue(plan.ProxyBindings[0].DualMode);
+        Assert.AreEqual(18082, plan.ProxyBindings[1].Port);
+        Assert.IsTrue(plan.ProxyBindings.All(binding => binding.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6));
+    }
+
+    [TestMethod]
+    public void EffectiveUnknownBindAddressIsIncompleteInsteadOfAssumingLoopbackOrWildcard()
+    {
+        string[] yaml =
+        [
+            "allow-lan: true",
+            "bind-address: proxy.local",
+            "port: 18080",
+            "socks-port: 18081",
+            "mixed-port: 18082"
+        ];
+
+        MihomoEffectiveListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeEffectiveLines(yaml);
+
+        Assert.IsFalse(plan.ProxyPlanComplete);
+        Assert.IsNotNull(plan.ProxyPlanWarning);
+        StringAssert.Contains(plan.ProxyPlanWarning, "bind-address", StringComparison.Ordinal);
+        Assert.AreEqual(0, plan.ProxyBindings.Count);
+    }
+
+    [TestMethod]
+    public void CustomListenerMergeAliasKeepsPlanIncompleteEvenWhenOtherFieldsAreReadable()
+    {
+        string[] yaml =
+        [
+            "listeners:",
+            "  - <<: *listenerDefaults",
+            "    type: mixed",
+            "    port: 18090",
+            "    listen: 127.0.0.1",
+            "    udp: true"
+        ];
+
+        MihomoListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeLines(yaml);
+
+        Assert.IsFalse(plan.IsComplete);
+        Assert.IsNotNull(plan.Warning);
+        StringAssert.Contains(plan.Warning, "alias", StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
+    public void EffectiveRootMergeDoesNotClaimACompleteProxyPlan()
+    {
+        string[] yaml =
+        [
+            "<<: *defaults",
+            "allow-lan: false",
+            "port: 18080",
+            "socks-port: 18081",
+            "mixed-port: 18082"
+        ];
+
+        MihomoEffectiveListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeEffectiveLines(yaml);
+
+        Assert.IsFalse(plan.ProxyPlanComplete);
+        Assert.IsNotNull(plan.ProxyPlanWarning);
+    }
 }

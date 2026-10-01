@@ -72,6 +72,7 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
 
     private static readonly TimeSpan DisposeCleanupTimeout = TimeSpan.FromSeconds(30);
     private readonly TimeSpan _disposeCleanupTimeout;
+    private readonly TimeSpan _coreStartupBudget;
 
     private readonly record struct CoreLossContext(
         long LifecycleEpoch,
@@ -106,14 +107,17 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
         TimeSpan? disposeCleanupTimeout = null,
         Func<string, CancellationToken, Task>? shutdownStepTestHook = null,
         Func<LocalCoreProcessIdentity?>? localCoreProcessIdentityProvider = null,
-        Func<LocalCoreProcessIdentity, CancellationToken, Task<LocalCoreShutdownJournalResult>>? localCoreRecoveryAction = null)
+        Func<LocalCoreProcessIdentity, CancellationToken, Task<LocalCoreShutdownJournalResult>>? localCoreRecoveryAction = null,
+        TimeSpan? coreStartupBudget = null)
     {
         bool useDefaultEnvironment = paths is null;
         _disposeCleanupTimeout = disposeCleanupTimeout ?? DisposeCleanupTimeout;
+        _coreStartupBudget = coreStartupBudget ?? TimeSpan.FromSeconds(30);
         _shutdownStepTestHook = shutdownStepTestHook;
         _localCoreProcessIdentityProvider = localCoreProcessIdentityProvider;
         _localCoreRecoveryAction = localCoreRecoveryAction;
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_disposeCleanupTimeout, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_coreStartupBudget, TimeSpan.Zero);
         _paths = paths ?? new AppPaths();
         _paths.EnsureDirectories();
         _localCoreShutdownJournal = new LocalCoreShutdownJournal(_paths);

@@ -173,8 +173,18 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="ControllerActualAddressFormat" xml:space="preserve"><value>Active controller address: 127.0.0.1:{0}</value></data>
   <data name="ControllerActualAddressNotConfirmed" xml:space="preserve"><value>The active controller address is not confirmed.</value></data>
   <data name="StartWithAvailableControllerPortButton.Content" xml:space="preserve"><value>Start once with an available controller port</value></data>
-  <data name="ControllerPortOneTimeStartSucceeded" xml:space="preserve"><value>Core started on the confirmed available controller port; the saved preferred port is unchanged.</value></data>
+  <data name="ControllerPortOneTimeStartSucceeded" xml:space="preserve"><value>Core is confirmed running on controller port {0}; the saved preferred port is unchanged.</value></data>
   <data name="ControllerPortOneTimeStartFailedFormat" xml:space="preserve"><value>Could not start with an available port: {0}</value></data>
+  <data name="ControllerPortOneTimeStartAlreadyRunning" xml:space="preserve"><value>The core is already running; this action did not change its controller port.</value></data>
+  <data name="ControllerPortOneTimeStartBusy" xml:space="preserve"><value>Another core operation is in progress. Try again when it finishes.</value></data>
+  <data name="ControllerPortOneTimeStartCoreMissing" xml:space="preserve"><value>Mihomo was not found. Install it or select mihomo.exe in Settings.</value></data>
+  <data name="ControllerPortOneTimeStartConfigurationMissing" xml:space="preserve"><value>Import a Mihomo configuration before starting the core.</value></data>
+  <data name="ControllerPortOneTimeStartInvalidConfiguration" xml:space="preserve"><value>Mihomo configuration validation failed. Check the YAML and core validation output.</value></data>
+  <data name="ControllerPortOneTimeStartPortConflict" xml:space="preserve"><value>A proxy or controller listener port conflicts with another listener. Startup was not confirmed.</value></data>
+  <data name="ControllerPortOneTimeStartCandidatesExhausted" xml:space="preserve"><value>No available controller port was found within the candidate limit.</value></data>
+  <data name="ControllerPortOneTimeStartTimedOut" xml:space="preserve"><value>Startup timed out before the core was confirmed. System Proxy will not be enabled by this action.</value></data>
+  <data name="ControllerPortOneTimeStartCancelled" xml:space="preserve"><value>Core startup was cancelled and is not reported as successful.</value></data>
+  <data name="ControllerPortOneTimeStartFailed" xml:space="preserve"><value>Core operation ended without a confirmed running binding. Check core status and diagnostics.</value></data>
   <data name="BypassListBox.Header" xml:space="preserve"><value>System proxy bypass list</value></data>
   <data name="BypassListBox.PlaceholderText" xml:space="preserve"><value>Separate with semicolons, e.g. localhost;127.*</value></data>
   <data name="SubscriptionRefreshHeader.Text" xml:space="preserve"><value>Subscription refresh interval</value></data>

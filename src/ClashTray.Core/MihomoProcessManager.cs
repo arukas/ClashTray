@@ -373,28 +373,8 @@ public sealed class MihomoProcessManager : IAsyncDisposable
                 return null;
             }
 
-            string? executablePath = null;
-            try
-            {
-                executablePath = process.MainModule?.FileName;
-            }
-            catch (System.ComponentModel.Win32Exception)
-            {
-                // The process was created by this manager; its immutable
-                // StartInfo path is a safe fallback if module enumeration is
-                // temporarily denied by the OS.
-            }
-
-            executablePath ??= process.StartInfo.FileName;
-            if (string.IsNullOrWhiteSpace(executablePath))
-            {
-                throw new InvalidOperationException("无法读取本地 Mihomo 进程路径。");
-            }
-
-            return new LocalCoreProcessIdentity(
-                process.Id,
-                process.StartTime.ToUniversalTime().Ticks,
-                Path.GetFullPath(executablePath));
+            LocalCoreProcessIdentity identity = WindowsListenerOwnerTable.CaptureProcessIdentity(process.Id);
+            return HasExited(process) ? null : identity;
         }
     }
     private void StartProcess(

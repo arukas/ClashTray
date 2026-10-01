@@ -85,7 +85,13 @@ public sealed class LocalizationResourceTests
             "CoreStateRunning", "CoreStateStopped", "SwitchStateOn", "SwitchStateOff",
             "DialogCancel", "MenuQuit", "TrayTooltipStopped", "MenuEnableSystemProxy", "MenuDisableTun",
             "LanguageRestartPrompt", "ConfigImportPrompt", "DelayTimeout", "DelayNotTested", "CurrentLabel",
-            "QuitButton.Content", "SystemProxySwitch.AutomationProperties.Name", "LanguageBox.Header"
+            "QuitButton.Content", "SystemProxySwitch.AutomationProperties.Name", "LanguageBox.Header",
+            "ControllerPortOneTimeStartSucceeded", "ControllerPortOneTimeStartAlreadyRunning",
+            "ControllerPortOneTimeStartBusy", "ControllerPortOneTimeStartCoreMissing",
+            "ControllerPortOneTimeStartConfigurationMissing", "ControllerPortOneTimeStartInvalidConfiguration",
+            "ControllerPortOneTimeStartPortConflict", "ControllerPortOneTimeStartCandidatesExhausted",
+            "ControllerPortOneTimeStartTimedOut", "ControllerPortOneTimeStartCancelled",
+            "ControllerPortOneTimeStartFailed"
         ];
         Dictionary<string, string> chinese = LoadResourceValues("zh-CN");
         Dictionary<string, string> english = LoadResourceValues("en-US");

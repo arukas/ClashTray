@@ -128,6 +128,7 @@ $testArguments = @(
     'test',
     $testProject,
     '--configuration', $Configuration,
+    '--property:Platform=x64',
     '--no-restore',
     '--no-build',
     '--filter', 'TestCategory=RequiresOfficialMihomo',

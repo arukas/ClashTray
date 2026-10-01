@@ -250,7 +250,8 @@ public sealed record CoreRuntimeBinding(
     string ExecutablePath = "",
     bool ListenerPlanComplete = true,
     IReadOnlyList<RuntimeListenerBinding>? AdditionalListeners = null,
-    string? ListenerPlanWarning = null);
+    string? ListenerPlanWarning = null,
+    IReadOnlyList<RuntimeListenerBinding>? ListenerBindings = null);
 
 public enum RuntimeListenerTransport
 {
@@ -262,7 +263,8 @@ public sealed record RuntimeListenerBinding(
     string Name,
     string Address,
     int Port,
-    RuntimeListenerTransport Transport);
+    RuntimeListenerTransport Transport,
+    bool DualMode = false);
 
 public sealed record ServiceResponse(
     Guid RequestId,

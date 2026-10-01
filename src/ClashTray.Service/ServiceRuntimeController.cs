@@ -384,8 +384,6 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             if (!TryValidateReadyListeners(
                 document,
                 _activeCore,
-                _runtimeBinding.ControllerPort,
-                _activeProcessIdentity,
                 out MihomoListenerPorts statusPorts,
                 out ServiceErrorCode listenerError,
                 out string? listenerMessage))
@@ -393,11 +391,11 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 return Failure(request, listenerMessage ?? "Mihomo 监听状态无法确认。", CoreState.Running, listenerError);
             }
 
-            if (!AreBoundListenersOwned(statusPorts, _activeProcessIdentity))
+            if (!AreRuntimePortsMatch(_runtimeBinding, statusPorts))
             {
                 return Failure(
                     request,
-                    "HTTP、SOCKS 或 Mixed 监听归属无法确认。",
+                    "Mihomo 运行端口与已确认的有效监听绑定不一致。",
                     CoreState.Running,
                     ServiceErrorCode.ProxyPortConflict);
             }
@@ -586,12 +584,19 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
 
         string executablePath = _paths.ManagedCoreExecutable;
-        MihomoListenerPlan additionalListenerPlan = await MihomoListenerPlanAnalyzer.AnalyzeFileAsync(
+        MihomoEffectiveListenerPlan listenerPlan = await MihomoListenerPlanAnalyzer.AnalyzeEffectiveFileAsync(
             payload.ConfigurationPath,
             cancellationToken).ConfigureAwait(false);
-        IReadOnlyList<LocalPortBinding> fixedListeners = BuildProxyPortBindings(payload)
-            .Concat(additionalListenerPlan.Bindings)
-            .ToArray();
+        if (!listenerPlan.ProxyPlanComplete)
+        {
+            return Failure(
+                request,
+                listenerPlan.ProxyPlanWarning ?? "无法确认有效 Mihomo 代理监听计划。",
+                CoreState.Failed,
+                ServiceErrorCode.CoreReadinessFailed);
+        }
+
+        IReadOnlyList<LocalPortBinding> fixedListeners = listenerPlan.AllBindings;
         HashSet<int> attemptedPorts = [];
         int inspectedFallbackPorts = 0;
         ControllerPortAllocationResult allocation = AllocateControllerPort(
@@ -621,6 +626,18 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                     candidatePath,
                     candidatePort,
                     cancellationToken).ConfigureAwait(false);
+                MihomoEffectiveListenerPlan candidateListenerPlan = await MihomoListenerPlanAnalyzer.AnalyzeEffectiveFileAsync(
+                    candidatePath,
+                    cancellationToken).ConfigureAwait(false);
+                if (!candidateListenerPlan.ProxyPlanComplete)
+                {
+                    return Failure(
+                        request,
+                        candidateListenerPlan.ProxyPlanWarning ?? "无法确认最终 Mihomo 代理监听计划。",
+                        CoreState.Failed,
+                        ServiceErrorCode.CoreReadinessFailed);
+                }
+
                 if (!await _processManager.ValidateAsync(
                     executablePath,
                     candidatePath,
@@ -659,7 +676,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                     processIdentity,
                     processGeneration,
                     instanceId,
-                    additionalListenerPlan,
+                    candidateListenerPlan,
                     cancellationToken).ConfigureAwait(false);
                 if (!_processManager.TryMarkReady(processGeneration))
                 {
@@ -777,41 +794,13 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             controllerConflict ? ServiceErrorCode.ControllerPortConflict : ServiceErrorCode.ProxyPortConflict);
     }
 
-    private static List<LocalPortBinding> BuildProxyPortBindings(ServiceCorePayload payload)
-    {
-        IPAddress address = payload.AllowLan ? IPAddress.Any : IPAddress.Loopback;
-        List<LocalPortBinding> listeners = [];
-        AddTcp("http", payload.HttpPort);
-        AddTcp("socks-tcp", payload.SocksPort);
-        AddUdp("socks-udp", payload.SocksPort);
-        AddTcp("mixed-tcp", payload.MixedPort);
-        AddUdp("mixed-udp", payload.MixedPort);
-        return listeners;
-
-        void AddTcp(string name, int port)
-        {
-            if (port > 0)
-            {
-                listeners.Add(new LocalPortBinding(name, address, port, PortTransport.Tcp));
-            }
-        }
-
-        void AddUdp(string name, int port)
-        {
-            if (port > 0)
-            {
-                listeners.Add(new LocalPortBinding(name, address, port, PortTransport.Udp));
-            }
-        }
-    }
-
     private async Task<CoreRuntimeBinding> WaitForReadyBindingAsync(
         ServiceCorePayload payload,
         int controllerPort,
         LocalCoreProcessIdentity processIdentity,
         long processGeneration,
         Guid instanceId,
-        MihomoListenerPlan additionalListenerPlan,
+        MihomoEffectiveListenerPlan listenerPlan,
         CancellationToken cancellationToken)
     {
         using CancellationTokenSource timeout = CreateTimeout(DefaultOperationTimeout, cancellationToken);
@@ -827,12 +816,26 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                     "受管 Mihomo 进程在监听就绪前退出或代际发生变化。");
             }
 
-            if (WindowsListenerOwnerTable.HasListener(controllerPort, PortTransport.Tcp)
-                && !WindowsListenerOwnerTable.IsOwnedBy(IPAddress.Loopback, controllerPort, PortTransport.Tcp, processIdentity))
+            ListenerOwnerObservation controllerOwner = WindowsListenerOwnerTable.InspectListener(
+                IPAddress.Loopback,
+                controllerPort,
+                PortTransport.Tcp,
+                processIdentity);
+            if (controllerOwner.State == ListenerOwnerState.Foreign)
             {
                 throw new CoreStartException(
                     ServiceErrorCode.ControllerOwnershipUnconfirmed,
                     "控制器端口已被另一进程占用；未向该端口发送控制器请求，正在回收本次启动。");
+            }
+
+            if (controllerOwner.State != ListenerOwnerState.Owned)
+            {
+                lastError = new TimeoutException(
+                    controllerOwner.State == ListenerOwnerState.Unknown
+                        ? $"控制器 owner 尚不可确认：{controllerOwner.Detail}"
+                        : "等待受管 Mihomo 控制器监听就绪。");
+                await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token).ConfigureAwait(false);
+                continue;
             }
 
             try
@@ -847,8 +850,6 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 if (!TryValidateReadyListeners(
                     configuration,
                     payload,
-                    controllerPort,
-                    processIdentity,
                     out MihomoListenerPorts listenerPorts,
                     out ServiceErrorCode errorCode,
                     out string? message))
@@ -868,65 +869,63 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                         "Mihomo 有效配置未确认 TUN 关闭，拒绝提交启动就绪状态。");
                 }
 
-                bool httpReady = listenerPorts.Http is > 0
-                    && WindowsListenerOwnerTable.IsPortOwnedBy(listenerPorts.Http.Value, PortTransport.Tcp, processIdentity);
-                bool socksReady = listenerPorts.Socks is > 0
-                    && WindowsListenerOwnerTable.IsPortOwnedBy(listenerPorts.Socks.Value, PortTransport.Tcp, processIdentity);
-                bool mixedReady = listenerPorts.Mixed is > 0
-                    && WindowsListenerOwnerTable.IsPortOwnedBy(listenerPorts.Mixed.Value, PortTransport.Tcp, processIdentity);
-                bool socksUdpReady = listenerPorts.Socks is > 0
-                    && WindowsListenerOwnerTable.IsPortOwnedBy(listenerPorts.Socks.Value, PortTransport.Udp, processIdentity);
-                bool mixedUdpReady = listenerPorts.Mixed is > 0
-                    && WindowsListenerOwnerTable.IsPortOwnedBy(listenerPorts.Mixed.Value, PortTransport.Udp, processIdentity);
-                bool additionalListenersReady = AreAdditionalListenersOwned(
-                    additionalListenerPlan.Bindings,
-                    processIdentity);
-
-                if (listenerPorts.Http is > 0 && !httpReady
-                    || listenerPorts.Socks is > 0 && (!socksReady || !socksUdpReady)
-                    || listenerPorts.Mixed is > 0 && (!mixedReady || !mixedUdpReady)
-                    || !additionalListenersReady)
+                ListenerReadinessResult listenerReadiness = ListenerReadinessEvaluator.Evaluate(
+                    listenerPlan.ProxyBindings,
+                    listenerPlan.AdditionalListenerPlan.Bindings,
+                    listener => WindowsListenerOwnerTable.InspectListener(
+                        listener.Address,
+                        listener.Port,
+                        listener.Transport,
+                        processIdentity,
+                        listener.DualMode));
+                if (listenerReadiness.Disposition == ListenerReadinessDisposition.ForeignOwner)
                 {
-                    if (listenerPorts.Http is > 0 && WindowsListenerOwnerTable.HasListener(listenerPorts.Http.Value, PortTransport.Tcp)
-                        || listenerPorts.Socks is > 0 && (WindowsListenerOwnerTable.HasListener(listenerPorts.Socks.Value, PortTransport.Tcp)
-                            || WindowsListenerOwnerTable.HasListener(listenerPorts.Socks.Value, PortTransport.Udp))
-                        || listenerPorts.Mixed is > 0 && (WindowsListenerOwnerTable.HasListener(listenerPorts.Mixed.Value, PortTransport.Tcp)
-                            || WindowsListenerOwnerTable.HasListener(listenerPorts.Mixed.Value, PortTransport.Udp))
-                        || HasForeignAdditionalListenerOwner(additionalListenerPlan.Bindings, processIdentity))
-                    {
-                        throw new CoreStartException(
-                            ServiceErrorCode.ProxyPortConflict,
-                            "HTTP、SOCKS 或 Mixed 监听端口并非全部属于本次受管核心。");
-                    }
+                    throw new CoreStartException(
+                        ServiceErrorCode.ProxyPortConflict,
+                        $"{listenerReadiness.ListenerName} 监听由其他进程占用：{listenerReadiness.Detail ?? "无法确认当前核心持有该监听。"}");
+                }
 
-                    lastError = new TimeoutException("等待 Mihomo 代理监听就绪。");
-                }
-                else
+                if (listenerReadiness.Disposition != ListenerReadinessDisposition.Ready)
                 {
-                    return new CoreRuntimeBinding(
-                        payload.ControllerPort,
-                        controllerPort,
-                        instanceId,
-                        _processManager.OwnerInstanceId,
-                        processIdentity.ProcessId,
-                        processIdentity.StartTimeUtcTicks,
-                        processGeneration,
-                        listenerPorts.Http ?? 0,
-                        listenerPorts.Socks ?? 0,
-                        listenerPorts.Mixed ?? 0,
-                        ControllerReady: true,
-                        httpReady,
-                        socksReady,
-                        mixedReady,
-                        processIdentity.ExecutablePath,
-                        additionalListenerPlan.IsComplete,
-                        additionalListenerPlan.ToContractBindings(),
-                        additionalListenerPlan.Warning);
+                    lastError = listenerReadiness.Disposition == ListenerReadinessDisposition.OwnershipUnknown
+                        ? new IOException($"{listenerReadiness.ListenerName} owner 尚不可确认：{listenerReadiness.Detail}")
+                        : new TimeoutException($"等待 {listenerReadiness.ListenerName} 监听就绪。");
+                    await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token).ConfigureAwait(false);
+                    continue;
                 }
+
+                bool httpReady = listenerPorts.Http is > 0 && payload.HttpPort > 0;
+                bool socksReady = listenerPorts.Socks is > 0 && payload.SocksPort > 0;
+                bool mixedReady = listenerPorts.Mixed is > 0 && payload.MixedPort > 0;
+                return new CoreRuntimeBinding(
+                    payload.ControllerPort,
+                    controllerPort,
+                    instanceId,
+                    _processManager.OwnerInstanceId,
+                    processIdentity.ProcessId,
+                    processIdentity.StartTimeUtcTicks,
+                    processGeneration,
+                    listenerPorts.Http ?? 0,
+                    listenerPorts.Socks ?? 0,
+                    listenerPorts.Mixed ?? 0,
+                    ControllerReady: true,
+                    httpReady,
+                    socksReady,
+                    mixedReady,
+                    processIdentity.ExecutablePath,
+                    listenerPlan.IsComplete,
+                    listenerPlan.AdditionalListenerPlan.ToContractBindings(),
+                    listenerPlan.Warning,
+                    CreateRuntimeListenerBindings(controllerPort, listenerPlan));
             }
             catch (ManagedCoreOwnershipException exception)
             {
-                if (WindowsListenerOwnerTable.HasListener(controllerPort, PortTransport.Tcp))
+                ListenerOwnerObservation controllerAfterRequest = WindowsListenerOwnerTable.InspectListener(
+                    IPAddress.Loopback,
+                    controllerPort,
+                    PortTransport.Tcp,
+                    processIdentity);
+                if (controllerAfterRequest.State == ListenerOwnerState.Foreign)
                 {
                     throw new CoreStartException(
                         ServiceErrorCode.ControllerOwnershipUnconfirmed,
@@ -954,11 +953,25 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             lastError);
     }
 
+    private static List<RuntimeListenerBinding> CreateRuntimeListenerBindings(
+        int controllerPort,
+        MihomoEffectiveListenerPlan listenerPlan)
+    {
+        List<RuntimeListenerBinding> bindings =
+        [
+            new RuntimeListenerBinding(
+                "controller",
+                IPAddress.Loopback.ToString(),
+                controllerPort,
+                RuntimeListenerTransport.Tcp)
+        ];
+        bindings.AddRange(listenerPlan.ToContractBindings());
+        return bindings;
+    }
+
     private static bool TryValidateReadyListeners(
         JsonDocument configuration,
         ServiceCorePayload payload,
-        int controllerPort,
-        LocalCoreProcessIdentity processIdentity,
         out MihomoListenerPorts ports,
         out ServiceErrorCode errorCode,
         out string? message)
@@ -966,13 +979,6 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         ports = MihomoDataParser.ParseListenerPorts(configuration);
         errorCode = ServiceErrorCode.CoreReadinessFailed;
         message = null;
-        if (!WindowsListenerOwnerTable.IsOwnedBy(IPAddress.Loopback, controllerPort, PortTransport.Tcp, processIdentity))
-        {
-            errorCode = ServiceErrorCode.ControllerOwnershipUnconfirmed;
-            message = "控制器端口不属于当前受管核心；已阻止控制器请求。";
-            return false;
-        }
-
         if (ports.Http is null || ports.Socks is null || ports.Mixed is null)
         {
             message = "Mihomo /configs 未返回完整 HTTP、SOCKS、Mixed 监听端口信息。";
@@ -991,39 +997,10 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         return true;
     }
 
-    private static bool AreBoundListenersOwned(
-        MihomoListenerPorts ports,
-        LocalCoreProcessIdentity processIdentity)
-    {
-        bool httpReady = ports.Http is not > 0
-            || WindowsListenerOwnerTable.IsPortOwnedBy(ports.Http.Value, PortTransport.Tcp, processIdentity);
-        bool socksReady = ports.Socks is not > 0
-            || WindowsListenerOwnerTable.IsPortOwnedBy(ports.Socks.Value, PortTransport.Tcp, processIdentity)
-                && WindowsListenerOwnerTable.IsPortOwnedBy(ports.Socks.Value, PortTransport.Udp, processIdentity);
-        bool mixedReady = ports.Mixed is not > 0
-            || WindowsListenerOwnerTable.IsPortOwnedBy(ports.Mixed.Value, PortTransport.Tcp, processIdentity)
-                && WindowsListenerOwnerTable.IsPortOwnedBy(ports.Mixed.Value, PortTransport.Udp, processIdentity);
-        return httpReady && socksReady && mixedReady;
-    }
-
-    private static bool AreAdditionalListenersOwned(
-        IReadOnlyList<LocalPortBinding> listeners,
-        LocalCoreProcessIdentity processIdentity) => listeners.All(listener =>
-        WindowsListenerOwnerTable.IsOwnedBy(
-            listener.Address,
-            listener.Port,
-            listener.Transport,
-            processIdentity));
-
-    private static bool HasForeignAdditionalListenerOwner(
-        IReadOnlyList<LocalPortBinding> listeners,
-        LocalCoreProcessIdentity processIdentity) => listeners.Any(listener =>
-        WindowsListenerOwnerTable.HasListener(listener.Port, listener.Transport)
-        && !WindowsListenerOwnerTable.IsOwnedBy(
-            listener.Address,
-            listener.Port,
-            listener.Transport,
-            processIdentity));
+    private static bool AreRuntimePortsMatch(CoreRuntimeBinding binding, MihomoListenerPorts ports) =>
+        binding.HttpPort == (ports.Http ?? 0)
+        && binding.SocksPort == (ports.Socks ?? 0)
+        && binding.MixedPort == (ports.Mixed ?? 0);
 
     private bool IsProcessIdentityCurrent(
         LocalCoreProcessIdentity identity,
@@ -1062,7 +1039,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                     binding.ControllerPort,
                     PortTransport.Tcp,
                     identity)
-                && AreRuntimeAdditionalListenersOwned(binding.AdditionalListeners, identity);
+                && AreRuntimeAdditionalListenersOwned(binding.AdditionalListeners, identity)
+                && AreRuntimeListenerBindingsOwned(binding.ListenerBindings, binding.ControllerPort, identity);
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
@@ -1105,6 +1083,51 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
 
         return true;
+    }
+
+    private static bool AreRuntimeListenerBindingsOwned(
+        IReadOnlyList<RuntimeListenerBinding>? listeners,
+        int controllerPort,
+        LocalCoreProcessIdentity identity)
+    {
+        if (listeners is null || listeners.Count is < 1 or > 256)
+        {
+            return false;
+        }
+
+        bool controllerDescribed = false;
+        foreach (RuntimeListenerBinding listener in listeners)
+        {
+            if (string.IsNullOrWhiteSpace(listener.Name)
+                || listener.Name.Length > 64
+                || listener.Port is < 1 or > 65535
+                || !Enum.IsDefined(listener.Transport)
+                || !IPAddress.TryParse(listener.Address, out IPAddress? address)
+                || listener.DualMode && !address.Equals(IPAddress.IPv6Any))
+            {
+                return false;
+            }
+
+            if (listener.Name.Equals("controller", StringComparison.Ordinal)
+                && address.Equals(IPAddress.Loopback)
+                && listener.Port == controllerPort
+                && listener.Transport == RuntimeListenerTransport.Tcp)
+            {
+                controllerDescribed = true;
+            }
+
+            if (WindowsListenerOwnerTable.InspectListener(
+                address,
+                listener.Port,
+                listener.Transport == RuntimeListenerTransport.Tcp ? PortTransport.Tcp : PortTransport.Udp,
+                identity,
+                listener.DualMode).State != ListenerOwnerState.Owned)
+            {
+                return false;
+            }
+        }
+
+        return controllerDescribed;
     }
 
     private async Task CleanupFailedCoreStartAsync()

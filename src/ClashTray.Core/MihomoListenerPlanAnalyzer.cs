@@ -21,6 +21,42 @@ internal sealed record MihomoListenerPlan(
         .ToArray();
 }
 
+internal sealed record MihomoEffectiveListenerPlan(
+    IReadOnlyList<LocalPortBinding> ProxyBindings,
+    MihomoListenerPlan AdditionalListenerPlan,
+    bool ProxyPlanComplete,
+    string? ProxyPlanWarning)
+{
+    public bool IsComplete => ProxyPlanComplete && AdditionalListenerPlan.IsComplete;
+
+    public string? Warning
+    {
+        get
+        {
+            string[] warnings = new[] { ProxyPlanWarning, AdditionalListenerPlan.Warning }
+                .Where(warning => !string.IsNullOrWhiteSpace(warning))
+                .Cast<string>()
+                .ToArray();
+            return warnings.Length == 0 ? null : string.Join("；", warnings);
+        }
+    }
+
+    public IReadOnlyList<LocalPortBinding> AllBindings => ProxyBindings
+        .Concat(AdditionalListenerPlan.Bindings)
+        .ToArray();
+
+    public IReadOnlyList<RuntimeListenerBinding> ToContractBindings() => AllBindings
+        .Select(binding => new RuntimeListenerBinding(
+            binding.Name,
+            binding.Address.ToString(),
+            binding.Port,
+            binding.Transport == PortTransport.Tcp
+                ? RuntimeListenerTransport.Tcp
+                : RuntimeListenerTransport.Udp,
+            binding.DualMode))
+        .ToArray();
+}
+
 /// <summary>
 /// Reads only the local listener forms that the current block-YAML converter
 /// can identify without changing the user's configuration. Unknown forms are
@@ -28,6 +64,15 @@ internal sealed record MihomoListenerPlan(
 /// </summary>
 internal static class MihomoListenerPlanAnalyzer
 {
+    private static readonly HashSet<string> EffectiveListenerKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "allow-lan",
+        "bind-address",
+        "port",
+        "socks-port",
+        "mixed-port"
+    };
+
     public static async Task<MihomoListenerPlan> AnalyzeFileAsync(
         string path,
         CancellationToken cancellationToken = default)
@@ -49,6 +94,144 @@ internal static class MihomoListenerPlanAnalyzer
         return AnalyzeLines(lines, cancellationToken);
     }
 
+    public static async Task<MihomoEffectiveListenerPlan> AnalyzeEffectiveFileAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        FileInfo info = new(path);
+        if (!info.Exists || info.Length > RuntimeConfigBuilder.MaximumInputBytes)
+        {
+            throw new InvalidDataException("The effective Mihomo configuration is missing or exceeds its size limit.");
+        }
+
+        string[] lines = await File.ReadAllLinesAsync(path, cancellationToken).ConfigureAwait(false);
+        if (lines.Length > RuntimeConfigBuilder.MaximumInputLines
+            || lines.Any(line => line.Length > RuntimeConfigBuilder.MaximumLineCharacters))
+        {
+            throw new InvalidDataException("The effective Mihomo configuration exceeds its line limits.");
+        }
+
+        return AnalyzeEffectiveLines(lines, cancellationToken);
+    }
+
+    internal static MihomoEffectiveListenerPlan AnalyzeEffectiveLines(
+        IReadOnlyList<string> lines,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+        Dictionary<string, string> values = new(StringComparer.OrdinalIgnoreCase);
+        List<string> limitations = [];
+        for (int index = 0; index < lines.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryReadRootEntry(lines[index], out string key, out string value))
+            {
+                if (IsUnresolvedRootMapping(lines[index]))
+                {
+                    limitations.Add("无法静态确认根级 merge、anchor 或 alias 对有效监听的影响");
+                }
+
+                continue;
+            }
+
+            if (key == "<<")
+            {
+                limitations.Add("无法静态确认根级 merge/alias 对有效监听的影响");
+                continue;
+            }
+
+            if (!EffectiveListenerKeys.Contains(key))
+            {
+                continue;
+            }
+
+            if (!values.TryAdd(key, value))
+            {
+                limitations.Add($"重复的有效监听设置 {key}");
+            }
+        }
+
+        bool allowLan = false;
+        if (!values.TryGetValue("allow-lan", out string? rawAllowLan)
+            || !TryParseBoolean(rawAllowLan, out allowLan))
+        {
+            limitations.Add("无法静态确认有效 allow-lan");
+        }
+
+        IPAddress? proxyAddress = IPAddress.Loopback;
+        bool dualMode = false;
+        if (allowLan)
+        {
+            if (!values.TryGetValue("bind-address", out string? rawBindAddress))
+            {
+                // Mihomo documents '*' as the default bind address when LAN
+                // access is enabled. Go uses a dual-mode IPv6 wildcard on
+                // Windows where that listener family is available.
+                proxyAddress = IPAddress.IPv6Any;
+                dualMode = true;
+            }
+            else if (!TryParseScalar(rawBindAddress, out string bindAddress))
+            {
+                proxyAddress = null;
+                limitations.Add("无法静态确认有效 bind-address");
+            }
+            else if (bindAddress == "*")
+            {
+                proxyAddress = IPAddress.IPv6Any;
+                dualMode = true;
+            }
+            else if (!IPAddress.TryParse(bindAddress, out proxyAddress)
+                || proxyAddress.AddressFamily is not (AddressFamily.InterNetwork or AddressFamily.InterNetworkV6))
+            {
+                proxyAddress = null;
+                limitations.Add("bind-address 不是固定 IP 或 *");
+            }
+        }
+
+        List<LocalPortBinding> proxyBindings = [];
+        if (proxyAddress is not null)
+        {
+            AddPort("port", "http-tcp", PortTransport.Tcp);
+            AddPort("socks-port", "socks-tcp", PortTransport.Tcp);
+            AddPort("socks-port", "socks-udp", PortTransport.Udp);
+            AddPort("mixed-port", "mixed-tcp", PortTransport.Tcp);
+            AddPort("mixed-port", "mixed-udp", PortTransport.Udp);
+        }
+
+        MihomoListenerPlan additional = AnalyzeLines(lines, cancellationToken);
+        string? warning = limitations.Count == 0
+            ? null
+            : $"无法完整确认有效代理监听计划：{string.Join("、", limitations.Distinct().Take(4))}；将拒绝启动以避免对未知地址或端口作出就绪确认。";
+        return new MihomoEffectiveListenerPlan(
+            proxyBindings,
+            additional,
+            limitations.Count == 0,
+            warning);
+
+        void AddPort(string setting, string name, PortTransport transport)
+        {
+            if (!values.TryGetValue(setting, out string? rawPort))
+            {
+                // Mihomo defaults an omitted proxy port to disabled (zero).
+                return;
+            }
+
+            if (!TryParseScalar(rawPort, out string portText)
+                || !int.TryParse(portText, NumberStyles.None, CultureInfo.InvariantCulture, out int port)
+                || port is < 0 or > 65535)
+            {
+                limitations.Add($"无法静态确认有效 {setting}");
+                return;
+            }
+
+            if (port > 0)
+            {
+                proxyBindings.Add(new LocalPortBinding(name, proxyAddress!, port, transport, dualMode));
+            }
+        }
+    }
+
     internal static MihomoListenerPlan AnalyzeLines(
         IReadOnlyList<string> lines,
         CancellationToken cancellationToken = default)
@@ -60,8 +243,23 @@ internal static class MihomoListenerPlanAnalyzer
         for (int index = 0; index < lines.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!TryReadRootEntry(lines[index], out string key, out string value)
-                || key is not ("dns" or "listeners"))
+            if (!TryReadRootEntry(lines[index], out string key, out string value))
+            {
+                if (IsUnresolvedRootMapping(lines[index]))
+                {
+                    limitations.Add("根级 merge、anchor 或 alias 形式");
+                }
+
+                continue;
+            }
+
+            if (key == "<<")
+            {
+                limitations.Add("根级 merge/alias 形式");
+                continue;
+            }
+
+            if (key is not ("dns" or "listeners"))
             {
                 continue;
             }
@@ -114,10 +312,52 @@ internal static class MihomoListenerPlanAnalyzer
 
         bool? enabled = null;
         string? listen = null;
+        int childIndent = section
+            .Select(line => StripYamlComment(line))
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Select(GetIndent)
+            .Where(indent => indent > 0)
+            .DefaultIfEmpty(2)
+            .Min();
         foreach (string line in section)
         {
-            if (!TryReadChildEntry(line, expectedIndent: 2, out string key, out string value))
+            string content = StripYamlComment(line);
+            if (string.IsNullOrWhiteSpace(content))
             {
+                continue;
+            }
+
+            int indent = GetIndent(content);
+            if (indent < childIndent)
+            {
+                limitations.Add("无法静态读取 DNS 缩进结构");
+                continue;
+            }
+
+            if (indent != childIndent)
+            {
+                // DNS child mappings may contain unrelated nested provider or
+                // nameserver values. Merge/alias syntax can change effective
+                // enable/listen values at any level and is never guessed.
+                string nested = content[indent..].TrimStart();
+                if (nested.StartsWith("<<:", StringComparison.Ordinal)
+                    || ContainsYamlAnchorOrAlias(nested))
+                {
+                    limitations.Add("DNS merge、anchor 或 alias 形式");
+                }
+
+                continue;
+            }
+
+            if (!TrySplitMapping(content[indent..], out string key, out string value))
+            {
+                limitations.Add("无法静态读取 DNS 子项");
+                continue;
+            }
+
+            if (key == "<<" || ContainsYamlAnchorOrAlias(value))
+            {
+                limitations.Add("DNS merge、anchor 或 alias 形式");
                 continue;
             }
 
@@ -145,8 +385,14 @@ internal static class MihomoListenerPlanAnalyzer
             }
         }
 
-        if (enabled != true || string.IsNullOrWhiteSpace(listen))
+        if (enabled != true)
         {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(listen))
+        {
+            limitations.Add("DNS 已启用但缺少可确认的 listen 地址");
             return;
         }
 
@@ -191,6 +437,12 @@ internal static class MihomoListenerPlanAnalyzer
 
             int indent = GetIndent(content);
             string trimmed = content[indent..].TrimEnd();
+            if (trimmed.StartsWith("<<:", StringComparison.Ordinal)
+                || ContainsYamlAnchorOrAlias(trimmed))
+            {
+                limitations.Add("自定义 listener 的 merge、anchor 或 alias 形式");
+            }
+
             if (trimmed.StartsWith('-')
                 && (trimmed.Length == 1 || char.IsWhiteSpace(trimmed[1])))
             {
@@ -316,17 +568,17 @@ internal static class MihomoListenerPlanAnalyzer
         return TrySplitMapping(StripYamlComment(line), out key, out value);
     }
 
-    private static bool TryReadChildEntry(string line, int expectedIndent, out string key, out string value)
+    private static bool IsUnresolvedRootMapping(string line)
     {
-        key = string.Empty;
-        value = string.Empty;
-        string content = StripYamlComment(line);
-        if (string.IsNullOrWhiteSpace(content) || GetIndent(content) != expectedIndent)
+        if (line.Length == 0 || char.IsWhiteSpace(line[0]) || line[0] == '#')
         {
             return false;
         }
 
-        return TrySplitMapping(content[expectedIndent..], out key, out value);
+        string content = StripYamlComment(line).TrimStart();
+        return content.StartsWith("<<:", StringComparison.Ordinal)
+            || content.StartsWith('*')
+            || content.StartsWith('&');
     }
 
     private static bool TrySplitMapping(string line, out string key, out string value)
@@ -339,9 +591,62 @@ internal static class MihomoListenerPlanAnalyzer
             return false;
         }
 
-        key = line[..colon].Trim();
+        string rawKey = line[..colon].Trim();
         value = line[(colon + 1)..].Trim();
+        if (rawKey is "<<")
+        {
+            key = rawKey;
+            return true;
+        }
+
+        if (rawKey.Length >= 2
+            && (rawKey[0] == '\'' && rawKey[^1] == '\''
+                || rawKey[0] == '"' && rawKey[^1] == '"'))
+        {
+            rawKey = rawKey[1..^1];
+        }
+
+        key = rawKey;
         return key.Length > 0 && key.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+    }
+
+    private static bool ContainsYamlAnchorOrAlias(string value)
+    {
+        bool singleQuoted = false;
+        bool doubleQuoted = false;
+        bool escaped = false;
+        for (int index = 0; index < value.Length; index++)
+        {
+            char current = value[index];
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (doubleQuoted && current == '\\')
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (!doubleQuoted && current == '\'')
+            {
+                singleQuoted = !singleQuoted;
+            }
+            else if (!singleQuoted && current == '"')
+            {
+                doubleQuoted = !doubleQuoted;
+            }
+            else if (!singleQuoted && !doubleQuoted
+                && (current == '&' || current == '*')
+                && (index == 0 || char.IsWhiteSpace(value[index - 1])))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryParseScalar(string value, out string scalar)

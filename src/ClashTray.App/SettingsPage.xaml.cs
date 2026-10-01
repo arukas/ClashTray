@@ -662,8 +662,23 @@ public sealed partial class SettingsPage : UserControl
         StartWithAvailableControllerPortButton.IsEnabled = false;
         try
         {
-            await _runtime.StartCoreUsingAvailableControllerPortOnceAsync();
-            StatusText.Text = LocalizationService.Get("ControllerPortOneTimeStartSucceeded");
+            CoreStartOperationResult result = await _runtime.StartCoreUsingAvailableControllerPortOnceAsync();
+            StatusText.Text = result.Outcome switch
+            {
+                CoreStartOutcome.Started => LocalizationService.Format(
+                    "ControllerPortOneTimeStartSucceeded",
+                    result.ConfirmedControllerPort ?? 0),
+                CoreStartOutcome.AlreadyRunning => LocalizationService.Get("ControllerPortOneTimeStartAlreadyRunning"),
+                CoreStartOutcome.Busy => LocalizationService.Get("ControllerPortOneTimeStartBusy"),
+                CoreStartOutcome.CoreMissing => LocalizationService.Get("ControllerPortOneTimeStartCoreMissing"),
+                CoreStartOutcome.ConfigurationMissing => LocalizationService.Get("ControllerPortOneTimeStartConfigurationMissing"),
+                CoreStartOutcome.InvalidConfiguration => LocalizationService.Get("ControllerPortOneTimeStartInvalidConfiguration"),
+                CoreStartOutcome.PortConflict => LocalizationService.Get("ControllerPortOneTimeStartPortConflict"),
+                CoreStartOutcome.ControllerCandidatesExhausted => LocalizationService.Get("ControllerPortOneTimeStartCandidatesExhausted"),
+                CoreStartOutcome.TimedOut => LocalizationService.Get("ControllerPortOneTimeStartTimedOut"),
+                CoreStartOutcome.Cancelled => LocalizationService.Get("ControllerPortOneTimeStartCancelled"),
+                _ => LocalizationService.Get("ControllerPortOneTimeStartFailed")
+            };
         }
         catch (Exception exception)
         {

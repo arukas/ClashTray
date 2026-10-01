@@ -173,8 +173,18 @@
   <data name="ControllerActualAddressFormat" xml:space="preserve"><value>当前实际管理地址：127.0.0.1:{0}</value></data>
   <data name="ControllerActualAddressNotConfirmed" xml:space="preserve"><value>当前实际管理地址尚未确认。</value></data>
   <data name="StartWithAvailableControllerPortButton.Content" xml:space="preserve"><value>本次使用可用控制器端口并启动</value></data>
-  <data name="ControllerPortOneTimeStartSucceeded" xml:space="preserve"><value>已使用本次确认的可用控制器端口启动核心；保存的首选端口未更改。</value></data>
+  <data name="ControllerPortOneTimeStartSucceeded" xml:space="preserve"><value>已在控制器端口 {0} 确认核心运行；保存的首选端口未更改。</value></data>
   <data name="ControllerPortOneTimeStartFailedFormat" xml:space="preserve"><value>使用可用端口启动失败：{0}</value></data>
+  <data name="ControllerPortOneTimeStartAlreadyRunning" xml:space="preserve"><value>核心已在运行；本次操作没有更改控制器端口。</value></data>
+  <data name="ControllerPortOneTimeStartBusy" xml:space="preserve"><value>另一个核心操作正在进行，请稍后重试。</value></data>
+  <data name="ControllerPortOneTimeStartCoreMissing" xml:space="preserve"><value>未找到 Mihomo 核心，请先在设置中安装或选择 mihomo.exe。</value></data>
+  <data name="ControllerPortOneTimeStartConfigurationMissing" xml:space="preserve"><value>请先导入一个 Mihomo 配置，然后再启动核心。</value></data>
+  <data name="ControllerPortOneTimeStartInvalidConfiguration" xml:space="preserve"><value>Mihomo 配置验证失败；请检查 YAML 和核心验证结果。</value></data>
+  <data name="ControllerPortOneTimeStartPortConflict" xml:space="preserve"><value>代理或控制器监听端口冲突；核心未确认启动。</value></data>
+  <data name="ControllerPortOneTimeStartCandidatesExhausted" xml:space="preserve"><value>未找到可用的控制器端口；候选端口数量已达到上限。</value></data>
+  <data name="ControllerPortOneTimeStartTimedOut" xml:space="preserve"><value>启动超时，未确认核心运行；系统代理不会按本次操作启用。</value></data>
+  <data name="ControllerPortOneTimeStartCancelled" xml:space="preserve"><value>核心启动已取消，未将其报告为成功。</value></data>
+  <data name="ControllerPortOneTimeStartFailed" xml:space="preserve"><value>未能确认核心运行；请检查核心状态和诊断日志。</value></data>
   <data name="BypassListBox.Header" xml:space="preserve"><value>系统代理绕过列表</value></data>
   <data name="BypassListBox.PlaceholderText" xml:space="preserve"><value>使用分号分隔，例如 localhost;127.*</value></data>
   <data name="SubscriptionRefreshHeader.Text" xml:space="preserve"><value>订阅刷新间隔</value></data>

@@ -146,7 +146,9 @@ public sealed partial class ClashTrayRuntime
                     cancellationToken);
             }
 
-            if (enabled && !CanEnableSystemProxy)
+            int confirmedMixedPort = 0;
+            bool mixedListenerConfirmed = enabled && TryGetConfirmedMixedPort(out confirmedMixedPort);
+            if (enabled && !mixedListenerConfirmed)
             {
                 await RevokeSystemProxyForCoreLossAsync(operationLease ?? ownedLease!);
                 string? message = CoreHealthConfirmed
@@ -165,7 +167,7 @@ public sealed partial class ClashTrayRuntime
             Publish();
             if (enabled)
             {
-                await _localDevice.EnableSystemProxyAsync(_settings.MixedPort, _settings.BypassList, cancellationToken);
+                await _localDevice.EnableSystemProxyAsync(confirmedMixedPort, _settings.BypassList, cancellationToken);
             }
             else
             {
