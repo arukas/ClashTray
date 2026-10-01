@@ -36,6 +36,8 @@ public sealed class RuntimeLogCoordinatorTests
 
         logs.AddMihomoLog(entry);
 
+        Assert.AreEqual(0, store.Snapshot.Logs.Count);
+        logs.FlushPendingLogs();
         Assert.AreEqual(1, store.Snapshot.Logs.Count);
         Assert.AreEqual(1, throttled);
         Assert.AreEqual(0, published);
@@ -48,11 +50,39 @@ public sealed class RuntimeLogCoordinatorTests
         using RuntimeLogCoordinator logs = CreateCoordinator(store, () => { }, () => { });
 
         logs.OnProcessLogLine("boom", true);
+        logs.FlushPendingLogs();
 
         LogEntry entry = store.Snapshot.Logs[0];
         Assert.AreEqual("mihomo", entry.Source);
         Assert.AreEqual("error", entry.Level);
         Assert.AreEqual("boom", entry.Message);
+    }
+
+    [TestMethod]
+    public void LogBurstPublishesOneBoundedSnapshotAndClearDoesNotResurrectPendingLines()
+    {
+        RuntimeStateStore store = new(CreateSnapshot());
+        using RuntimeLogCoordinator logs = CreateCoordinator(store, static () => { }, static () => { });
+        RuntimeSnapshot before = store.Snapshot;
+        for (int i = 0; i < 10_000; i++)
+        {
+            logs.AddMihomoLog(new LogEntry(DateTimeOffset.UnixEpoch, "mihomo", "info", $"line {i}"));
+        }
+
+        Assert.AreSame(before, store.Snapshot);
+        logs.FlushPendingLogs();
+        Assert.AreEqual(500, store.Snapshot.Logs.Count);
+        Assert.AreEqual("line 9999", store.Snapshot.Logs[^1].Message);
+        RuntimeSnapshot flushed = store.Snapshot;
+        logs.FlushPendingLogs();
+        Assert.AreSame(flushed, store.Snapshot);
+        logs.ClearLogs();
+        logs.FlushPendingLogs();
+        Assert.AreEqual(0, store.Snapshot.Logs.Count);
+        logs.AddMihomoLog(new LogEntry(DateTimeOffset.UnixEpoch, "mihomo", "info", "pending"));
+        logs.AddApplicationLog(new LogEntry(DateTimeOffset.UnixEpoch, "ClashTray", "error", "operation failed"));
+        Assert.AreEqual(2, store.Snapshot.Logs.Count);
+        Assert.AreEqual("operation failed", store.Snapshot.Logs[^1].Message);
     }
 
     [TestMethod]

@@ -123,7 +123,11 @@ internal sealed class RemoteControllerRefreshCoordinator : IDisposable
                 && currentData.Generation == status.Generation
                 && currentData.SelectionRevision == status.SelectionRevision)
             {
-                remoteData = currentData.Snapshot;
+                IReadOnlyList<LogEntry> logs = _logBuffer.Snapshot();
+                remoteData = ReferenceEquals(currentData.Snapshot.Logs, logs)
+                    ? currentData.Snapshot
+                    : currentData.Snapshot with { Logs = logs };
+                _controllerData = currentData with { Snapshot = remoteData };
             }
         }
 
@@ -772,13 +776,6 @@ internal sealed class RemoteControllerRefreshCoordinator : IDisposable
             }
 
             _logBuffer.Add(entry);
-            _controllerData = currentData with
-            {
-                Snapshot = currentData.Snapshot with
-                {
-                    Logs = _logBuffer.Snapshot()
-                }
-            };
         }
 
         _queueThrottledPublish();

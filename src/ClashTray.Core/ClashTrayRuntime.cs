@@ -243,7 +243,14 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
         _processManager.LogLineReceived += _logs.OnProcessLogLine;
     }
 
-    public RuntimeSnapshot Snapshot => _stateStore.Snapshot;
+    public RuntimeSnapshot Snapshot
+    {
+        get
+        {
+            _logs.FlushPendingLogs();
+            return _stateStore.Snapshot;
+        }
+    }
 
     public CoreRuntimeBinding? ActiveRuntimeBinding => Volatile.Read(ref _runtimeBinding);
 

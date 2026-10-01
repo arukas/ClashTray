@@ -10,6 +10,12 @@ if (args.Contains("--listener-ownership", StringComparer.Ordinal))
     return;
 }
 
+if (args.Contains("--log-snapshots", StringComparer.Ordinal))
+{
+    ClashTray.PerformanceHarness.LogSnapshotBenchmark.Run();
+    return;
+}
+
 string root = Path.Combine(Path.GetTempPath(), "ClashTrayPerformanceHarness", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 try

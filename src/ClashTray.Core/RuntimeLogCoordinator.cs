@@ -22,6 +22,7 @@ internal sealed class RuntimeLogCoordinator : IDisposable
     private readonly object _logStreamGate = new();
     private CancellationTokenSource? _logStreamCts;
     private Task? _logStreamTask;
+    private int _snapshotPending;
 
     public RuntimeLogCoordinator(
         RuntimeStateStore stateStore,
@@ -49,16 +50,31 @@ internal sealed class RuntimeLogCoordinator : IDisposable
 
     internal IReadOnlyList<LogEntry> Snapshot() => _logBuffer.Snapshot();
 
+    internal void FlushPendingLogs()
+    {
+        if (Interlocked.Exchange(ref _snapshotPending, 0) == 0)
+        {
+            return;
+        }
+
+        _stateStore.Update(snapshot =>
+        {
+            IReadOnlyList<LogEntry> logs = _logBuffer.Snapshot();
+            return ReferenceEquals(snapshot.Logs, logs) ? snapshot : snapshot with { Logs = logs };
+        });
+    }
+
     internal void AddApplicationLog(LogEntry entry)
     {
         _logBuffer.Add(entry);
-        _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
+        Volatile.Write(ref _snapshotPending, 1);
+        FlushPendingLogs();
     }
 
     internal void AddMihomoLog(LogEntry entry)
     {
         _logBuffer.Add(entry);
-        _stateStore.Update(snapshot => snapshot with { Logs = _logBuffer.Snapshot() });
+        Volatile.Write(ref _snapshotPending, 1);
         _queueThrottledPublish();
     }
 
