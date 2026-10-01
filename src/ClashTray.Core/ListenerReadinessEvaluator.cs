@@ -94,7 +94,7 @@ internal static class ListenerReadinessEvaluator
             return new ListenerReadinessResult(
                 ListenerReadinessDisposition.ForeignOwner,
                 foreign[0].Binding.Name,
-                foreign[0].Observation.Detail);
+                Describe(foreign[0].Binding, foreign[0].Observation));
         }
 
         if (observations.All(item => item.Observation.State == ListenerOwnerState.Owned))
@@ -111,7 +111,7 @@ internal static class ListenerReadinessEvaluator
             return new ListenerReadinessResult(
                 ListenerReadinessDisposition.OwnershipUnknown,
                 unknown[0].Binding.Name,
-                unknown[0].Observation.Detail);
+                Describe(unknown[0].Binding, unknown[0].Observation));
         }
 
         (LocalPortBinding Binding, ListenerOwnerObservation Observation) missing = observations
@@ -119,6 +119,14 @@ internal static class ListenerReadinessEvaluator
         return new ListenerReadinessResult(
             ListenerReadinessDisposition.WaitingForListener,
             missing.Binding.Name,
-            missing.Observation.Detail);
+            Describe(missing.Binding, missing.Observation));
+    }
+
+    internal static string Describe(LocalPortBinding listener, ListenerOwnerObservation observation)
+    {
+        string address = listener.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
+            ? $"[{listener.Address}]" : listener.Address.ToString();
+        return $"{listener.Name} {address}:{listener.Port} {listener.Transport} {observation.State}."
+            + (string.IsNullOrWhiteSpace(observation.Detail) ? string.Empty : $" {ErrorSanitizer.Sanitize(observation.Detail)}");
     }
 }

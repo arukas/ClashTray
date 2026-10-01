@@ -6,6 +6,24 @@ namespace ClashTray.Core.Tests;
 public sealed class ListenerReadinessEvaluatorTests
 {
     [TestMethod]
+    [DataRow((int)ListenerOwnerState.Missing)]
+    [DataRow((int)ListenerOwnerState.Unknown)]
+    public void WaitingDiagnosticsIdentifyTheExactListener(int ownerState)
+    {
+        ListenerOwnerState state = (ListenerOwnerState)ownerState;
+        LocalPortBinding binding = new("dns-udp", IPAddress.Parse("127.0.0.2"), 15353, PortTransport.Udp);
+        ListenerReadinessResult result = ListenerReadinessEvaluator.Evaluate([binding], [],
+            _ => new ListenerOwnerObservation(state, "query detail"));
+
+        string detail = result.Detail ?? string.Empty;
+        StringAssert.Contains(detail, "dns-udp", StringComparison.Ordinal);
+        StringAssert.Contains(detail, "127.0.0.2:15353", StringComparison.Ordinal);
+        StringAssert.Contains(detail, "Udp", StringComparison.Ordinal);
+        StringAssert.Contains(detail, state.ToString(), StringComparison.Ordinal);
+        StringAssert.Contains(detail, "query detail", StringComparison.Ordinal);
+    }
+
+    [TestMethod]
     public void OwnedTcpBeforeMissingUdpWaitsThenAdvancesToAdditionalListeners()
     {
         LocalPortBinding[] proxyListeners =
@@ -84,6 +102,6 @@ public sealed class ListenerReadinessEvaluatorTests
                 binding.Name == "socks-udp" ? ListenerOwnerState.Unknown : ListenerOwnerState.Owned,
                 "owner table unavailable"));
         Assert.AreEqual(ListenerReadinessDisposition.OwnershipUnknown, unknown.Disposition);
-        Assert.AreEqual("owner table unavailable", unknown.Detail);
+        StringAssert.Contains(unknown.Detail, "owner table unavailable", StringComparison.Ordinal);
     }
 }

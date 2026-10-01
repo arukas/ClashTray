@@ -39,6 +39,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private readonly Action _restoreOwnedProxyStates;
     private readonly Action<int>? _beforeCoreStartForTest;
     private readonly Func<int, CancellationToken, Task>? _afterCoreStartForTest;
+    private readonly Func<LocalPortBinding, LocalCoreProcessIdentity, ListenerOwnerObservation>? _listenerInspectorForTest;
     private readonly TimeSpan _defaultOperationTimeout;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly object _requestCacheGate = new();
@@ -76,13 +77,15 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         Action? restoreOwnedProxyStates = null,
         Action<int>? beforeCoreStartForTest = null,
         Func<int, CancellationToken, Task>? afterCoreStartForTest = null,
-        TimeSpan? operationTimeoutForTest = null)
+        TimeSpan? operationTimeoutForTest = null,
+        Func<LocalPortBinding, LocalCoreProcessIdentity, ListenerOwnerObservation>? listenerInspectorForTest = null)
     {
         _paths = paths ?? new AppPaths();
         _logger = loggerFactory?.CreateLogger<ServiceRuntimeController>() ?? NullLogger<ServiceRuntimeController>.Instance;
         _restoreOwnedProxyStates = restoreOwnedProxyStates ?? SystemProxyRecovery.RestoreOwnedStatesForLoadedUsers;
         _beforeCoreStartForTest = beforeCoreStartForTest;
         _afterCoreStartForTest = afterCoreStartForTest;
+        _listenerInspectorForTest = listenerInspectorForTest;
         _defaultOperationTimeout = operationTimeoutForTest ?? DefaultOperationTimeout;
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_defaultOperationTimeout, TimeSpan.Zero);
         _restoreOwnedProxyStates = restoreOwnedProxyStates ?? SystemProxyRecovery.RestoreOwnedStatesForLoadedUsers;
@@ -217,10 +220,12 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             MarkCachedRequestCompleting(cached);
             cached.Completion.TrySetCanceled(_lifetimeCts.Token);
         }
-        catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
+        catch (OperationCanceledException exception) when (operationToken.IsCancellationRequested)
         {
             MarkCachedRequestCompleting(cached);
-            cached.Completion.TrySetResult(Failure(request, "ClashTray 服务操作超过执行期限。",
+            string detail = exception is ListenerReadinessCancelledException readinessCancelled
+                ? $" {readinessCancelled.Diagnostic}" : string.Empty;
+            cached.Completion.TrySetResult(Failure(request, $"ClashTray 服务操作超过执行期限。{detail}",
                 _processManager.State, ServiceErrorCode.OperationTimedOut));
         }
         catch (Exception exception)
@@ -816,154 +821,155 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         MihomoEffectiveListenerPlan listenerPlan,
         CancellationToken cancellationToken)
     {
-        using CancellationTokenSource timeout = CreateTimeout(DefaultOperationTimeout, cancellationToken);
-        DateTimeOffset deadline = DateTimeOffset.UtcNow + DefaultOperationTimeout;
-        Exception? lastError = null;
-        while (DateTimeOffset.UtcNow < deadline)
+        using ListenerReadinessDeadline readinessDeadline = new(_defaultOperationTimeout, cancellationToken);
+        try
         {
-            timeout.Token.ThrowIfCancellationRequested();
-            if (!IsProcessIdentityCurrent(processIdentity, processGeneration, instanceId))
+            while (true)
             {
-                throw new CoreStartException(
-                    ServiceErrorCode.CoreReadinessFailed,
-                    "受管 Mihomo 进程在监听就绪前退出或代际发生变化。");
-            }
-
-            ListenerOwnerObservation controllerOwner = WindowsListenerOwnerTable.InspectListener(
-                IPAddress.Loopback,
-                controllerPort,
-                PortTransport.Tcp,
-                processIdentity);
-            if (controllerOwner.State == ListenerOwnerState.Foreign)
-            {
-                throw new CoreStartException(
-                    ServiceErrorCode.ControllerOwnershipUnconfirmed,
-                    "控制器端口已被另一进程占用；未向该端口发送控制器请求，正在回收本次启动。");
-            }
-
-            if (controllerOwner.State != ListenerOwnerState.Owned)
-            {
-                lastError = new TimeoutException(
-                    controllerOwner.State == ListenerOwnerState.Unknown
-                        ? $"控制器 owner 尚不可确认：{controllerOwner.Detail}"
-                        : "等待受管 Mihomo 控制器监听就绪。");
-                await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token).ConfigureAwait(false);
-                continue;
-            }
-
-            try
-            {
-                if (_api is null)
-                {
-                    throw new ManagedCoreOwnershipException();
-                }
-
-                using JsonDocument configuration = await _api.GetConfigurationAsync(false, timeout.Token)
-                    .ConfigureAwait(false);
-                if (!TryValidateReadyListeners(
-                    configuration,
-                    payload,
-                    out MihomoListenerPorts listenerPorts,
-                    out ServiceErrorCode errorCode,
-                    out string? message))
-                {
-                    if (errorCode == ServiceErrorCode.ProxyPortConflict)
-                    {
-                        throw new CoreStartException(errorCode, message ?? "Mihomo 代理监听未就绪。");
-                    }
-
-                    throw new CoreStartException(errorCode, message ?? "Mihomo 控制器配置与本次启动不匹配。");
-                }
-
-                if (MihomoDataParser.ParseTunEnabled(configuration) is not false)
+                readinessDeadline.Token.ThrowIfCancellationRequested();
+                if (!IsProcessIdentityCurrent(processIdentity, processGeneration, instanceId))
                 {
                     throw new CoreStartException(
                         ServiceErrorCode.CoreReadinessFailed,
-                        "Mihomo 有效配置未确认 TUN 关闭，拒绝提交启动就绪状态。");
+                        "受管 Mihomo 进程在监听就绪前退出或代际发生变化。");
                 }
 
-                ListenerReadinessResult listenerReadiness = ListenerReadinessEvaluator.Evaluate(
-                    listenerPlan.ProxyBindings,
-                    listenerPlan.AdditionalListenerPlan.Bindings,
-                    listener => WindowsListenerOwnerTable.InspectListener(
-                        listener.Address,
-                        listener.Port,
-                        listener.Transport,
-                        processIdentity,
-                        listener.DualMode));
-                if (listenerReadiness.Disposition == ListenerReadinessDisposition.ForeignOwner)
-                {
-                    throw new CoreStartException(
-                        ServiceErrorCode.ProxyPortConflict,
-                        $"{listenerReadiness.ListenerName} 监听由其他进程占用：{listenerReadiness.Detail ?? "无法确认当前核心持有该监听。"}");
-                }
-
-                if (listenerReadiness.Disposition != ListenerReadinessDisposition.Ready)
-                {
-                    lastError = listenerReadiness.Disposition == ListenerReadinessDisposition.OwnershipUnknown
-                        ? new IOException($"{listenerReadiness.ListenerName} owner 尚不可确认：{listenerReadiness.Detail}")
-                        : new TimeoutException($"等待 {listenerReadiness.ListenerName} 监听就绪。");
-                    await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token).ConfigureAwait(false);
-                    continue;
-                }
-
-                bool httpReady = listenerPorts.Http is > 0 && payload.HttpPort > 0;
-                bool socksReady = listenerPorts.Socks is > 0 && payload.SocksPort > 0;
-                bool mixedReady = listenerPorts.Mixed is > 0 && payload.MixedPort > 0;
-                return new CoreRuntimeBinding(
-                    payload.ControllerPort,
-                    controllerPort,
-                    instanceId,
-                    _processManager.OwnerInstanceId,
-                    processIdentity.ProcessId,
-                    processIdentity.StartTimeUtcTicks,
-                    processGeneration,
-                    listenerPorts.Http ?? 0,
-                    listenerPorts.Socks ?? 0,
-                    listenerPorts.Mixed ?? 0,
-                    ControllerReady: true,
-                    httpReady,
-                    socksReady,
-                    mixedReady,
-                    processIdentity.ExecutablePath,
-                    listenerPlan.IsComplete,
-                    listenerPlan.AdditionalListenerPlan.ToContractBindings(),
-                    listenerPlan.Warning,
-                    CreateRuntimeListenerBindings(controllerPort, listenerPlan));
-            }
-            catch (ManagedCoreOwnershipException exception)
-            {
-                ListenerOwnerObservation controllerAfterRequest = WindowsListenerOwnerTable.InspectListener(
+                ListenerOwnerObservation controllerOwner = WindowsListenerOwnerTable.InspectListener(
                     IPAddress.Loopback,
                     controllerPort,
                     PortTransport.Tcp,
                     processIdentity);
-                if (controllerAfterRequest.State == ListenerOwnerState.Foreign)
+                readinessDeadline.Observe(
+                    new LocalPortBinding("controller", IPAddress.Loopback, controllerPort, PortTransport.Tcp), controllerOwner);
+                if (controllerOwner.State == ListenerOwnerState.Foreign)
                 {
                     throw new CoreStartException(
                         ServiceErrorCode.ControllerOwnershipUnconfirmed,
-                        "控制器端口不属于当前受管核心；已阻止控制器请求。",
-                        exception);
+                        "控制器端口已被另一进程占用；未向该端口发送控制器请求，正在回收本次启动。");
                 }
 
-                lastError = exception;
-            }
-            catch (HttpRequestException exception)
-            {
-                lastError = exception;
-            }
-            catch (TimeoutException exception)
-            {
-                lastError = exception;
-            }
+                if (controllerOwner.State != ListenerOwnerState.Owned)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(100), readinessDeadline.Token).ConfigureAwait(false);
+                    continue;
+                }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(100), timeout.Token).ConfigureAwait(false);
+                try
+                {
+                    if (_api is null)
+                    {
+                        throw new ManagedCoreOwnershipException();
+                    }
+
+                    using JsonDocument configuration = await _api.GetConfigurationAsync(false, readinessDeadline.Token)
+                        .ConfigureAwait(false);
+                    if (!TryValidateReadyListeners(
+                        configuration,
+                        payload,
+                        out MihomoListenerPorts listenerPorts,
+                        out ServiceErrorCode errorCode,
+                        out string? message))
+                    {
+                        if (errorCode == ServiceErrorCode.ProxyPortConflict)
+                        {
+                            throw new CoreStartException(errorCode, message ?? "Mihomo 代理监听未就绪。");
+                        }
+
+                        throw new CoreStartException(errorCode, message ?? "Mihomo 控制器配置与本次启动不匹配。");
+                    }
+
+                    if (MihomoDataParser.ParseTunEnabled(configuration) is not false)
+                    {
+                        throw new CoreStartException(
+                            ServiceErrorCode.CoreReadinessFailed,
+                            "Mihomo 有效配置未确认 TUN 关闭，拒绝提交启动就绪状态。");
+                    }
+
+                    ListenerReadinessResult listenerReadiness = ListenerReadinessEvaluator.Evaluate(
+                        listenerPlan.ProxyBindings,
+                        listenerPlan.AdditionalListenerPlan.Bindings,
+                        listener => _listenerInspectorForTest?.Invoke(listener, processIdentity)
+                            ?? WindowsListenerOwnerTable.InspectListener(
+                            listener.Address,
+                            listener.Port,
+                            listener.Transport,
+                            processIdentity,
+                            listener.DualMode));
+                    readinessDeadline.Observe(listenerReadiness);
+                    if (listenerReadiness.Disposition == ListenerReadinessDisposition.ForeignOwner)
+                    {
+                        throw new CoreStartException(
+                            ServiceErrorCode.ProxyPortConflict,
+                            $"{listenerReadiness.ListenerName} 监听由其他进程占用：{listenerReadiness.Detail ?? "无法确认当前核心持有该监听。"}");
+                    }
+
+                    if (listenerReadiness.Disposition != ListenerReadinessDisposition.Ready)
+                    {
+                        await Task.Delay(TimeSpan.FromMilliseconds(100), readinessDeadline.Token).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    bool httpReady = listenerPorts.Http is > 0 && payload.HttpPort > 0;
+                    bool socksReady = listenerPorts.Socks is > 0 && payload.SocksPort > 0;
+                    bool mixedReady = listenerPorts.Mixed is > 0 && payload.MixedPort > 0;
+                    return new CoreRuntimeBinding(
+                        payload.ControllerPort,
+                        controllerPort,
+                        instanceId,
+                        _processManager.OwnerInstanceId,
+                        processIdentity.ProcessId,
+                        processIdentity.StartTimeUtcTicks,
+                        processGeneration,
+                        listenerPorts.Http ?? 0,
+                        listenerPorts.Socks ?? 0,
+                        listenerPorts.Mixed ?? 0,
+                        ControllerReady: true,
+                        httpReady,
+                        socksReady,
+                        mixedReady,
+                        processIdentity.ExecutablePath,
+                        listenerPlan.IsComplete,
+                        listenerPlan.AdditionalListenerPlan.ToContractBindings(),
+                        listenerPlan.Warning,
+                        CreateRuntimeListenerBindings(controllerPort, listenerPlan));
+                }
+                catch (ManagedCoreOwnershipException exception)
+                {
+                    ListenerOwnerObservation controllerAfterRequest = WindowsListenerOwnerTable.InspectListener(
+                        IPAddress.Loopback,
+                        controllerPort,
+                        PortTransport.Tcp,
+                        processIdentity);
+                    if (controllerAfterRequest.State == ListenerOwnerState.Foreign)
+                    {
+                        throw new CoreStartException(
+                            ServiceErrorCode.ControllerOwnershipUnconfirmed,
+                            "控制器端口不属于当前受管核心；已阻止控制器请求。",
+                            exception);
+                    }
+
+                    readinessDeadline.RecordError(exception);
+                }
+                catch (HttpRequestException exception)
+                {
+                    readinessDeadline.RecordError(exception);
+                }
+                catch (TimeoutException exception)
+                {
+                    readinessDeadline.RecordError(exception);
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(100), readinessDeadline.Token).ConfigureAwait(false);
+            }
         }
-
-        throw new CoreStartException(
-            ServiceErrorCode.OperationTimedOut,
-            $"Mihomo 在 30 秒内未完成控制器和必需代理监听确认。{(lastError is null ? string.Empty : $" {ErrorSanitizer.Sanitize(lastError)}")}",
-            lastError);
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw readinessDeadline.CreateTimeoutException(exception);
+        }
+        catch (OperationCanceledException exception)
+        {
+            throw readinessDeadline.CreateCancellationException(exception);
+        }
     }
 
     private static List<RuntimeListenerBinding> CreateRuntimeListenerBindings(

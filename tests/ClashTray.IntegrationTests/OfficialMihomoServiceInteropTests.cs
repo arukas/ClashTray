@@ -856,6 +856,52 @@ public sealed class OfficialMihomoServiceInteropTests
         }
     }
 
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
+    [DataRow((int)ListenerOwnerState.Missing)]
+    [DataRow((int)ListenerOwnerState.Unknown)]
+    public async Task ServiceReadinessTimeoutRetainsLastUdpObservation(int ownerState)
+    {
+        string? executablePath = FindMihomoExecutable();
+        if (executablePath is null)
+        {
+            Assert.Inconclusive("Official pinned Mihomo is required for readiness timeout diagnostics.");
+            return;
+        }
+
+        (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
+        try
+        {
+            int controllerPort = GetAvailableLoopbackPort();
+            int mixedPort = GetAvailableLoopbackPort();
+            string configurationPath = Path.Combine(runtimeDirectory, "readiness-timeout.yaml");
+            await File.WriteAllTextAsync(configurationPath, BuildConflictConfiguration(controllerPort, mixedPort));
+            await using ServiceRuntimeController controller = new(paths, managedUserSid: null,
+                tunHealthProbe: new DisabledTunNetworkHealthProbe(), restoreOwnedProxyStates: static () => { },
+                operationTimeoutForTest: TimeSpan.FromSeconds(3),
+                listenerInspectorForTest: (listener, identity) => listener.Name == "mixed-udp"
+                    ? new ListenerOwnerObservation((ListenerOwnerState)ownerState, "deterministic UDP observation")
+                    : WindowsListenerOwnerTable.InspectListener(listener.Address, listener.Port,
+                        listener.Transport, identity, listener.DualMode));
+
+            ServiceResponse response = await StartServiceCoreAsync(controller,
+                new ServiceCorePayload(configurationPath, runtimeDirectory, controllerPort, string.Empty, MixedPort: mixedPort));
+
+            Assert.IsFalse(response.Succeeded);
+            Assert.AreEqual(ServiceErrorCode.OperationTimedOut, response.ErrorCode);
+            StringAssert.Contains(response.Error, "mixed-udp", StringComparison.Ordinal);
+            StringAssert.Contains(response.Error, $"127.0.0.1:{mixedPort}", StringComparison.Ordinal);
+            StringAssert.Contains(response.Error, "Udp", StringComparison.Ordinal);
+            StringAssert.Contains(response.Error, ((ListenerOwnerState)ownerState).ToString(), StringComparison.Ordinal);
+            StringAssert.Contains(response.Error, "deterministic UDP observation", StringComparison.Ordinal);
+            Assert.AreEqual(CoreState.Stopped, controller.CoreState);
+        }
+        finally
+        {
+            await DeleteTemporaryDirectoryAsync(root);
+        }
+    }
+
     private static async Task<ServiceResponse> StartServiceCoreAsync(
         ServiceRuntimeController controller,
         ServiceCorePayload payload) => await controller.HandleAsync(
