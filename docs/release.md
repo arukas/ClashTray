@@ -24,7 +24,7 @@ Get-FileHash .\packaging\out\0.3.1\full\ClashTray-0.3.1-win-x64-Full.exe -Algori
 
 ## 发布前检查
 
-1. 在干净 Windows x64 环境运行 `dotnet restore`、`dotnet build` 和 `dotnet test`。
+1. 在干净 Windows x64 环境运行 `dotnet restore ClashTray.sln`、`dotnet build ClashTray.sln -c Release -p:Platform=x64 --no-restore` 和带相同 `-p:Platform=x64` 的 `dotnet test --no-build`。解决方案的 x64 配置直接构建 x64 Core/Integration 测试产物；官方 Mihomo 门禁、CI 直接项目测试和 Release 解决方案测试使用同一平台，不依赖本机额外构建或遗留输出。
 2. 构建两种变体，检查文件存在、SHA-256 sidecar 和体积报告。
 3. 两种变体都验证官方 Mihomo archive 的版本、架构、PE 头和 SHA-256；同时保留 `Mihomo-LICENSE.txt` 与 `Mihomo-Release.txt`。两种变体都验证 MetaCubeXD `compressed-dist.tgz` 的固定版本和 SHA-256，并保留 `MetaCubeXD-LICENSE.txt` 与 `MetaCubeXD-Release.txt`。
 4. 验证首次安装、升级、卸载保留/删除数据、代理状态恢复、TUN 失败回滚和服务重启。

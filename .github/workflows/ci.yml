@@ -38,10 +38,10 @@ jobs:
         run: .\packaging\Test-OfficialMihomo.ps1 -Configuration Release
 
       - name: Test (integration)
-        run: dotnet test tests/ClashTray.IntegrationTests/ClashTray.IntegrationTests.csproj --configuration Release --no-build --logger "trx;LogFileName=integration-test-results.trx"
+        run: dotnet test tests/ClashTray.IntegrationTests/ClashTray.IntegrationTests.csproj --configuration Release --property:Platform=x64 --no-build --logger "trx;LogFileName=integration-test-results.trx"
 
       - name: Test (core, with coverage)
-        run: dotnet test tests/ClashTray.Core.Tests/ClashTray.Core.Tests.csproj --configuration Release --no-build --collect:"XPlat Code Coverage" --logger "trx;LogFileName=core-test-results.trx" -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+        run: dotnet test tests/ClashTray.Core.Tests/ClashTray.Core.Tests.csproj --configuration Release --property:Platform=x64 --no-build --collect:"XPlat Code Coverage" --logger "trx;LogFileName=core-test-results.trx" -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
 
       - name: Coverage gate (ClashTray.Core)
         shell: pwsh
