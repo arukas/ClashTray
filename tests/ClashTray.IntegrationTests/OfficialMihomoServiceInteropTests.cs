@@ -858,9 +858,15 @@ public sealed class OfficialMihomoServiceInteropTests
 
     [TestMethod]
     [TestCategory("RequiresOfficialMihomo")]
-    [DataRow((int)ListenerOwnerState.Missing)]
-    [DataRow((int)ListenerOwnerState.Unknown)]
-    public async Task ServiceReadinessTimeoutRetainsLastUdpObservation(int ownerState)
+    public Task ServiceReadinessTimeoutRetainsMissingUdpObservation() =>
+        VerifyServiceReadinessTimeoutAsync(ListenerOwnerState.Missing);
+
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
+    public Task ServiceReadinessTimeoutRetainsUnknownUdpObservation() =>
+        VerifyServiceReadinessTimeoutAsync(ListenerOwnerState.Unknown);
+
+    private static async Task VerifyServiceReadinessTimeoutAsync(ListenerOwnerState ownerState)
     {
         string? executablePath = FindMihomoExecutable();
         if (executablePath is null)
@@ -880,7 +886,7 @@ public sealed class OfficialMihomoServiceInteropTests
                 tunHealthProbe: new DisabledTunNetworkHealthProbe(), restoreOwnedProxyStates: static () => { },
                 operationTimeoutForTest: TimeSpan.FromSeconds(3),
                 listenerInspectorForTest: (listener, identity) => listener.Name == "mixed-udp"
-                    ? new ListenerOwnerObservation((ListenerOwnerState)ownerState, "deterministic UDP observation")
+                    ? new ListenerOwnerObservation(ownerState, "deterministic UDP observation")
                     : WindowsListenerOwnerTable.InspectListener(listener.Address, listener.Port,
                         listener.Transport, identity, listener.DualMode));
 
@@ -892,7 +898,7 @@ public sealed class OfficialMihomoServiceInteropTests
             StringAssert.Contains(response.Error, "mixed-udp", StringComparison.Ordinal);
             StringAssert.Contains(response.Error, $"127.0.0.1:{mixedPort}", StringComparison.Ordinal);
             StringAssert.Contains(response.Error, "Udp", StringComparison.Ordinal);
-            StringAssert.Contains(response.Error, ((ListenerOwnerState)ownerState).ToString(), StringComparison.Ordinal);
+            StringAssert.Contains(response.Error, ownerState.ToString(), StringComparison.Ordinal);
             StringAssert.Contains(response.Error, "deterministic UDP observation", StringComparison.Ordinal);
             Assert.AreEqual(CoreState.Stopped, controller.CoreState);
         }
