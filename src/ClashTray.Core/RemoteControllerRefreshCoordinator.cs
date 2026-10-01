@@ -35,6 +35,7 @@ internal sealed class RemoteControllerRefreshCoordinator : IDisposable
     private readonly Action<string, string, Exception, int> _logControllerFailure;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
     private readonly Func<EndpointSession, EndpointSessionStatusEventArgs, CancellationToken, Task> _logStreamRunner;
+    private readonly Func<ControllerDataDemand> _pollingDemand;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _readLock = new(1, 1);
@@ -52,7 +53,8 @@ internal sealed class RemoteControllerRefreshCoordinator : IDisposable
         Action<string, string, Exception, int> logControllerFailure,
         Func<TimeSpan, CancellationToken, Task>? delayAsync,
         Func<EndpointSession, EndpointSessionStatusEventArgs, CancellationToken, Task>? logStreamRunner,
-        CancellationToken runtimeCancellation)
+        CancellationToken runtimeCancellation,
+        Func<ControllerDataDemand>? pollingDemand = null)
     {
         ArgumentNullException.ThrowIfNull(sessions);
         ArgumentNullException.ThrowIfNull(logLevelAccessor);
@@ -67,6 +69,7 @@ internal sealed class RemoteControllerRefreshCoordinator : IDisposable
         _logControllerFailure = logControllerFailure;
         _delayAsync = delayAsync ?? Task.Delay;
         _logStreamRunner = logStreamRunner ?? RunRemoteLogStreamAsync;
+        _pollingDemand = pollingDemand ?? (() => ControllerDataDemand.All);
     }
 
     internal void HandleSessionStatusChanged(object? sender, EndpointSessionStatusEventArgs status)
@@ -220,7 +223,8 @@ internal sealed class RemoteControllerRefreshCoordinator : IDisposable
     internal async Task<bool> RefreshSnapshotAsync(
         EndpointSession session,
         EndpointSessionStatusEventArgs status,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ControllerDataDemand demand = ControllerDataDemand.All)
     {
         await _readLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -236,12 +240,13 @@ internal sealed class RemoteControllerRefreshCoordinator : IDisposable
                 }
             }
 
-            MihomoControllerSnapshotData snapshot = await MihomoControllerSnapshotReader.ReadAsync(
+            MihomoControllerSnapshotData snapshot = await MihomoControllerSnapshotReader.ReadWithDemandAsync(
                     session.Api,
                     session.Handshake.Version,
                     $"mihomo/{status.Endpoint.DisplayName}",
                     previousData,
                     includeLogs: previousData is null,
+                    demand: previousData is null ? ControllerDataDemand.All : demand,
                     cancellationToken)
                 .ConfigureAwait(false);
 
@@ -536,7 +541,8 @@ internal sealed class RemoteControllerRefreshCoordinator : IDisposable
                     if (!await RefreshSnapshotAsync(
                             session,
                             status,
-                            refreshCts.Token)
+                            refreshCts.Token,
+                            _pollingDemand())
                         .ConfigureAwait(false))
                     {
                         return;

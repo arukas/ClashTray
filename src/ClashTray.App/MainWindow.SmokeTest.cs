@@ -152,7 +152,7 @@ public sealed partial class MainWindow
             NavigateTo(page.Item1, page.Item2);
             await Task.Delay(100);
             RootGrid.UpdateLayout();
-            bool listPage = page.Item2 is PanelPage.Connections or PanelPage.Logs;
+            bool listPage = page.Item2 is PanelPage.Rules or PanelPage.Connections or PanelPage.Logs;
             bool pageMounted = listPage
                 ? ReferenceEquals(ListPageContent.Content, page.Item1)
                 : ReferenceEquals(PageContent.Content, page.Item1);

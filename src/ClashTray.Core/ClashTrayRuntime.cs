@@ -50,6 +50,7 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
     private readonly RuntimeLogCoordinator _logs;
     private readonly ControllerSessionGuard _controllerGuard;
     private readonly RuntimeDataRefreshCoordinator _dataRefresh;
+    private readonly PanelRefreshPolicy _panelRefresh = new();
     private readonly ProxyOperationCoordinator _proxyOps;
     private readonly SubscriptionRefreshCoordinator _subscriptionRefresh;
     private readonly Func<MihomoApiClient>? _controllerApiFactory;
@@ -202,7 +203,8 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
             (phase, path, exception, retryCount) => LogControllerFailure(phase, path, exception, retryCount),
             remoteRefreshDelayAsync,
             remoteLogStreamRunner,
-            _runtimeCts.Token);
+            _runtimeCts.Token,
+            () => _panelRefresh.GetPollingDemand(EndpointKind.Remote, activeController: true));
         _controllerGuard = new ControllerSessionGuard(_controllerSessions);
         _dataRefresh = new RuntimeDataRefreshCoordinator(
             _stateStore,

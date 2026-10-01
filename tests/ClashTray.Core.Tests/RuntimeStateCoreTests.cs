@@ -7,6 +7,45 @@ namespace ClashTray.Core.Tests;
 public sealed class RuntimeStateCoreTests
 {
     [TestMethod]
+    public async Task HiddenPanelRefreshStillConfirmsCoreHealthAndReopeningFetchesSelectedPage()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        using RuntimeControllerHandler handler = new();
+        using HttpClient client = new(handler);
+        MihomoApiClient api = new(client, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        await using ClashTrayRuntime runtime = new(new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program")));
+        try
+        {
+            runtime.AttachControllerForTesting(api, usingServiceCore: false);
+            await runtime.RefreshControllerDataForTestingAsync();
+            while (handler.RequestedPaths.TryDequeue(out _)) { }
+            runtime.SetPanelRefreshContext(false, ControllerPanelPage.Proxy);
+            for (int poll = 0; poll < 3; poll++)
+            {
+                await runtime.RefreshPollingDataForTestingAsync();
+            }
+            Assert.AreEqual(3, handler.RequestedPaths.Count(path => path == "/version"));
+            Assert.AreEqual(3, handler.RequestedPaths.Count(path => path == "/configs"));
+            Assert.IsFalse(handler.RequestedPaths.Any(path => path is "/connections" or "/proxies" or "/traffic" or "/memory" or "/rules"));
+            Assert.IsTrue(runtime.IsCoreHealthConfirmedForTesting);
+            Assert.AreEqual(CoreState.Running, runtime.Snapshot.Core.State);
+            Assert.IsTrue(runtime.Snapshot.Core.TrafficAvailable);
+            Assert.IsTrue(runtime.Snapshot.Core.MemoryAvailable);
+            while (handler.RequestedPaths.TryDequeue(out _)) { }
+            runtime.SetPanelRefreshContext(true, ControllerPanelPage.Rules);
+            await runtime.RefreshPanelDataAsync();
+            Assert.IsTrue(handler.RequestedPaths.Contains("/rules", StringComparer.Ordinal));
+            Assert.IsTrue(handler.RequestedPaths.Contains("/providers/rules", StringComparer.Ordinal));
+            Assert.IsFalse(handler.RequestedPaths.Contains("/proxies", StringComparer.Ordinal));
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+            if (Directory.Exists(root)) { Directory.Delete(root, recursive: true); }
+        }
+    }
+
+    [TestMethod]
     public async Task MetricFailureKeepsLastValuesAndDoesNotStopConfirmedCore()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));

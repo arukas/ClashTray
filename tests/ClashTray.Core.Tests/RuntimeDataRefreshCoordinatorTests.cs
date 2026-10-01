@@ -18,6 +18,193 @@ public sealed class RuntimeDataRefreshCoordinatorTests
     }
 
     [TestMethod]
+    public async Task SkippingOptionalDataPreservesConfirmedValuesAndAvailability()
+    {
+        List<string> paths = [];
+        RuntimeStateStore store = new(CreateSnapshot(CoreState.Running));
+        MihomoApiClient api = CreateApiClient(request =>
+        {
+            string path = request.RequestUri!.AbsolutePath;
+            paths.Add(path);
+            return OptionalResponse(path);
+        });
+        RuntimeDataRefreshCoordinator coordinator = CreateCoordinator(store, static (_, _, _, _) => true,
+            static (_, _, _, _, _) => { }, static () => { }, static () => { });
+        await coordinator.RefreshOptionalDataAsync(api, CancellationToken.None);
+        RuntimeSnapshot confirmed = store.Snapshot;
+        paths.Clear();
+
+        await coordinator.RefreshOptionalDataAsync(api, CancellationToken.None, demand: ControllerDataDemand.None);
+        Assert.AreEqual(0, paths.Count);
+        Assert.AreSame(confirmed, store.Snapshot);
+        await coordinator.RefreshOptionalDataAsync(api, CancellationToken.None, demand: ControllerDataDemand.Proxies);
+        Assert.AreEqual(1, paths.Count);
+        Assert.AreEqual("/proxies", paths[0]);
+        Assert.IsTrue(store.Snapshot.Core.TrafficAvailable);
+        Assert.IsTrue(store.Snapshot.Core.MemoryAvailable);
+        Assert.AreEqual(confirmed.Core.MemoryBytes, store.Snapshot.Core.MemoryBytes);
+        Assert.AreSame(confirmed.Connections, store.Snapshot.Connections);
+        Assert.AreSame(confirmed.Rules, store.Snapshot.Rules);
+        Assert.AreEqual(confirmed.ConnectionsSummary, store.Snapshot.ConnectionsSummary);
+        Assert.AreEqual(confirmed.RulesSummary, store.Snapshot.RulesSummary);
+        using CancellationTokenSource cancellation = new();
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            coordinator.RefreshOptionalDataAsync(api, cancellation.Token, demand: ControllerDataDemand.None));
+    }
+
+    [TestMethod]
+    public async Task ProviderDemandDoesNotReadOrReplaceRulesInEitherControllerPipeline()
+    {
+        List<string> paths = [];
+        RuntimeStateStore store = new(CreateSnapshot(CoreState.Running));
+        MihomoApiClient api = CreateApiClient(request =>
+        {
+            string path = request.RequestUri!.AbsolutePath;
+            paths.Add(path);
+            return OptionalResponse(path);
+        });
+        RuntimeDataRefreshCoordinator coordinator = CreateCoordinator(store, static (_, _, _, _) => true,
+            static (_, _, _, _, _) => { }, static () => { }, static () => { });
+        await coordinator.RefreshOptionalDataAsync(api, CancellationToken.None);
+        RuntimeSnapshot previous = store.Snapshot;
+        paths.Clear();
+        await coordinator.RefreshOptionalDataAsync(api, CancellationToken.None, demand: ControllerDataDemand.Providers);
+        Assert.AreEqual(2, paths.Count);
+        Assert.IsTrue(paths.Contains("/providers/proxies", StringComparer.Ordinal));
+        Assert.IsTrue(paths.Contains("/providers/rules", StringComparer.Ordinal));
+        Assert.AreSame(previous.Rules, store.Snapshot.Rules);
+        Assert.AreEqual(previous.RulesSummary, store.Snapshot.RulesSummary);
+        MihomoControllerSnapshotData controllerData = await MihomoControllerSnapshotReader.ReadAsync(api, "test", "test", includeLogs: false);
+        paths.Clear();
+        MihomoControllerSnapshotData current = await MihomoControllerSnapshotReader.ReadWithDemandAsync(
+            api, "test", "test", controllerData, includeLogs: false, ControllerDataDemand.Providers);
+        Assert.AreEqual(3, paths.Count);
+        Assert.IsFalse(paths.Contains("/rules", StringComparer.Ordinal));
+        Assert.AreSame(controllerData.Rules, current.Rules);
+        Assert.AreEqual(controllerData.RulesSummary, current.RulesSummary);
+    }
+
+    [TestMethod]
+    public async Task FiveMinutesOfHiddenPollingRequestsThirtyOptionalResourcesInsteadOfSixHundred()
+    {
+        List<string> paths = [];
+        RuntimeStateStore store = new(CreateSnapshot(CoreState.Running));
+        MihomoApiClient api = CreateApiClient(request =>
+        {
+            string path = request.RequestUri!.AbsolutePath;
+            paths.Add(path);
+            return OptionalResponse(path);
+        });
+        RuntimeDataRefreshCoordinator coordinator = CreateCoordinator(store, static (_, _, _, _) => true,
+            static (_, _, _, _, _) => { }, static () => { }, static () => { });
+        PanelRefreshPolicyTests.PollingClock clock = new();
+        PanelRefreshPolicy policy = new(clock);
+        policy.Set(false, ControllerPanelPage.Proxy);
+        for (int poll = 0; poll < 150; poll++)
+        {
+            clock.Advance(TimeSpan.FromSeconds(2));
+            await coordinator.RefreshOptionalDataAsync(api, CancellationToken.None,
+                demand: policy.GetPollingDemand(EndpointKind.Local, true));
+        }
+
+        Assert.AreEqual(30, paths.Count);
+        Assert.AreEqual(10, paths.Count(path => path == "/traffic"));
+        Assert.AreEqual(10, paths.Count(path => path == "/memory"));
+        Assert.AreEqual(10, paths.Count(path => path == "/connections"));
+        Assert.IsFalse(paths.Any(path => path is "/proxies" or "/rules" or "/providers/proxies" or "/providers/rules"));
+        Assert.AreEqual(100, store.Snapshot.Core.UploadBytes);
+    }
+
+    [TestMethod]
+    public async Task DemandRefreshDiscardsResponseAfterBindingChangesDuringRequest()
+    {
+        TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool current = true;
+        using AsyncDelegateHandler handler = new(async (request, cancellation) =>
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(cancellation);
+            return OptionalResponse(request.RequestUri!.AbsolutePath);
+        });
+        using HttpClient client = new(handler);
+        MihomoApiClient api = new(client, new Uri("http://127.0.0.1:9090/"), string.Empty);
+        RuntimeStateStore store = new(CreateSnapshot(CoreState.Running));
+        RuntimeDataRefreshCoordinator coordinator = CreateCoordinator(store, (_, _, _, _) => current,
+            static (_, _, _, _, _) => { }, static () => { }, static () => { });
+        RuntimeSnapshot before = store.Snapshot;
+        Task refresh = coordinator.RefreshOptionalDataAsync(api, CancellationToken.None, demand: ControllerDataDemand.Connections);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            current = false;
+            release.TrySetResult();
+            await refresh.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreSame(before, store.Snapshot);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+    }
+
+    [TestMethod]
+    public async Task ControllerReaderWithoutOptionalDemandStillConfirmsConfigurationAndPreservesCachedLists()
+    {
+        List<string> paths = [];
+        MihomoApiClient api = CreateApiClient(request =>
+        {
+            string path = request.RequestUri!.AbsolutePath;
+            paths.Add(path);
+            return path == "/configs"
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"mode\":\"global\"}") }
+                : OptionalResponse(path);
+        });
+        MihomoControllerSnapshotData previous = await MihomoControllerSnapshotReader.ReadAsync(api, "test", "test", includeLogs: false);
+        paths.Clear();
+        MihomoControllerSnapshotData current = await MihomoControllerSnapshotReader.ReadWithDemandAsync(
+            api, "test", "test", previous, includeLogs: false, ControllerDataDemand.None);
+        Assert.AreEqual(1, paths.Count);
+        Assert.AreEqual("/configs", paths[0]);
+        Assert.AreEqual(ProxyMode.Global, current.Status.Mode);
+        Assert.AreEqual(previous.Status.ConnectionCount, current.Status.ConnectionCount);
+        Assert.IsTrue(current.Status.TrafficAvailable);
+        Assert.IsTrue(current.Status.MemoryAvailable);
+        Assert.AreSame(previous.Connections, current.Connections);
+        Assert.AreSame(previous.Rules, current.Rules);
+        Assert.AreEqual(previous.ConnectionsSummary, current.ConnectionsSummary);
+        Assert.AreEqual(previous.RulesSummary, current.RulesSummary);
+        Assert.IsNotNull(current.LastConfirmedAt);
+        Assert.IsNull(current.ErrorMessage);
+        paths.Clear();
+        await MihomoControllerSnapshotReader.ReadWithDemandAsync(
+            api, "test", "test", current, includeLogs: false, ControllerDataDemand.Metrics);
+        Assert.AreEqual(3, paths.Count);
+        Assert.IsTrue(paths.Contains("/configs", StringComparer.Ordinal));
+        Assert.IsTrue(paths.Contains("/traffic", StringComparer.Ordinal));
+        Assert.IsTrue(paths.Contains("/memory", StringComparer.Ordinal));
+    }
+
+    private static HttpResponseMessage OptionalResponse(string path) => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(path switch
+        {
+            "/traffic" => "{\"upTotal\":100,\"downTotal\":200,\"up\":3,\"down\":4}\n",
+            "/memory" => "{\"inuse\":42}\n",
+            "/connections" => "{\"connections\":[{\"id\":\"kept\"}]}",
+            "/rules" => "{\"rules\":[[\"DOMAIN\",\"example.invalid\",\"DIRECT\"]]}",
+            _ => "{}"
+        })
+    };
+
+    private sealed class AsyncDelegateHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> responder) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            responder(request, cancellationToken);
+    }
+
+    [TestMethod]
     public async Task TruncatedListsKeepReportedCountsAndSummariesThroughFailuresAndAppProjection()
     {
         string connections = "{\"connections\":[" + string.Join(',', Enumerable.Range(0, 2001).Select(i => $"{{\"id\":\"{i}\"}}")) + "]}";

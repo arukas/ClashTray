@@ -1254,7 +1254,18 @@ public sealed partial class ClashTrayRuntime
         return false;
     }
 
-    public async Task RefreshDataAsync(CancellationToken cancellationToken = default)
+    public Task RefreshDataAsync(CancellationToken cancellationToken = default) =>
+        RefreshDataWithDemandAsync(ControllerDataDemand.All, cancellationToken);
+
+    public bool SetPanelRefreshContext(bool visible, ControllerPanelPage page) =>
+        _panelRefresh.Set(visible, page);
+
+    public Task RefreshPanelDataAsync(CancellationToken cancellationToken = default) =>
+        RefreshDataWithDemandAsync(_panelRefresh.GetImmediateDemand(), cancellationToken);
+
+    private async Task RefreshDataWithDemandAsync(
+        ControllerDataDemand demand,
+        CancellationToken cancellationToken)
     {
         EndpointSession? remoteSession = _remoteRefresh.CaptureActiveRemoteSession(
             EndpointCommand.ObserveStatus,
@@ -1265,7 +1276,8 @@ public sealed partial class ClashTrayRuntime
             if (!await _remoteRefresh.RefreshSnapshotAsync(
                     remoteSession,
                     remoteStatus,
-                    cancellationToken)
+                    cancellationToken,
+                    demand)
                 .ConfigureAwait(false))
             {
                 throw new InvalidOperationException(
@@ -1277,13 +1289,14 @@ public sealed partial class ClashTrayRuntime
 
         if (_api is not null)
         {
-            await RefreshFromApiWithRetryAsync(cancellationToken);
+            await RefreshFromApiWithRetryAsync(cancellationToken, demand);
         }
     }
 
     private async Task RefreshFromApiAsync(
         CancellationToken cancellationToken,
-        bool includeRulesAndProviders = true)
+        bool includeRulesAndProviders = true,
+        ControllerDataDemand? demand = null)
     {
         MihomoApiClient? api = _api;
         if (api is null)
@@ -1296,8 +1309,17 @@ public sealed partial class ClashTrayRuntime
         await _dataRefresh.RefreshOptionalDataAsync(
             api,
             cancellationToken,
-            includeRulesAndProviders || coreHealthWasUnconfirmed);
+            includeRulesAndProviders || coreHealthWasUnconfirmed,
+            coreHealthWasUnconfirmed ? ControllerDataDemand.All : demand);
     }
+
+    private Task RefreshPollingDataAsync(CancellationToken cancellationToken) =>
+        RefreshFromApiAsync(
+            cancellationToken,
+            includeRulesAndProviders: false,
+            demand: _panelRefresh.GetPollingDemand(
+                EndpointKind.Local,
+                _endpointSessions.Status.Endpoint.Kind == EndpointKind.Local));
 
     private async Task RefreshCoreHealthAsync(MihomoApiClient api, CancellationToken cancellationToken)
     {
@@ -1400,14 +1422,16 @@ public sealed partial class ClashTrayRuntime
         return state;
     }
 
-    private async Task RefreshFromApiWithRetryAsync(CancellationToken cancellationToken)
+    private async Task RefreshFromApiWithRetryAsync(
+        CancellationToken cancellationToken,
+        ControllerDataDemand demand = ControllerDataDemand.All)
     {
         await RefreshCoreHealthWithRetryAsync(cancellationToken);
         await ApplyProgramOverridesWithLeaseAsync(coreRunning: true, cancellationToken);
         MihomoApiClient? api = _api;
         if (api is not null)
         {
-            await _dataRefresh.RefreshOptionalDataAsync(api, cancellationToken);
+            await _dataRefresh.RefreshOptionalDataAsync(api, cancellationToken, demand: demand);
         }
     }
 
@@ -1511,9 +1535,7 @@ public sealed partial class ClashTrayRuntime
                     SetCoreRunningPendingHealth(pendingStatus.Tun);
                 }
 
-                await RefreshFromApiAsync(
-                    _runtimeCts.Token,
-                    includeRulesAndProviders: false);
+                await RefreshPollingDataAsync(_runtimeCts.Token);
                 await ApplyProgramOverridesWithLeaseAsync(
                     coreRunning: true,
                     cancellationToken: _runtimeCts.Token);

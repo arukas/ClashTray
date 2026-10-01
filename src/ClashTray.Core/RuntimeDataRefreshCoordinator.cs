@@ -87,8 +87,23 @@ internal sealed class RuntimeDataRefreshCoordinator
     internal async Task RefreshOptionalDataAsync(
         MihomoApiClient api,
         CancellationToken cancellationToken,
-        bool includeRulesAndProviders = true)
+        bool includeRulesAndProviders = true,
+        ControllerDataDemand? demand = null)
     {
+        ControllerDataDemand requested = demand ?? (includeRulesAndProviders
+            ? ControllerDataDemand.All
+            : ControllerDataDemand.All & ~ControllerDataDemand.RulesAndProviders);
+        if (requested == ControllerDataDemand.None)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return;
+        }
+
+        bool includeProxies = (requested & ControllerDataDemand.Proxies) != 0;
+        bool includeMetrics = (requested & ControllerDataDemand.Metrics) != 0;
+        bool includeConnections = (requested & ControllerDataDemand.Connections) != 0;
+        bool includeRules = (requested & ControllerDataDemand.Rules) != 0;
+        bool includeProviders = (requested & ControllerDataDemand.Providers) != 0;
         CoreBindingEpochs epochs = _captureEpochs();
         await _dataRefreshLock.WaitAsync(cancellationToken);
         try
@@ -98,15 +113,23 @@ internal sealed class RuntimeDataRefreshCoordinator
                 return;
             }
 
-            Task<ProxyDataResult> proxyTask = TryGetProxyDataAsync(api, cancellationToken);
-            Task<TrafficDataResult> trafficTask = TryGetTrafficSnapshotAsync(api, cancellationToken);
-            Task<MemoryDataResult> memoryTask = TryGetMemoryAsync(api, cancellationToken);
-            Task<ConnectionDataResult> connectionsTask = TryGetConnectionDataAsync(api, cancellationToken);
-            Task<ControllerListData<RuleInfo>> rulesTask = includeRulesAndProviders
+            Task<ProxyDataResult> proxyTask = includeProxies
+                ? TryGetProxyDataAsync(api, cancellationToken)
+                : Task.FromResult(new ProxyDataResult(false, [], []));
+            Task<TrafficDataResult> trafficTask = includeMetrics
+                ? TryGetTrafficSnapshotAsync(api, cancellationToken)
+                : Task.FromResult(default(TrafficDataResult));
+            Task<MemoryDataResult> memoryTask = includeMetrics
+                ? TryGetMemoryAsync(api, cancellationToken)
+                : Task.FromResult(default(MemoryDataResult));
+            Task<ConnectionDataResult> connectionsTask = includeConnections
+                ? TryGetConnectionDataAsync(api, cancellationToken)
+                : Task.FromResult(new ConnectionDataResult(false, []));
+            Task<ControllerListData<RuleInfo>> rulesTask = includeRules
                 ? TryGetRulesAsync(api, cancellationToken)
                 : Task.FromResult(new ControllerListData<RuleInfo>([], null));
             Task<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> providersTask =
-                includeRulesAndProviders
+                includeProviders
                     ? TryGetProvidersAsync(api, cancellationToken)
                     : Task.FromResult<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)>(
                         ([], []));
@@ -138,12 +161,12 @@ internal sealed class RuntimeDataRefreshCoordinator
                             DownloadBytes = traffic?.DownloadBytes ?? currentCore.DownloadBytes,
                             UploadBytesPerSecond = traffic?.UploadBytesPerSecond ?? currentCore.UploadBytesPerSecond,
                             DownloadBytesPerSecond = traffic?.DownloadBytesPerSecond ?? currentCore.DownloadBytesPerSecond,
-                            TrafficAvailable = trafficData.Succeeded,
+                            TrafficAvailable = includeMetrics ? trafficData.Succeeded : currentCore.TrafficAvailable,
                             ConnectionCount = connectionData.Succeeded
                                 ? connectionData.Summary?.ReportedCount ?? connectionData.Value.Count
                                 : currentCore.ConnectionCount,
-                            MemoryBytes = memoryData.Value,
-                            MemoryAvailable = memoryData.Succeeded
+                            MemoryBytes = includeMetrics ? memoryData.Value : currentCore.MemoryBytes,
+                            MemoryAvailable = includeMetrics ? memoryData.Succeeded : currentCore.MemoryAvailable
                         },
                         ProxyGroups = proxyData.Succeeded
                             ? SnapshotDataComparer.ReuseIfEqual(snapshot.ProxyGroups, proxyData.Groups, SnapshotDataComparer.ProxyGroupsEqual)
@@ -158,20 +181,20 @@ internal sealed class RuntimeDataRefreshCoordinator
                                 EqualityComparer<ConnectionInfo>.Default.Equals)
                             : snapshot.Connections,
                         ConnectionsSummary = connectionData.Succeeded ? connectionData.Summary : snapshot.ConnectionsSummary,
-                        RulesSummary = includeRulesAndProviders ? rulesData.Summary : snapshot.RulesSummary,
-                        Rules = includeRulesAndProviders
+                        RulesSummary = includeRules ? rulesData.Summary : snapshot.RulesSummary,
+                        Rules = includeRules
                             ? SnapshotDataComparer.ReuseIfEqual(
                                 snapshot.Rules,
                                 rulesData.Items,
                                 EqualityComparer<RuleInfo>.Default.Equals)
                             : snapshot.Rules,
-                        Providers = includeRulesAndProviders
+                        Providers = includeProviders
                             ? SnapshotDataComparer.ReuseIfEqual(
                                 snapshot.Providers,
                                 providerData.Providers,
                                 EqualityComparer<ProviderStatus>.Default.Equals)
                             : snapshot.Providers,
-                        RuleProviders = includeRulesAndProviders
+                        RuleProviders = includeProviders
                             ? SnapshotDataComparer.ReuseIfEqual(
                                 snapshot.RuleProviders,
                                 providerData.RuleProviders,

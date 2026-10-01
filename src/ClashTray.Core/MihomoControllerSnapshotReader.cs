@@ -30,12 +30,22 @@ public sealed class MihomoControllerSnapshotReader
         "Design",
         "CA1031:Do not catch general exception types",
         Justification = "Each optional Controller resource is isolated so a malformed or unavailable response cannot erase confirmed data.")]
-    public static async Task<MihomoControllerSnapshotData> ReadAsync(
+    public static Task<MihomoControllerSnapshotData> ReadAsync(
         MihomoApiClient api,
         string? version,
         string logSource,
         MihomoControllerSnapshotData? previous = null,
         bool includeLogs = true,
+        CancellationToken cancellationToken = default) =>
+        ReadWithDemandAsync(api, version, logSource, previous, includeLogs, ControllerDataDemand.All, cancellationToken);
+
+    internal static async Task<MihomoControllerSnapshotData> ReadWithDemandAsync(
+        MihomoApiClient api,
+        string? version,
+        string logSource,
+        MihomoControllerSnapshotData? previous,
+        bool includeLogs,
+        ControllerDataDemand demand,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(api);
@@ -67,12 +77,14 @@ public sealed class MihomoControllerSnapshotReader
             document => (MihomoDataParser.ParseMode(document), MihomoDataParser.ParseTunEnabled(document)),
             (previousStatus.Mode, null),
             cancellationToken);
-        Task<ReadResult<(IReadOnlyList<ProxyGroup> Groups, IReadOnlyList<ProxyNode> Nodes)>> proxyTask = ReadDocumentAsync(
+        Task<ReadResult<(IReadOnlyList<ProxyGroup> Groups, IReadOnlyList<ProxyNode> Nodes)>> proxyTask = ReadOptionalDocumentAsync(
+            (demand & ControllerDataDemand.Proxies) != 0,
             () => api.GetProxiesAsync(cancellationToken),
             MihomoDataParser.ParseProxies,
             (previousGroups, previousNodes),
             cancellationToken);
-        Task<ReadResult<TrafficSnapshot>> trafficTask = ReadDocumentAsync(
+        Task<ReadResult<TrafficSnapshot>> trafficTask = ReadOptionalDocumentAsync(
+            (demand & ControllerDataDemand.Metrics) != 0,
             () => api.GetTrafficAsync(cancellationToken),
             MihomoDataParser.ParseTraffic,
             new TrafficSnapshot(
@@ -82,23 +94,27 @@ public sealed class MihomoControllerSnapshotReader
                 previousStatus.DownloadBytesPerSecond,
                 DateTimeOffset.UtcNow),
             cancellationToken);
-        Task<ReadResult<long>> memoryTask = ReadDocumentAsync(
+        Task<ReadResult<long>> memoryTask = ReadOptionalDocumentAsync(
+            (demand & ControllerDataDemand.Metrics) != 0,
             () => api.GetMemoryAsync(cancellationToken),
             MihomoDataParser.ParseMemoryBytes,
             previousStatus.MemoryBytes,
             cancellationToken);
-        Task<ReadResult<ControllerListData<ConnectionInfo>>> connectionsTask = ReadDocumentAsync(
+        Task<ReadResult<ControllerListData<ConnectionInfo>>> connectionsTask = ReadOptionalDocumentAsync(
+            (demand & ControllerDataDemand.Connections) != 0,
             () => api.GetConnectionsAsync(cancellationToken),
             MihomoDataParser.ParseConnectionsWithSummary,
             new ControllerListData<ConnectionInfo>(previousConnections, previous?.ConnectionsSummary),
             cancellationToken);
-        Task<ReadResult<ControllerListData<RuleInfo>>> rulesTask = ReadDocumentAsync(
+        Task<ReadResult<ControllerListData<RuleInfo>>> rulesTask = ReadOptionalDocumentAsync(
+            (demand & ControllerDataDemand.Rules) != 0,
             () => api.GetRulesAsync(cancellationToken),
             MihomoDataParser.ParseRulesWithSummary,
             new ControllerListData<RuleInfo>(previousRules, previous?.RulesSummary),
             cancellationToken);
         Task<ReadResult<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)>> providersTask =
-            ReadDocumentAsync(
+            ReadOptionalDocumentAsync(
+                (demand & ControllerDataDemand.Providers) != 0,
                 async () =>
                 {
                     using JsonDocument proxyProviders = await api.GetProvidersAsync(cancellationToken);
@@ -196,6 +212,15 @@ public sealed class MihomoControllerSnapshotReader
             connections.Value.Summary,
             rules.Value.Summary);
     }
+
+    private static Task<ReadResult<T>> ReadOptionalDocumentAsync<T>(
+        bool include,
+        Func<Task<JsonDocument>> request,
+        Func<JsonDocument, T> parse,
+        T fallback,
+        CancellationToken cancellationToken) => include
+        ? ReadDocumentAsync(request, parse, fallback, cancellationToken)
+        : Task.FromResult(new ReadResult<T>(false, fallback, ErrorMessage: null));
 
     [SuppressMessage(
         "Design",

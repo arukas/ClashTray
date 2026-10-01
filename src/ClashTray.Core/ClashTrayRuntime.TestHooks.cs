@@ -103,6 +103,9 @@ public sealed partial class ClashTrayRuntime
     internal Task RefreshControllerDataForTestingAsync(CancellationToken cancellationToken = default) =>
         RefreshFromApiAsync(cancellationToken);
 
+    internal Task RefreshPollingDataForTestingAsync(CancellationToken cancellationToken = default) =>
+        RefreshPollingDataAsync(cancellationToken);
+
     internal Task RefreshControllerDataForTestingAsync(
         bool includeRulesAndProviders,
         CancellationToken cancellationToken = default) =>

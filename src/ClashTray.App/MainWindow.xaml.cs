@@ -43,6 +43,8 @@ public sealed partial class MainWindow : Window
     private AppWindow? _appWindow;
     private bool _updatingThemeControls;
     private bool _pageRefreshInProgress;
+    private bool _pageRefreshRequested;
+    private long _pageRefreshRevision;
     private bool _configurationSelectionInProgress;
     private PanelPage _activePage = PanelPage.Proxy;
     private RuntimeSnapshot? _latestDisplayedSnapshot;
@@ -76,6 +78,7 @@ public sealed partial class MainWindow : Window
         _windowHandle = WindowNative.GetWindowHandle(this);
         _appWindow = AppWindow.GetFromWindowId(Win32Interop.GetWindowIdFromWindow(_windowHandle));
         _appWindow.Closing += AppWindow_Closing;
+        _appWindow.Changed += AppWindow_Changed;
         ApplyFlyoutWindowStyle();
         _proxyPage = new ProxyPage(runtime);
         _rulesPage = new RulesPage(runtime);
@@ -139,6 +142,7 @@ public sealed partial class MainWindow : Window
         NativeMethods.ShowWindow(_windowHandle, NativeMethods.SW_SHOW);
         _isVisible = true;
         NativeMethods.SetForegroundWindow(_windowHandle);
+        UpdatePanelRefreshContext();
     }
 
     public void HidePanel()
@@ -150,11 +154,19 @@ public sealed partial class MainWindow : Window
         }
 
         _isVisible = false;
+        _pageRefreshRequested = false;
+        UpdatePanelRefreshContext();
     }
 
     public void AllowClose()
     {
         _allowClose = true;
+        _pageRefreshRequested = false;
+        UpdatePanelRefreshContext();
+        if (_appWindow is not null)
+        {
+            _appWindow.Changed -= AppWindow_Changed;
+        }
         _connectionsPage?.Dispose();
         _logsPage?.Dispose();
         _rulesPage?.Dispose();
@@ -164,6 +176,12 @@ public sealed partial class MainWindow : Window
     public void UpdateAppSnapshot(AppSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (!CanRenderPanel)
+        {
+            UpdatePanelRefreshContext();
+            return;
+        }
+
         _activeEndpointKind = snapshot.ActiveController.Endpoint.Kind;
         _activeControllerIdentity =
             $"{snapshot.ActiveController.Endpoint.Id.Value}:{snapshot.ActiveController.Generation}";
@@ -805,12 +823,9 @@ public sealed partial class MainWindow : Window
         ConnectionsPageButton.IsChecked = target == PanelPage.Connections;
         LogsPageButton.IsChecked = target == PanelPage.Logs;
         SettingsPageButton.IsChecked = target == PanelPage.Settings;
-        if (target is PanelPage.Rules or PanelPage.Settings)
-        {
-            _ = RefreshPageDataAsync();
-        }
+        UpdatePanelRefreshContext();
 
-        if (_latestDisplayedSnapshot is not null)
+        if (CanRenderPanel && _latestDisplayedSnapshot is not null)
         {
             // Keep the currently projected endpoint when navigating. Using
             // _runtime.Snapshot here would replace a remote projection with
@@ -819,17 +834,44 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task RefreshPageDataAsync()
+    private bool CanRenderPanel => !_allowClose && _isVisible
+        && _windowHandle != IntPtr.Zero
+        && NativeMethods.IsWindowVisible(_windowHandle)
+        && !NativeMethods.IsIconic(_windowHandle);
+
+    private void AppWindow_Changed(AppWindow sender, AppWindowChangedEventArgs args)
     {
-        if (_runtime is null || _pageRefreshInProgress)
+        if (args.DidVisibilityChange || args.DidPresenterChange || args.DidSizeChange)
+        {
+            UpdatePanelRefreshContext();
+        }
+    }
+
+    private void UpdatePanelRefreshContext()
+    {
+        bool visible = CanRenderPanel;
+        ControllerPanelPage page = _activePage switch
+        {
+            PanelPage.Rules => ControllerPanelPage.Rules,
+            PanelPage.Connections => ControllerPanelPage.Connections,
+            PanelPage.Logs => ControllerPanelPage.Logs,
+            PanelPage.Settings => ControllerPanelPage.Settings,
+            _ => ControllerPanelPage.Proxy
+        };
+        if (_runtime?.SetPanelRefreshContext(visible, page) != true || !visible)
         {
             return;
         }
 
-        bool activeControllerConnected = _activeEndpointKind == EndpointKind.Remote
-            ? _runtime.AppSnapshot.ActiveController.State == EndpointSessionState.Connected
-            : _runtime.Snapshot.Core.State == CoreState.Running;
-        if (!activeControllerConnected)
+        UpdateAppSnapshot(_runtime.AppSnapshot);
+        _pageRefreshRequested = true;
+        _pageRefreshRevision++;
+        _ = RefreshPageDataAsync();
+    }
+
+    private async Task RefreshPageDataAsync()
+    {
+        if (_runtime is null || _pageRefreshInProgress || !CanRenderPanel)
         {
             return;
         }
@@ -837,14 +879,34 @@ public sealed partial class MainWindow : Window
         _pageRefreshInProgress = true;
         try
         {
-            await _runtime.RefreshDataAsync();
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception exception)
-        {
-            ShowError(exception.Message);
+            while (_pageRefreshRequested && CanRenderPanel)
+            {
+                _pageRefreshRequested = false;
+                long revision = _pageRefreshRevision;
+                AppSnapshot latest = _runtime.AppSnapshot;
+                bool connected = latest.ActiveController.Endpoint.Kind == EndpointKind.Remote
+                    ? latest.ActiveController.State == EndpointSessionState.Connected
+                    : latest.LocalDevice.CoreState == CoreState.Running;
+                if (!connected)
+                {
+                    break;
+                }
+
+                try
+                {
+                    await _runtime.RefreshPanelDataAsync();
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception exception)
+                {
+                    if (revision == _pageRefreshRevision && CanRenderPanel)
+                    {
+                        ShowError(exception.Message);
+                    }
+                }
+            }
         }
         finally
         {
