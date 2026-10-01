@@ -885,16 +885,12 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                             "Mihomo 有效配置未确认 TUN 关闭，拒绝提交启动就绪状态。");
                     }
 
+                    ListenerOwnerObservationScope observation = WindowsListenerOwnerTable.CreateObservation(processIdentity, listenerPlan.AllBindings);
                     ListenerReadinessResult listenerReadiness = ListenerReadinessEvaluator.Evaluate(
                         listenerPlan.ProxyBindings,
                         listenerPlan.AdditionalListenerPlan.Bindings,
                         listener => _listenerInspectorForTest?.Invoke(listener, processIdentity)
-                            ?? WindowsListenerOwnerTable.InspectListener(
-                            listener.Address,
-                            listener.Port,
-                            listener.Transport,
-                            processIdentity,
-                            listener.DualMode));
+                            ?? observation.Inspect(listener));
                     readinessDeadline.Observe(listenerReadiness);
                     if (listenerReadiness.Disposition == ListenerReadinessDisposition.ForeignOwner)
                     {
@@ -1053,9 +1049,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 && binding.ProcessStartedUtcTicks == identity.StartTimeUtcTicks
                 && binding.ProcessGeneration == _processManager.Generation
                 && IsProcessIdentityCurrent(identity, binding.ProcessGeneration, binding.InstanceId)
-                && RuntimeBindingValidator.AreListenersOwned(binding,
-                    listener => WindowsListenerOwnerTable.InspectListener(listener.Address, listener.Port,
-                        listener.Transport, identity, listener.DualMode));
+                && RuntimeBindingValidator.AreListenersOwned(binding, identity);
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException

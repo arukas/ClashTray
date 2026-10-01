@@ -4,6 +4,12 @@ using System.Text;
 using ClashTray.Contracts;
 using ClashTray.Core;
 
+if (args.Contains("--listener-ownership", StringComparer.Ordinal))
+{
+    ClashTray.PerformanceHarness.ListenerOwnershipBenchmark.Run();
+    return;
+}
+
 string root = Path.Combine(Path.GetTempPath(), "ClashTrayPerformanceHarness", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(root);
 try

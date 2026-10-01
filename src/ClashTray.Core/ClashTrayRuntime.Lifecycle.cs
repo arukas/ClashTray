@@ -859,15 +859,11 @@ public sealed partial class ClashTrayRuntime
                         throw new InvalidOperationException("Mihomo 有效配置未确认 TUN 关闭。");
                     }
 
+                    ListenerOwnerObservationScope observation = WindowsListenerOwnerTable.CreateObservation(identity, listenerPlan.AllBindings);
                     ListenerReadinessResult listenerReadiness = ListenerReadinessEvaluator.Evaluate(
                         listenerPlan.ProxyBindings,
                         listenerPlan.AdditionalListenerPlan.Bindings,
-                        listener => WindowsListenerOwnerTable.InspectListener(
-                            listener.Address,
-                            listener.Port,
-                            listener.Transport,
-                            identity,
-                            listener.DualMode));
+                        observation.Inspect);
                     readinessDeadline.Observe(listenerReadiness);
                     if (listenerReadiness.Disposition == ListenerReadinessDisposition.ForeignOwner)
                     {
@@ -897,9 +893,9 @@ public sealed partial class ClashTrayRuntime
                         identity.ProcessId,
                         identity.StartTimeUtcTicks,
                         processGeneration,
-                        ports.Http ?? 0,
-                        ports.Socks ?? 0,
-                        ports.Mixed ?? 0,
+                        ports.Http.Value,
+                        ports.Socks.Value,
+                        ports.Mixed.Value,
                         ControllerReady: true,
                         httpReady,
                         socksReady,
@@ -978,9 +974,7 @@ public sealed partial class ClashTrayRuntime
                 binding.ProcessId,
                 binding.ProcessStartedUtcTicks,
                 binding.ExecutablePath);
-            return RuntimeBindingValidator.AreListenersOwned(binding,
-                listener => WindowsListenerOwnerTable.InspectListener(listener.Address, listener.Port,
-                    listener.Transport, identity, listener.DualMode));
+            return RuntimeBindingValidator.AreListenersOwned(binding, identity);
         }
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException

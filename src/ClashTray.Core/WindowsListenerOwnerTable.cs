@@ -1,4 +1,5 @@
 using System.Net;
+using System.Buffers;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security;
@@ -22,6 +23,16 @@ internal static class WindowsListenerOwnerTable
     private const int TcpTableOwnerPidListener = 3;
     private const int UdpTableOwnerPid = 1;
     private const int TcpStateListen = 2;
+
+    public static ListenerOwnerObservationScope CreateObservation(LocalCoreProcessIdentity expectedOwner,
+        IReadOnlyList<LocalPortBinding> listeners)
+    {
+        ArgumentNullException.ThrowIfNull(expectedOwner);
+        ArgumentNullException.ThrowIfNull(listeners);
+        HashSet<int> ports = listeners.Select(listener => listener.Port).ToHashSet();
+        return ListenerOwnerObservationScope.CreateSnapshot(listeners, expectedOwner.ProcessId,
+            (family, transport) => ReadListenerRows(family, transport, ports), () => IsCurrentProcessIdentity(expectedOwner));
+    }
 
     public static bool IsOwnedBy(
         IPAddress address,
@@ -209,14 +220,64 @@ internal static class WindowsListenerOwnerTable
 
     private static string QueryProcessImagePath(SafeProcessHandle processHandle)
     {
-        char[] path = new char[32_768];
-        uint length = (uint)path.Length;
-        if (!QueryFullProcessImageName(processHandle, 0, path, ref length))
+        char[] path = ArrayPool<char>.Shared.Rent(32_768);
+        try
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows could not confirm the Mihomo process image path.");
+            uint length = 32_768;
+            if (!QueryFullProcessImageName(processHandle, 0, path, ref length))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows could not confirm the Mihomo process image path.");
+            }
+
+            return new string(path, 0, checked((int)length));
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(path, clearArray: true);
+        }
+    }
+
+    private static List<ListenerOwnerRow> ReadListenerRows(AddressFamily addressFamily, PortTransport transport, HashSet<int> ports)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Windows IP Helper listener tables are unavailable on this platform.");
         }
 
-        return new string(path, 0, checked((int)length));
+        uint family = addressFamily == AddressFamily.InterNetwork ? AfInet : AfInet6;
+        bool tcp = transport == PortTransport.Tcp;
+        bool ipv4 = family == AfInet;
+        IntPtr table = tcp ? ReadTcpTable(family) : ReadUdpTable(family);
+        try
+        {
+            List<ListenerOwnerRow> rows = [];
+            int count = Marshal.ReadInt32(table);
+            int rowSize = tcp ? ipv4 ? 24 : 56 : ipv4 ? 12 : 28;
+            for (int index = 0, offset = sizeof(int); index < count; index++, offset += rowSize)
+            {
+                IntPtr row = IntPtr.Add(table, offset);
+                if (tcp && Marshal.ReadInt32(row, ipv4 ? 0 : 48) != TcpStateListen)
+                {
+                    continue;
+                }
+
+                int port = ReadPort(row, ipv4 ? tcp ? 8 : 4 : 20);
+                if (!ports.Contains(port))
+                {
+                    continue;
+                }
+
+                IPAddress address = ipv4 ? ReadIpv4Address(row, tcp ? 4 : 0) : ReadIpv6Address(row, 0);
+                int processId = Marshal.ReadInt32(row, tcp ? ipv4 ? 20 : 52 : ipv4 ? 8 : 24);
+                rows.Add(new(address, port, processId));
+            }
+
+            return rows;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(table);
+        }
     }
 
     private static HashSet<int> FindTcpOwners(IPAddress expectedAddress, int expectedPort)
@@ -424,7 +485,7 @@ internal static class WindowsListenerOwnerTable
         return new IPAddress(address);
     }
 
-    private static bool AddressMatches(IPAddress expected, IPAddress local) =>
+    internal static bool AddressMatches(IPAddress expected, IPAddress local) =>
         expected.Equals(local)
         || local.AddressFamily == AddressFamily.InterNetwork && local.Equals(IPAddress.Any)
         || local.AddressFamily == AddressFamily.InterNetworkV6 && local.Equals(IPAddress.IPv6Any)

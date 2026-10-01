@@ -140,6 +140,18 @@ internal static class RuntimeBindingValidator
             && validation.Listeners.All(listener => inspect(listener).State == ListenerOwnerState.Owned);
     }
 
+    public static bool AreListenersOwned(CoreRuntimeBinding binding, LocalCoreProcessIdentity identity)
+    {
+        RuntimeBindingValidationResult validation = Validate(binding);
+        if (!validation.IsValid)
+        {
+            return false;
+        }
+
+        ListenerOwnerObservationScope observation = WindowsListenerOwnerTable.CreateObservation(identity, validation.Listeners);
+        return validation.Listeners.All(listener => observation.Inspect(listener).State == ListenerOwnerState.Owned);
+    }
+
     public static ServiceCommandException CreateAdmissionException(RuntimeBindingValidationResult validation) =>
         validation.Failure == RuntimeBindingValidationFailure.MetadataMissing
             ? new(ServiceErrorCode.RuntimeBindingMetadataMissing,
