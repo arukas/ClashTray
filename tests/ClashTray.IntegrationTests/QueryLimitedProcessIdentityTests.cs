@@ -15,6 +15,7 @@ public sealed class QueryLimitedProcessIdentityTests
 {
     private const uint QueryLimitedInformation = 0x1000;
     private const int DaclSecurityInformation = 0x00000004;
+    private const uint DisableMaximumPrivileges = 0x1;
 
     [TestMethod]
     public async Task QueryOnlyProcessDaclStillConfirmsImageCreationTimeAndListenerOwner()
@@ -36,23 +37,32 @@ public sealed class QueryLimitedProcessIdentityTests
                 child.Id,
                 child.StartTime.ToUniversalTime().Ticks,
                 Path.GetFullPath(child.MainModule!.FileName!));
-            SetQueryOnlyDacl(child.SafeHandle, WindowsIdentity.GetCurrent().User!);
+            using WindowsIdentity callerIdentity = WindowsIdentity.GetCurrent(
+                TokenAccessLevels.Duplicate | TokenAccessLevels.Query);
+            SetQueryOnlyDacl(child.SafeHandle, callerIdentity.User!);
+            using SafeAccessTokenHandle queryCaller = CreateCallerWithoutPrivileges(callerIdentity.AccessToken);
 
-            using (Process restrictedView = Process.GetProcessById(child.Id))
+            // Hosted runners can have SeDebugPrivilege, which bypasses the child
+            // DACL. Keep both controls in the same restricted impersonation scope.
+            WindowsIdentity.RunImpersonated(queryCaller, () =>
             {
-                Assert.ThrowsExactly<Win32Exception>(() => _ = restrictedView.MainModule);
-            }
+                using (Process restrictedView = Process.GetProcessById(child.Id))
+                {
+                    Assert.ThrowsExactly<Win32Exception>(() => _ = restrictedView.MainModule);
+                    Assert.ThrowsExactly<Win32Exception>(() => _ = restrictedView.SafeHandle);
+                }
 
-            Assert.IsTrue(
-                WindowsListenerOwnerTable.IsCurrentProcessIdentity(expected),
-                "Identity verification should use PROCESS_QUERY_LIMITED_INFORMATION, not Process.SafeHandle all-access.");
-            Assert.IsTrue(
-                WindowsListenerOwnerTable.IsOwnedBy(IPAddress.Loopback, port, PortTransport.Tcp, expected),
-                "The listener owner PID must be joined to the verified image and creation time.");
-            Assert.IsFalse(WindowsListenerOwnerTable.IsCurrentProcessIdentity(expected with
-            {
-                StartTimeUtcTicks = expected.StartTimeUtcTicks + 1
-            }));
+                Assert.IsTrue(
+                    WindowsListenerOwnerTable.IsCurrentProcessIdentity(expected),
+                    "Identity verification should use PROCESS_QUERY_LIMITED_INFORMATION, not Process.SafeHandle all-access.");
+                Assert.IsTrue(
+                    WindowsListenerOwnerTable.IsOwnedBy(IPAddress.Loopback, port, PortTransport.Tcp, expected),
+                    "The listener owner PID must be joined to the verified image and creation time.");
+                Assert.IsFalse(WindowsListenerOwnerTable.IsCurrentProcessIdentity(expected with
+                {
+                    StartTimeUtcTicks = expected.StartTimeUtcTicks + 1
+                }));
+            });
         }
         finally
         {
@@ -62,6 +72,25 @@ public sealed class QueryLimitedProcessIdentityTests
                 await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
             }
         }
+    }
+
+    private static SafeAccessTokenHandle CreateCallerWithoutPrivileges(SafeAccessTokenHandle callerToken)
+    {
+        if (!CreateRestrictedToken(
+            callerToken,
+            DisableMaximumPrivileges,
+            disableSidCount: 0,
+            sidsToDisable: IntPtr.Zero,
+            deletePrivilegeCount: 0,
+            privilegesToDelete: IntPtr.Zero,
+            restrictedSidCount: 0,
+            sidsToRestrict: IntPtr.Zero,
+            out SafeAccessTokenHandle restrictedToken))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not create the query-only caller token.");
+        }
+
+        return restrictedToken;
     }
 
     private static Process StartListenerChild()
@@ -135,4 +164,18 @@ public sealed class QueryLimitedProcessIdentityTests
         SafeProcessHandle handle,
         int securityInformation,
         IntPtr securityDescriptor);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateRestrictedToken(
+        SafeAccessTokenHandle existingToken,
+        uint flags,
+        uint disableSidCount,
+        IntPtr sidsToDisable,
+        uint deletePrivilegeCount,
+        IntPtr privilegesToDelete,
+        uint restrictedSidCount,
+        IntPtr sidsToRestrict,
+        out SafeAccessTokenHandle newToken);
 }
