@@ -376,7 +376,7 @@ public sealed partial class ClashTrayRuntime
     {
         using CancellationTokenSource coreStartupDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         coreStartupDeadline.CancelAfter(_coreStartupBudget);
-        CancellationToken coreStartOperationToken = cancellationToken;
+        CancellationToken coreStartOperationToken = coreStartupDeadline.Token;
         bool localCoreStarted = false;
         try
         {
@@ -530,7 +530,6 @@ public sealed partial class ClashTrayRuntime
             else
             {
                 _usingServiceCore = false;
-                coreStartOperationToken = coreStartupDeadline.Token;
                 bool localBindingReady = false;
                 for (int attempt = 0; attempt < ControllerPortAllocator.MaximumStartAttempts; attempt++)
                 {
@@ -660,6 +659,7 @@ public sealed partial class ClashTrayRuntime
                 coreRunning: IsCoreHealthy(),
                 cancellationToken: coreStartOperationToken,
                 operationLease: operationLease);
+            coreStartOperationToken.ThrowIfCancellationRequested();
             StartPolling();
             StartOptionalRefreshInBackground(_api);
         }
@@ -676,9 +676,10 @@ public sealed partial class ClashTrayRuntime
             string failureMessage = $"Mihomo 核心启动事务超过 {_coreStartupBudget.TotalSeconds:0} 秒。";
             try
             {
+                using CancellationTokenSource cleanupDeadline = new(TimeSpan.FromSeconds(10));
                 await RevokeSystemProxyForCoreLossAsync(
                     operationLease,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                    cancellationToken: cleanupDeadline.Token).ConfigureAwait(false);
             }
             catch (Exception restoreException)
             {

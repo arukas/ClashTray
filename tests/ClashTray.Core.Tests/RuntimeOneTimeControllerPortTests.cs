@@ -9,6 +9,38 @@ namespace ClashTray.Core.Tests;
 public sealed class RuntimeOneTimeControllerPortTests
 {
     [TestMethod]
+    [DataRow("/version", 1)]
+    [DataRow("/configs", 1)]
+    [DataRow("/configs", 2)]
+    public async Task ServiceSuccessStillUsesTheOverallDeadlineForHealthAndOverrides(string path, int occurrence)
+    {
+        using OneTimeControllerHandler handler = new() { BlockPath = path, BlockOccurrence = occurrence };
+        await using OneTimeStartContext context = await OneTimeStartContext.CreateAsync(
+            includeCore: true, startupBudget: TimeSpan.FromSeconds(1), controllerHandler: handler,
+            enableSystemProxy: true);
+        await context.ImportConfigurationAsync("mixed-port: 7890\nproxies: []\n");
+        using CancellationTokenSource caller = new();
+        Task<CoreStartOperationResult> operation = context.Runtime.StartCoreUsingAvailableControllerPortOnceAsync(caller.Token);
+        try
+        {
+            await handler.BlockedRequestEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            CoreStartOperationResult result = await operation.WaitAsync(TimeSpan.FromSeconds(4));
+            Assert.AreEqual(CoreStartOutcome.TimedOut, result.Outcome);
+            Assert.IsTrue(handler.BlockedToken.IsCancellationRequested);
+            Assert.IsFalse(caller.IsCancellationRequested, "The transaction deadline must cancel its own token.");
+            Assert.AreEqual(0, context.Proxy.EnableCount);
+            Assert.AreEqual(1, context.Service.Commands.Count(command => command == ServiceCommand.StartCore));
+            Assert.AreEqual(CoreState.Failed, context.Runtime.Snapshot.Core.State);
+            Assert.IsFalse(context.Runtime.IsCoreHealthConfirmedForTesting);
+        }
+        finally
+        {
+            await caller.CancelAsync();
+            await operation.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [TestMethod]
     public async Task OneTimeStartReportsSuccessOnlyForItsConfirmedBindingAndDoesNotSaveSettings()
     {
         await using OneTimeStartContext context = await OneTimeStartContext.CreateAsync(includeCore: true);
@@ -160,12 +192,14 @@ public sealed class RuntimeOneTimeControllerPortTests
             string root,
             TestSettingsStore settings,
             OneTimeStartService service,
+            FakeSystemProxyController proxy,
             HttpClient httpClient,
             ClashTrayRuntime runtime)
         {
             _root = root;
             Settings = settings;
             Service = service;
+            Proxy = proxy;
             _httpClient = httpClient;
             Runtime = runtime;
         }
@@ -174,17 +208,22 @@ public sealed class RuntimeOneTimeControllerPortTests
 
         public OneTimeStartService Service { get; }
 
+        public FakeSystemProxyController Proxy { get; }
+
         public ClashTrayRuntime Runtime { get; }
 
         public static async Task<OneTimeStartContext> CreateAsync(
             bool includeCore,
-            TimeSpan? startupBudget = null)
+            TimeSpan? startupBudget = null,
+            OneTimeControllerHandler? controllerHandler = null,
+            bool enableSystemProxy = false)
         {
             string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
             AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
-            TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings());
+            TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings() with { SystemProxyEnabled = enableSystemProxy });
             OneTimeStartService service = new(settings.Settings);
-            HttpClient httpClient = CreateHttpClient();
+            FakeSystemProxyController proxy = new(SystemProxyState.Off);
+            HttpClient httpClient = CreateHttpClient(controllerHandler);
             MihomoApiClient api = new(
                 httpClient,
                 new Uri($"http://127.0.0.1:{settings.Settings.ControllerPort}/"),
@@ -199,11 +238,12 @@ public sealed class RuntimeOneTimeControllerPortTests
                 null,
                 service,
                 settings,
+                proxy,
                 candidateValidator: new AcceptingCandidateValidator(),
                 controllerApiFactory: () => api,
                 coreStartupBudget: startupBudget);
             await runtime.InitializeAsync();
-            return new OneTimeStartContext(root, settings, service, httpClient, runtime);
+            return new OneTimeStartContext(root, settings, service, proxy, httpClient, runtime);
         }
 
         public async Task ImportConfigurationAsync(string yaml)
@@ -227,7 +267,7 @@ public sealed class RuntimeOneTimeControllerPortTests
             "Reliability",
             "CA2000:Dispose objects before losing scope",
             Justification = "The HttpClient stored by the test context owns and disposes its message handler in DisposeAsync.")]
-        private static HttpClient CreateHttpClient() => new(new OneTimeControllerHandler());
+        private static HttpClient CreateHttpClient(OneTimeControllerHandler? handler) => new(handler ?? new OneTimeControllerHandler());
 
         private static async Task PrepareManagedCoreAsync(AppPaths paths)
         {
@@ -295,15 +335,32 @@ public sealed class RuntimeOneTimeControllerPortTests
 
     private sealed class OneTimeControllerHandler : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(
+        private int _matchingRequestCount;
+
+        public string? BlockPath { get; init; }
+
+        public int BlockOccurrence { get; init; } = 1;
+
+        public TaskCompletionSource<bool> BlockedRequestEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public CancellationToken BlockedToken { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (request.RequestUri?.AbsolutePath == BlockPath
+                && Interlocked.Increment(ref _matchingRequestCount) == BlockOccurrence)
+            {
+                BlockedToken = cancellationToken;
+                BlockedRequestEntered.TrySetResult(true);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
             string body = request.RequestUri?.AbsolutePath switch
             {
                 "/version" => "{\"version\":\"v1.19.31\"}",
-                "/configs" => "{\"mode\":\"rule\",\"tun\":{\"enable\":false}}",
+                "/configs" => "{\"mode\":\"rule\",\"allow-lan\":false,\"ipv6\":false,\"tun\":{\"enable\":false}}",
                 "/proxies" => "{\"proxies\":{}}",
                 "/traffic" => "{\"upTotal\":0,\"downTotal\":0,\"up\":0,\"down\":0}",
                 "/memory" => "{\"inuse\":0}",
@@ -313,10 +370,10 @@ public sealed class RuntimeOneTimeControllerPortTests
                 "/providers/rules" => "{\"providers\":{}}",
                 _ => "{}"
             };
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(body)
-            });
+            };
         }
     }
 }
