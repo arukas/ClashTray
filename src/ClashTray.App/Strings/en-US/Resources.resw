@@ -453,4 +453,5 @@ Upload {4} B · Download {5} B</value></data>
   <data name="EndpointSecurityHttpsCustomCa" xml:space="preserve"><value>HTTPS / custom CA</value></data>
   <data name="EndpointSecurityHttpConfirmed" xml:space="preserve"><value>HTTP / risk acknowledged</value></data>
   <data name="EndpointSecurityLoopback" xml:space="preserve"><value>Local loopback</value></data>
+  <data name="ControllerPortOneTimeStartDetailFormat" xml:space="preserve"><value>{0} Details: {1}</value></data>
 </root>

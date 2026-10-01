@@ -292,18 +292,26 @@ public sealed partial class ClashTrayRuntime
                     ActiveRuntimeBinding?.ControllerPort);
             }
 
+            CoreStartFailure? failure;
             try
             {
-                await StartCoreCoreAsync(lease, cancellationToken, useAvailableControllerPortOnce: true)
+                failure = await StartCoreCoreAsync(lease, cancellationToken, useAvailableControllerPortOnce: true)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                return new CoreStartOperationResult(operationId, CoreStartOutcome.Cancelled);
+                return new CoreStartOperationResult(operationId, CoreStartOutcome.Cancelled,
+                    ErrorCode: ServiceErrorCode.OperationCancelled,
+                    DispatchState: _usingServiceCore ? ServiceDispatchState.DispatchedAwaitingResult : ServiceDispatchState.Completed);
             }
             catch (Exception exception)
             {
-                return CreateFailedCoreStartResult(operationId, exception.Message);
+                return CoreStartFailure.FromException(exception).ForOperation(operationId);
+            }
+
+            if (failure is not null)
+            {
+                return failure.ForOperation(operationId);
             }
 
             CoreRuntimeBinding? binding = ActiveRuntimeBinding;
@@ -317,36 +325,9 @@ public sealed partial class ClashTrayRuntime
                     binding.ControllerPort);
             }
 
-            return CreateFailedCoreStartResult(
-                operationId,
-                Snapshot.Core.ErrorMessage ?? "核心启动操作结束时未确认运行绑定。");
+            return new CoreStartFailure(CoreStartOutcome.Failed,
+                Snapshot.Core.ErrorMessage ?? "核心启动操作结束时未确认运行绑定。").ForOperation(operationId);
         }
-    }
-
-    private CoreStartOperationResult CreateFailedCoreStartResult(Guid operationId, string? errorMessage)
-    {
-        string error = string.IsNullOrWhiteSpace(errorMessage)
-            ? Snapshot.Core.ErrorMessage ?? string.Empty
-            : errorMessage;
-        CoreStartOutcome outcome = Snapshot.Core.State == CoreState.Missing
-            ? CoreStartOutcome.CoreMissing
-            : error.Contains("导入", StringComparison.Ordinal)
-                ? CoreStartOutcome.ConfigurationMissing
-                : error.Contains("没有找到可用", StringComparison.Ordinal)
-                    || error.Contains("候选", StringComparison.Ordinal)
-                    ? CoreStartOutcome.ControllerCandidatesExhausted
-                    : error.Contains("启动事务超过", StringComparison.Ordinal)
-                        || error.Contains("内未完成", StringComparison.Ordinal)
-                        ? CoreStartOutcome.TimedOut
-                        : error.Contains("验证失败", StringComparison.Ordinal)
-                            || error.Contains("YAML", StringComparison.OrdinalIgnoreCase)
-                            ? CoreStartOutcome.InvalidConfiguration
-                            : error.Contains("端口", StringComparison.Ordinal)
-                                || error.Contains("监听", StringComparison.Ordinal)
-                                || error.Contains("占用", StringComparison.Ordinal)
-                                ? CoreStartOutcome.PortConflict
-                                : CoreStartOutcome.Failed;
-        return new CoreStartOperationResult(operationId, outcome, ErrorMessage: error);
     }
 
     private async Task AdmitCoreLifecycleAsync(
@@ -369,7 +350,7 @@ public sealed partial class ClashTrayRuntime
     }
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Core start must end in a typed Failed state with the system proxy revoked; unexpected failures are sanitized into the snapshot instead of escaping the operation boundary.")]
-    private async Task StartCoreCoreAsync(
+    private async Task<CoreStartFailure?> StartCoreCoreAsync(
         OperationGate.Lease operationLease,
         CancellationToken cancellationToken,
         bool useAvailableControllerPortOnce = false)
@@ -382,7 +363,7 @@ public sealed partial class ClashTrayRuntime
         {
             if (Snapshot.Core.State == CoreState.Running)
             {
-                return;
+                return null;
             }
 
             Interlocked.Increment(ref _coreLifecycleEpoch);
@@ -397,7 +378,7 @@ public sealed partial class ClashTrayRuntime
                 await RevokeSystemProxyForCoreLossAsync(
                     operationLease,
                     cancellationToken: cancellationToken);
-                return;
+                return new CoreStartFailure(CoreStartOutcome.CoreMissing, Snapshot.Core.ErrorMessage!);
             }
 
             if (profile is null)
@@ -406,7 +387,7 @@ public sealed partial class ClashTrayRuntime
                 await RevokeSystemProxyForCoreLossAsync(
                     operationLease,
                     cancellationToken: cancellationToken);
-                return;
+                return new CoreStartFailure(CoreStartOutcome.ConfigurationMissing, Snapshot.Core.ErrorMessage!);
             }
 
             UpdateCoreState(CoreState.Validating, null);
@@ -428,7 +409,7 @@ public sealed partial class ClashTrayRuntime
                 coreStartupDeadline.Token).ConfigureAwait(false);
             if (!listenerPlan.ProxyPlanComplete)
             {
-                throw new InvalidOperationException(
+                throw new ServiceCommandException(ServiceErrorCode.InvalidConfiguration,
                     listenerPlan.ProxyPlanWarning ?? "无法确认有效 Mihomo 代理监听计划。");
             }
 
@@ -457,7 +438,7 @@ public sealed partial class ClashTrayRuntime
                     coreStartupDeadline.Token).ConfigureAwait(false);
                 if (!listenerPlan.ProxyPlanComplete)
                 {
-                    throw new InvalidOperationException(
+                    throw new ServiceCommandException(ServiceErrorCode.InvalidConfiguration,
                         listenerPlan.ProxyPlanWarning ?? "无法确认最终 Mihomo 代理监听计划。");
                 }
 
@@ -492,7 +473,8 @@ public sealed partial class ClashTrayRuntime
                 serviceResponse = await ReconcileUnknownServiceStartAsync(exception).ConfigureAwait(false);
                 if (serviceResponse is null)
                 {
-                    return;
+                    return CoreStartFailure.UnconfirmedServiceStart(Snapshot.Core.ErrorMessage!,
+                        cancellationToken, coreStartupDeadline.Token);
                 }
             }
             catch (ServiceProtocolVersionMismatchException)
@@ -506,7 +488,8 @@ public sealed partial class ClashTrayRuntime
                 serviceResponse = await ReconcileUnknownServiceStartAsync(exception).ConfigureAwait(false);
                 if (serviceResponse is null)
                 {
-                    return;
+                    return CoreStartFailure.UnconfirmedServiceStart(Snapshot.Core.ErrorMessage!,
+                        cancellationToken, coreStartupDeadline.Token);
                 }
             }
 
@@ -514,7 +497,8 @@ public sealed partial class ClashTrayRuntime
             {
                 if (!serviceResponse.Succeeded)
                 {
-                    throw new InvalidOperationException(serviceResponse.Error ?? "ClashTray 服务无法启动 Mihomo。");
+                    throw new ServiceCommandException(serviceResponse.ErrorCode,
+                        serviceResponse.Error ?? "ClashTray 服务无法启动 Mihomo。", serviceResponse.DispatchState);
                 }
 
                 _usingServiceCore = true;
@@ -552,7 +536,7 @@ public sealed partial class ClashTrayRuntime
                             coreStartOperationToken).ConfigureAwait(false);
                         if (!listenerPlan.ProxyPlanComplete)
                         {
-                            throw new InvalidOperationException(
+                            throw new ServiceCommandException(ServiceErrorCode.InvalidConfiguration,
                                 listenerPlan.ProxyPlanWarning ?? "无法确认最终 Mihomo 代理监听计划。");
                         }
                     }
@@ -565,7 +549,8 @@ public sealed partial class ClashTrayRuntime
                         cancellationToken: coreStartOperationToken))
                     {
                         UpdateCoreState(CoreState.Failed, "Mihomo 配置验证失败");
-                        return;
+                        return new CoreStartFailure(CoreStartOutcome.InvalidConfiguration,
+                            Snapshot.Core.ErrorMessage!, ServiceErrorCode.InvalidConfiguration);
                     }
 
                     await _processManager.StartAsync(
@@ -624,13 +609,15 @@ public sealed partial class ClashTrayRuntime
 
                 if (!localBindingReady)
                 {
-                    throw new InvalidOperationException("Mihomo 控制器端口在预检后持续被占用，已达到 3 次启动上限。");
+                    throw new ServiceCommandException(ServiceErrorCode.ControllerOwnershipUnconfirmed,
+                        "Mihomo 控制器端口在预检后持续被占用，已达到 3 次启动上限。");
                 }
             }
 
             bool coreStarted = true;
             SetController(CreateApiClient());
             SetCoreRunningPendingHealth(serviceResponse?.Tun ?? TunState.Unavailable);
+            CoreStartFailure? healthFailure = null;
             try
             {
                 await RefreshCoreHealthWithRetryAsync(coreStartOperationToken);
@@ -653,6 +640,7 @@ public sealed partial class ClashTrayRuntime
             catch (Exception exception)
             {
                 MarkCoreHealthUnconfirmed("启动", exception);
+                healthFailure = CoreStartFailure.FromException(exception);
             }
 
             await ApplyProgramOverridesAsync(
@@ -662,6 +650,7 @@ public sealed partial class ClashTrayRuntime
             coreStartOperationToken.ThrowIfCancellationRequested();
             StartPolling();
             StartOptionalRefreshInBackground(_api);
+            return healthFailure;
         }
         catch (OperationCanceledException) when (
             !cancellationToken.IsCancellationRequested
@@ -687,6 +676,7 @@ public sealed partial class ClashTrayRuntime
             }
 
             UpdateCoreState(CoreState.Failed, failureMessage);
+            return new CoreStartFailure(CoreStartOutcome.TimedOut, failureMessage, ServiceErrorCode.OperationTimedOut);
         }
         catch (OperationCanceledException)
         {
@@ -713,6 +703,7 @@ public sealed partial class ClashTrayRuntime
                 operationLease,
                 cancellationToken: cancellationToken);
             UpdateCoreState(CoreState.Failed, ErrorSanitizer.Sanitize(exception));
+            return CoreStartFailure.FromException(exception);
         }
     }
 
@@ -744,7 +735,8 @@ public sealed partial class ClashTrayRuntime
         PortPlanConflict? conflict = allocation.Conflict;
         if (conflict is null)
         {
-            throw new InvalidOperationException("没有找到可用的高位控制器端口（最多探测 16 个候选）。");
+            throw new ServiceCommandException(ServiceErrorCode.ControllerCandidatesExhausted,
+                "没有找到可用的高位控制器端口（最多探测 16 个候选）。");
         }
 
         bool controllerConflict = conflict.Listener.Name == "controller"

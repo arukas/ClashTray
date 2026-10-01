@@ -91,7 +91,7 @@ public sealed class LocalizationResourceTests
             "ControllerPortOneTimeStartConfigurationMissing", "ControllerPortOneTimeStartInvalidConfiguration",
             "ControllerPortOneTimeStartPortConflict", "ControllerPortOneTimeStartCandidatesExhausted",
             "ControllerPortOneTimeStartTimedOut", "ControllerPortOneTimeStartCancelled",
-            "ControllerPortOneTimeStartFailed"
+            "ControllerPortOneTimeStartFailed", "ControllerPortOneTimeStartDetailFormat"
         ];
         Dictionary<string, string> chinese = LoadResourceValues("zh-CN");
         Dictionary<string, string> english = LoadResourceValues("en-US");

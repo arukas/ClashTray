@@ -224,7 +224,10 @@ public enum ServiceErrorCode
     ProxyPortConflict,
     ControllerOwnershipUnconfirmed,
     CoreReadinessFailed,
-    ControllerCandidatesExhausted
+    ControllerCandidatesExhausted,
+    InvalidConfiguration,
+    OperationTimedOut,
+    OperationCancelled
 }
 
 /// <summary>

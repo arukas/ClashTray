@@ -453,4 +453,5 @@
   <data name="EndpointSecurityHttpsCustomCa" xml:space="preserve"><value>HTTPS / 自定义 CA</value></data>
   <data name="EndpointSecurityHttpConfirmed" xml:space="preserve"><value>HTTP / 已确认风险</value></data>
   <data name="EndpointSecurityLoopback" xml:space="preserve"><value>本机回环</value></data>
+  <data name="ControllerPortOneTimeStartDetailFormat" xml:space="preserve"><value>{0} 详情：{1}</value></data>
 </root>

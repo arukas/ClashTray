@@ -807,6 +807,55 @@ public sealed class OfficialMihomoServiceInteropTests
         }
     }
 
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
+    public async Task ServicePreservesBusyAndDeadlineCodesThroughCachedDispatch()
+    {
+        string? executablePath = FindMihomoExecutable();
+        if (executablePath is null)
+        {
+            Assert.Inconclusive("Official pinned Mihomo is required for cached dispatch code coverage.");
+            return;
+        }
+
+        (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
+        try
+        {
+            int controllerPort = GetAvailableLoopbackPort();
+            int mixedPort = GetAvailableLoopbackPort();
+            string configurationPath = Path.Combine(runtimeDirectory, "deadline.yaml");
+            await File.WriteAllTextAsync(configurationPath, BuildConflictConfiguration(controllerPort, mixedPort));
+            ServiceCorePayload payload = new(configurationPath, runtimeDirectory, controllerPort, string.Empty, MixedPort: mixedPort);
+            TaskCompletionSource<bool> entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using ServiceRuntimeController controller = new(paths, managedUserSid: null,
+                tunHealthProbe: new DisabledTunNetworkHealthProbe(), restoreOwnedProxyStates: static () => { },
+                afterCoreStartForTest: async (_, token) =>
+                {
+                    entered.TrySetResult(true);
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }, operationTimeoutForTest: TimeSpan.FromSeconds(2));
+            ServiceRequest firstRequest = new(Guid.NewGuid(), ServiceCommand.StartCore, JsonSerializer.Serialize(payload),
+                ProtocolVersion: ServiceProtocol.CurrentVersion);
+            Task<ServiceResponse> first = controller.HandleAsync(firstRequest, CancellationToken.None);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            ServiceResponse busy = await StartServiceCoreAsync(controller, payload);
+            Assert.IsFalse(busy.Succeeded);
+            Assert.AreEqual(ServiceErrorCode.OperationBusy, busy.ErrorCode);
+            ServiceResponse timeout = await first.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.IsFalse(timeout.Succeeded);
+            Assert.AreEqual(ServiceErrorCode.OperationTimedOut, timeout.ErrorCode);
+            Assert.AreEqual(CoreState.Stopped, timeout.Core);
+            ServiceResponse repeated = await controller.HandleAsync(firstRequest, CancellationToken.None);
+            Assert.AreEqual(timeout, repeated, "A retry must observe the same typed cached result.");
+            Assert.IsNull(repeated.RuntimeBinding);
+        }
+        finally
+        {
+            await DeleteTemporaryDirectoryAsync(root);
+        }
+    }
+
     private static async Task<ServiceResponse> StartServiceCoreAsync(
         ServiceRuntimeController controller,
         ServiceCorePayload payload) => await controller.HandleAsync(

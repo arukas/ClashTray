@@ -35,5 +35,14 @@ public sealed class ServiceCommandException : InvalidOperationException
         ErrorCode = errorCode;
     }
 
+    public ServiceCommandException(ServiceErrorCode errorCode, string message, ServiceDispatchState dispatchState)
+        : base(message)
+    {
+        ErrorCode = errorCode;
+        DispatchState = dispatchState;
+    }
+
     public ServiceErrorCode ErrorCode { get; }
+
+    public ServiceDispatchState DispatchState { get; } = ServiceDispatchState.Completed;
 }

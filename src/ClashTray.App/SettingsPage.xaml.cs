@@ -663,22 +663,13 @@ public sealed partial class SettingsPage : UserControl
         try
         {
             CoreStartOperationResult result = await _runtime.StartCoreUsingAvailableControllerPortOnceAsync();
-            StatusText.Text = result.Outcome switch
-            {
-                CoreStartOutcome.Started => LocalizationService.Format(
-                    "ControllerPortOneTimeStartSucceeded",
-                    result.ConfirmedControllerPort ?? 0),
-                CoreStartOutcome.AlreadyRunning => LocalizationService.Get("ControllerPortOneTimeStartAlreadyRunning"),
-                CoreStartOutcome.Busy => LocalizationService.Get("ControllerPortOneTimeStartBusy"),
-                CoreStartOutcome.CoreMissing => LocalizationService.Get("ControllerPortOneTimeStartCoreMissing"),
-                CoreStartOutcome.ConfigurationMissing => LocalizationService.Get("ControllerPortOneTimeStartConfigurationMissing"),
-                CoreStartOutcome.InvalidConfiguration => LocalizationService.Get("ControllerPortOneTimeStartInvalidConfiguration"),
-                CoreStartOutcome.PortConflict => LocalizationService.Get("ControllerPortOneTimeStartPortConflict"),
-                CoreStartOutcome.ControllerCandidatesExhausted => LocalizationService.Get("ControllerPortOneTimeStartCandidatesExhausted"),
-                CoreStartOutcome.TimedOut => LocalizationService.Get("ControllerPortOneTimeStartTimedOut"),
-                CoreStartOutcome.Cancelled => LocalizationService.Get("ControllerPortOneTimeStartCancelled"),
-                _ => LocalizationService.Get("ControllerPortOneTimeStartFailed")
-            };
+            CoreStartFeedback feedback = CoreStartFeedback.Create(result);
+            string message = feedback.ConfirmedPort is int port
+                ? LocalizationService.Format(feedback.ResourceKey, port)
+                : LocalizationService.Get(feedback.ResourceKey);
+            StatusText.Text = string.IsNullOrWhiteSpace(feedback.ErrorDetail)
+                ? message
+                : LocalizationService.Format("ControllerPortOneTimeStartDetailFormat", message, feedback.ErrorDetail);
         }
         catch (Exception exception)
         {

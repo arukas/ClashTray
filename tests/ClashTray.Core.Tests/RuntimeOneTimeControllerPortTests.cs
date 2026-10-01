@@ -9,6 +9,63 @@ namespace ClashTray.Core.Tests;
 public sealed class RuntimeOneTimeControllerPortTests
 {
     [TestMethod]
+    [DataRow(ServiceErrorCode.OperationBusy, CoreStartOutcome.Busy, "Try again")]
+    [DataRow(ServiceErrorCode.OperationBusy, CoreStartOutcome.Busy, "服务忙")]
+    [DataRow(ServiceErrorCode.ProxyPortConflict, CoreStartOutcome.PortConflict, "Try again")]
+    [DataRow(ServiceErrorCode.ControllerCandidatesExhausted, CoreStartOutcome.ControllerCandidatesExhausted, "Try again")]
+    [DataRow(ServiceErrorCode.ControllerOwnershipUnconfirmed, CoreStartOutcome.Failed, "无法确认控制器端口属于当前核心")]
+    [DataRow(ServiceErrorCode.CoreReadinessFailed, CoreStartOutcome.Failed, "YAML 导入端口候选")]
+    [DataRow(ServiceErrorCode.None, CoreStartOutcome.Failed, "YAML 导入端口候选")]
+    [DataRow(ServiceErrorCode.InvalidConfiguration, CoreStartOutcome.InvalidConfiguration, "Try again")]
+    [DataRow(ServiceErrorCode.OperationTimedOut, CoreStartOutcome.TimedOut, "Try again")]
+    [DataRow(ServiceErrorCode.OperationCancelled, CoreStartOutcome.Cancelled, "Try again")]
+    public async Task OneTimeFailureUsesStableServiceCodeInsteadOfMessage(ServiceErrorCode code, CoreStartOutcome expected, string message)
+    {
+        await using OneTimeStartContext context = await OneTimeStartContext.CreateAsync(includeCore: true);
+        await context.ImportConfigurationAsync("mixed-port: 7890\nproxies: []\n");
+        context.Service.StartBehavior = (_, _) => Task.FromResult(Failure(message, code));
+
+        CoreStartOperationResult result = await context.Runtime.StartCoreUsingAvailableControllerPortOnceAsync();
+
+        Assert.AreEqual(expected, result.Outcome);
+        Assert.AreEqual(code, result.ErrorCode);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task OneTimeFailurePreservesTimeoutAndBusyExceptionTypes(bool timeout)
+    {
+        await using OneTimeStartContext context = await OneTimeStartContext.CreateAsync(includeCore: true);
+        await context.ImportConfigurationAsync("mixed-port: 7890\nproxies: []\n");
+        context.Service.StartBehavior = (_, _) => Task.FromException<ServiceResponse>(timeout
+            ? new TimeoutException("Mihomo Controller 请求超时。")
+            : new OperationBusyException("ClashTray 服务"));
+
+        CoreStartOperationResult result = await context.Runtime.StartCoreUsingAvailableControllerPortOnceAsync();
+
+        Assert.AreEqual(timeout ? CoreStartOutcome.TimedOut : CoreStartOutcome.Busy, result.Outcome);
+        Assert.IsFalse(result.Succeeded);
+    }
+
+    [TestMethod]
+    public async Task UnknownServiceResultKeepsItsDispatchStateAndNeverStartsAFallback()
+    {
+        await using OneTimeStartContext context = await OneTimeStartContext.CreateAsync(includeCore: true);
+        await context.ImportConfigurationAsync("mixed-port: 7890\nproxies: []\n");
+        context.Service.StartBehavior = (_, _) => Task.FromException<ServiceResponse>(new ServiceRequestUnknownException("响应丢失"));
+
+        CoreStartOperationResult result = await context.Runtime.StartCoreUsingAvailableControllerPortOnceAsync();
+
+        Assert.AreEqual(CoreStartOutcome.Failed, result.Outcome);
+        Assert.AreEqual(ServiceDispatchState.DispatchedAwaitingResult, result.DispatchState);
+        Assert.AreEqual(1, context.Service.Commands.Count(command => command == ServiceCommand.StartCore));
+        Assert.IsFalse(context.Runtime.IsCoreHealthConfirmedForTesting);
+        Assert.AreEqual(0, context.Proxy.EnableCount);
+    }
+
+    [TestMethod]
     [DataRow("/version", 1)]
     [DataRow("/configs", 1)]
     [DataRow("/configs", 2)]
@@ -90,7 +147,7 @@ public sealed class RuntimeOneTimeControllerPortTests
             await invalidYaml.ImportConfigurationAsync("dns: [unterminated\nproxies: []\n");
             invalidYaml.Service.StartBehavior = (payload, _) => Task.FromResult(Failure(
                 "Mihomo 配置验证失败。",
-                ServiceErrorCode.CoreReadinessFailed));
+                ServiceErrorCode.InvalidConfiguration));
             CoreStartOperationResult result = await invalidYaml.Runtime.StartCoreUsingAvailableControllerPortOnceAsync();
             Assert.AreEqual(CoreStartOutcome.InvalidConfiguration, result.Outcome);
             Assert.IsFalse(result.Succeeded);

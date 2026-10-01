@@ -39,6 +39,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private readonly Action _restoreOwnedProxyStates;
     private readonly Action<int>? _beforeCoreStartForTest;
     private readonly Func<int, CancellationToken, Task>? _afterCoreStartForTest;
+    private readonly TimeSpan _defaultOperationTimeout;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly object _requestCacheGate = new();
     private readonly Dictionary<Guid, CachedRequest> _requestCache = [];
@@ -74,13 +75,16 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         ILoggerFactory? loggerFactory = null,
         Action? restoreOwnedProxyStates = null,
         Action<int>? beforeCoreStartForTest = null,
-        Func<int, CancellationToken, Task>? afterCoreStartForTest = null)
+        Func<int, CancellationToken, Task>? afterCoreStartForTest = null,
+        TimeSpan? operationTimeoutForTest = null)
     {
         _paths = paths ?? new AppPaths();
         _logger = loggerFactory?.CreateLogger<ServiceRuntimeController>() ?? NullLogger<ServiceRuntimeController>.Instance;
         _restoreOwnedProxyStates = restoreOwnedProxyStates ?? SystemProxyRecovery.RestoreOwnedStatesForLoadedUsers;
         _beforeCoreStartForTest = beforeCoreStartForTest;
         _afterCoreStartForTest = afterCoreStartForTest;
+        _defaultOperationTimeout = operationTimeoutForTest ?? DefaultOperationTimeout;
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_defaultOperationTimeout, TimeSpan.Zero);
         _restoreOwnedProxyStates = restoreOwnedProxyStates ?? SystemProxyRecovery.RestoreOwnedStatesForLoadedUsers;
         _coreUpdater = new CoreUpdater(_paths, _coreUpdateHttpClient, managedUserSid);
         _tunHealthProbe = tunHealthProbe ?? new WindowsTunNetworkHealthProbe();
@@ -197,11 +201,12 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Cached command execution converts any failure into a failure ServiceResponse so concurrent joiners always observe a completed result.")]
     private async Task ExecuteCachedRequestAsync(ServiceRequest request, CachedRequest cached)
     {
+        CancellationToken operationToken = default;
         try
         {
             using CancellationTokenSource operationTimeout = CreateTimeout(
-                GetOperationTimeout(request.Command),
-                _lifetimeCts.Token);
+                GetOperationTimeout(request.Command), _lifetimeCts.Token);
+            operationToken = operationTimeout.Token;
             ServiceResponse response = await HandleCoreAsync(request, operationTimeout.Token)
                 .ConfigureAwait(false);
             MarkCachedRequestCompleting(cached);
@@ -212,6 +217,12 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             MarkCachedRequestCompleting(cached);
             cached.Completion.TrySetCanceled(_lifetimeCts.Token);
         }
+        catch (OperationCanceledException) when (operationToken.IsCancellationRequested)
+        {
+            MarkCachedRequestCompleting(cached);
+            cached.Completion.TrySetResult(Failure(request, "ClashTray 服务操作超过执行期限。",
+                _processManager.State, ServiceErrorCode.OperationTimedOut));
+        }
         catch (Exception exception)
         {
             _logger.LogWarning(
@@ -221,7 +232,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 ErrorSanitizer.Sanitize(exception));
             MarkCachedRequestCompleting(cached);
             cached.Completion.TrySetResult(
-                Failure(request, ErrorSanitizer.Sanitize(exception), _processManager.State));
+                Failure(request, ErrorSanitizer.Sanitize(exception), _processManager.State,
+                    CoreStartFailure.ClassifyException(exception)));
         }
         finally
         {
@@ -295,16 +307,16 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            return Failure(request, ErrorSanitizer.Sanitize(exception));
+            return Failure(request, ErrorSanitizer.Sanitize(exception), errorCode: CoreStartFailure.ClassifyException(exception));
         }
     }
 
-    private static TimeSpan GetOperationTimeout(ServiceCommand command) => command switch
+    private TimeSpan GetOperationTimeout(ServiceCommand command) => command switch
     {
         ServiceCommand.GetStatus => StatusQueryTimeout,
         ServiceCommand.EnableTun or ServiceCommand.DisableTun => TunOperationTimeout,
         ServiceCommand.InstallCore or ServiceCommand.RollbackCore => CoreUpdateOperationTimeout,
-        _ => DefaultOperationTimeout
+        _ => _defaultOperationTimeout
     };
 
     private static string ComputeRequestFingerprint(ServiceRequest request)
@@ -593,7 +605,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 request,
                 listenerPlan.ProxyPlanWarning ?? "无法确认有效 Mihomo 代理监听计划。",
                 CoreState.Failed,
-                ServiceErrorCode.CoreReadinessFailed);
+                ServiceErrorCode.InvalidConfiguration);
         }
 
         IReadOnlyList<LocalPortBinding> fixedListeners = listenerPlan.AllBindings;
@@ -635,7 +647,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                         request,
                         candidateListenerPlan.ProxyPlanWarning ?? "无法确认最终 Mihomo 代理监听计划。",
                         CoreState.Failed,
-                        ServiceErrorCode.CoreReadinessFailed);
+                        ServiceErrorCode.InvalidConfiguration);
                 }
 
                 if (!await _processManager.ValidateAsync(
@@ -646,7 +658,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                     cancellationToken: cancellationToken).ConfigureAwait(false))
                 {
                     SetTunState(TunState.Off);
-                    return Failure(request, "Mihomo 配置验证失败。", CoreState.Failed, ServiceErrorCode.CoreReadinessFailed);
+                    return Failure(request, "Mihomo 配置验证失败。", CoreState.Failed, ServiceErrorCode.InvalidConfiguration);
                 }
 
                 await _processManager.StartAsync(
@@ -726,11 +738,12 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 or TimeoutException)
             {
                 await CleanupFailedCoreStartAsync().ConfigureAwait(false);
+                ServiceErrorCode code = CoreStartFailure.ClassifyException(exception);
                 return Failure(
                     request,
                     $"Mihomo 启动就绪失败：{ErrorSanitizer.Sanitize(exception)}",
                     CoreState.Failed,
-                    ServiceErrorCode.CoreReadinessFailed);
+                    code != ServiceErrorCode.None ? code : ServiceErrorCode.CoreReadinessFailed);
             }
             catch (Exception exception)
             {
@@ -948,7 +961,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         }
 
         throw new CoreStartException(
-            ServiceErrorCode.CoreReadinessFailed,
+            ServiceErrorCode.OperationTimedOut,
             $"Mihomo 在 30 秒内未完成控制器和必需代理监听确认。{(lastError is null ? string.Empty : $" {ErrorSanitizer.Sanitize(lastError)}")}",
             lastError);
     }
