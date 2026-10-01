@@ -15,6 +15,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
     private readonly TimeSpan _validationTimeout;
     private readonly TimeSpan _stopTimeout;
     private readonly Func<ProcessStartInfo, Process> _processStartInfoFactory;
+    private readonly Func<ProcessStartInfo, Process> _validationProcessFactory;
     private Process? _process;
     private CancellationTokenSource? _lifetimeCts;
     private ProcessJobObject? _processJob;
@@ -61,7 +62,8 @@ public sealed class MihomoProcessManager : IAsyncDisposable
     internal MihomoProcessManager(
         TimeSpan validationTimeout,
         TimeSpan stopTimeout,
-        Func<ProcessStartInfo, Process>? processStartInfoFactory)
+        Func<ProcessStartInfo, Process>? processStartInfoFactory,
+        Func<ProcessStartInfo, Process>? validationProcessFactory = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(validationTimeout, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(stopTimeout, TimeSpan.Zero);
@@ -73,6 +75,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             StartInfo = startInfo,
             EnableRaisingEvents = true
         });
+        _validationProcessFactory = validationProcessFactory ?? (startInfo => new Process { StartInfo = startInfo });
     }
 
     public Task<bool> ValidateAsync(string executablePath, string configurationPath, CancellationToken cancellationToken = default)
@@ -121,11 +124,11 @@ public sealed class MihomoProcessManager : IAsyncDisposable
                 OnStateChanged();
                 return result == 0;
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {
                 State = CoreState.Failed;
                 OnStateChanged();
-                throw new TimeoutException($"Mihomo 配置验证超过 {_validationTimeout.TotalSeconds:0} 秒。");
+                throw new TimeoutException($"Mihomo 配置验证超过 {_validationTimeout.TotalSeconds:0} 秒。", exception);
             }
             catch (OperationCanceledException)
             {
@@ -481,7 +484,7 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
     }
 
-    private static async Task<int> RunOneShotAsync(
+    private async Task<int> RunOneShotAsync(
         string executablePath,
         string arguments,
         string? workingDirectory,
@@ -503,49 +506,76 @@ public sealed class MihomoProcessManager : IAsyncDisposable
         }
         ApplySafePaths(startInfo, safePaths);
 
-        using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("Unable to start Mihomo validation.");
-        Task standardOutput = DrainValidationOutputAsync(process.StandardOutput);
-        Task standardError = DrainValidationOutputAsync(process.StandardError);
-        bool completed = false;
+        using Process process = _validationProcessFactory(startInfo);
+        if (!process.Start())
+        {
+            throw new InvalidOperationException("Unable to start Mihomo validation.");
+        }
+
+        using CancellationTokenSource drainCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task standardOutput = DrainValidationOutputAsync(process.StandardOutput, drainCancellation.Token);
+        Task standardError = DrainValidationOutputAsync(process.StandardError, drainCancellation.Token);
+        Task drains = Task.WhenAll(standardOutput, standardError);
+        ProcessJobObject? job = null;
+        using CancellationTokenSource cleanup = new();
         try
         {
+            if (!ProcessJobObject.TryCreate(process, out job) && !process.HasExited)
+            {
+                throw new InvalidOperationException("无法为配置验证进程建立受管进程边界。");
+            }
+
             await process.WaitForExitAsync(cancellationToken);
-            await Task.WhenAll(standardOutput, standardError);
-            completed = true;
+            await drains.WaitAsync(cancellationToken);
             return process.ExitCode;
+        }
+        catch (Exception failure)
+        {
+            cleanup.CancelAfter(_stopTimeout);
+            job?.Dispose();
+            job = null;
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+
+                await process.WaitForExitAsync(cleanup.Token);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or OperationCanceledException)
+            {
+                failure.Data["ValidationProcessCleanup"] = ErrorSanitizer.Sanitize(exception);
+                LogLineReceived?.Invoke($"配置验证进程清理未确认：{ErrorSanitizer.Sanitize(exception)}", true);
+            }
+
+            await drainCancellation.CancelAsync();
+            process.StandardOutput.Dispose();
+            process.StandardError.Dispose();
+            try
+            {
+                await drains.WaitAsync(cleanup.Token);
+            }
+            catch (Exception exception) when (exception is OperationCanceledException or IOException or ObjectDisposedException)
+            {
+                // Cancellation/closing our redirected handles stops pipe readers. If they
+                // finish after the cleanup deadline, still observe any terminal failure.
+                _ = drains.ContinueWith(static task => _ = task.Exception, CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
+
+            throw;
         }
         finally
         {
-            if (!completed)
-            {
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill(entireProcessTree: true);
-                    }
-                }
-                catch (InvalidOperationException)
-                {
-                }
-
-                try
-                {
-                    await process.WaitForExitAsync(CancellationToken.None);
-                }
-                catch (InvalidOperationException)
-                {
-                }
-
-                await Task.WhenAll(standardOutput, standardError);
-            }
+            job?.Dispose();
         }
     }
 
-    private static async Task DrainValidationOutputAsync(StreamReader reader)
+    private static async Task DrainValidationOutputAsync(StreamReader reader, CancellationToken cancellationToken)
     {
         char[] buffer = new char[8 * 1024];
-        while (await reader.ReadAsync(buffer.AsMemory(), CancellationToken.None) > 0)
+        while (await reader.ReadAsync(buffer.AsMemory(), cancellationToken) > 0)
         {
         }
     }

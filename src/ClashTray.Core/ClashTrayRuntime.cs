@@ -72,6 +72,7 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
 
     private static readonly TimeSpan DisposeCleanupTimeout = TimeSpan.FromSeconds(30);
     private readonly TimeSpan _disposeCleanupTimeout;
+    private readonly TimeProvider _shutdownTimeProvider;
     private readonly TimeSpan _coreStartupBudget;
 
     private readonly record struct CoreLossContext(
@@ -109,13 +110,15 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
         Func<LocalCoreProcessIdentity?>? localCoreProcessIdentityProvider = null,
         Func<LocalCoreProcessIdentity, CancellationToken, Task<LocalCoreShutdownJournalResult>>? localCoreRecoveryAction = null,
         TimeSpan? coreStartupBudget = null,
-        HttpMessageHandler? controllerHttpMessageHandler = null)
+        HttpMessageHandler? controllerHttpMessageHandler = null,
+        TimeProvider? shutdownTimeProvider = null)
     {
         _httpClient = controllerHttpMessageHandler is null
             ? EndpointTransportPolicy.CreateControllerHttpClient()
             : new HttpClient(controllerHttpMessageHandler, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan };
         bool useDefaultEnvironment = paths is null;
         _disposeCleanupTimeout = disposeCleanupTimeout ?? DisposeCleanupTimeout;
+        _shutdownTimeProvider = shutdownTimeProvider ?? TimeProvider.System;
         _coreStartupBudget = coreStartupBudget ?? TimeSpan.FromSeconds(30);
         _shutdownStepTestHook = shutdownStepTestHook;
         _localCoreProcessIdentityProvider = localCoreProcessIdentityProvider;

@@ -74,11 +74,11 @@ public sealed partial class ClashTrayRuntime
         }
 
         List<Exception> cleanupFailures = [];
-        CancellationTokenSource shutdownDeadline = new(_disposeCleanupTimeout);
+        CancellationTokenSource shutdownDeadline = new(_disposeCleanupTimeout, _shutdownTimeProvider);
         TimeSpan preNetworkBudget = TimeSpan.FromTicks(Math.Max(
             1,
             Math.Min(_disposeCleanupTimeout.Ticks / 3, TimeSpan.FromSeconds(5).Ticks)));
-        CancellationTokenSource preNetworkDeadline = new(preNetworkBudget);
+        CancellationTokenSource preNetworkDeadline = new(preNetworkBudget, _shutdownTimeProvider);
         bool shutdownDeadlineTransferred = false;
         bool preNetworkDeadlineTransferred = false;
         bool cleanupLeaseTransferred = false;

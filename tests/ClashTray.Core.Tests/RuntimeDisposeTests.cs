@@ -317,6 +317,7 @@ public sealed class RuntimeDisposeTests
     {
         string root = CreateRoot();
         AppPaths paths = CreatePaths(root);
+        ShutdownDeadlineClock clock = new();
         LocalCoreProcessIdentity identity = new(
             42_424,
             DateTimeOffset.UnixEpoch.AddDays(100).UtcDateTime.Ticks,
@@ -328,7 +329,19 @@ public sealed class RuntimeDisposeTests
             settingsStore: null,
             systemProxy: new FakeSystemProxyController(SystemProxyState.Off),
             disposeCleanupTimeout: TimeSpan.FromSeconds(1.5),
-            localCoreProcessIdentityProvider: () => identity);
+            localCoreProcessIdentityProvider: () => identity,
+            shutdownTimeProvider: clock,
+            shutdownStepTestHook: (step, _) =>
+            {
+                // This case tests a gate timeout after the journal is persisted,
+                // rather than racing cold/coverage-instrumented disk I/O against 500 ms.
+                if (step == "取消运行时工作")
+                {
+                    clock.Expire();
+                }
+
+                return Task.CompletedTask;
+            });
         runtime.SetShutdownStateForTesting(
             serviceOwnsCore: false,
             CoreState.Running,
@@ -530,6 +543,34 @@ public sealed class RuntimeDisposeTests
 
         Assert.IsTrue(result.IsFullyClean, result.ToDiagnosticSummary());
         DeleteRoot(root);
+    }
+
+    private sealed class ShutdownDeadlineClock : TimeProvider
+    {
+        private readonly List<DeadlineTimer> _timers = [];
+        public void Expire()
+        {
+            foreach (DeadlineTimer timer in _timers.ToArray())
+            {
+                timer.Fire();
+            }
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            DeadlineTimer timer = new(callback, state);
+            _timers.Add(timer);
+            return timer;
+        }
+
+        private sealed class DeadlineTimer(TimerCallback callback, object? state) : ITimer
+        {
+            private bool _disposed;
+            public void Fire() { if (!_disposed) { callback(state); } }
+            public bool Change(TimeSpan dueTime, TimeSpan period) => !_disposed;
+            public void Dispose() => _disposed = true;
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
     }
 
     private static ClashTrayRuntime CreateRuntime(

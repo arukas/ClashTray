@@ -46,6 +46,53 @@ public sealed class MihomoProcessManagerTests
     }
 
     [TestMethod]
+    public async Task ExitedValidatorWithInheritedOutputDoesNotHoldTheOperationLockForever()
+    {
+        TaskCompletionSource exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool spawnChild = true;
+        await using MihomoProcessManager manager = new(
+            TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2), null,
+            startInfo =>
+            {
+                startInfo.FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+                startInfo.Arguments = spawnChild
+                    ? "/d /c start \"\" /b ping.exe -t 127.0.0.1 & exit /b 0"
+                    : "/d /c exit /b 0";
+                Process process = new() { StartInfo = startInfo, EnableRaisingEvents = true };
+                process.Exited += (_, _) => exited.TrySetResult();
+                return process;
+            });
+        Task<bool> validation = manager.ValidateAsync("test-validator", "test.yaml");
+        await exited.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Assert.ThrowsExactlyAsync<TimeoutException>(() => validation.WaitAsync(TimeSpan.FromSeconds(8)));
+        Assert.AreEqual(CoreState.Failed, manager.State);
+        spawnChild = false;
+        Assert.IsTrue(await manager.ValidateAsync("test-validator", "test.yaml").WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.AreEqual(CoreState.Stopped, manager.State);
+    }
+
+    [TestMethod]
+    public async Task ValidationCallerCancellationRemainsCancellationAndAllowsAnotherValidation()
+    {
+        using CancellationTokenSource caller = new();
+        TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using MihomoProcessManager manager = new(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(2), null,
+            startInfo =>
+            {
+                startInfo.FileName = Path.Combine(Environment.SystemDirectory, "ping.exe");
+                startInfo.Arguments = "-t 127.0.0.1";
+                started.TrySetResult();
+                return new Process { StartInfo = startInfo };
+            });
+        Task<bool> validation = manager.ValidateAsync("test-validator", "test.yaml", caller.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await caller.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => validation.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.AreEqual(CoreState.Stopped, manager.State);
+        await manager.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [TestMethod]
     public async Task ValidationTimeoutLeavesManagerInFailedState()
     {
         string ping = Path.Combine(Environment.SystemDirectory, "ping.exe");
