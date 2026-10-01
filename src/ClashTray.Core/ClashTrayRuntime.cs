@@ -313,28 +313,20 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
 
     private void SetRuntimeBinding(CoreRuntimeBinding? binding)
     {
-        if (binding is not null
-            && (binding.ControllerPort is < 1 or > 65535
-                || binding.PreferredControllerPort is < 1 or > 65535
-                || binding.InstanceId == Guid.Empty
-                || binding.OwnerInstanceId == Guid.Empty
-                || binding.ProcessId <= 0
-                || binding.ProcessStartedUtcTicks <= 0
-                || binding.ProcessGeneration <= 0
-                || string.IsNullOrWhiteSpace(binding.ExecutablePath)
-                || !binding.ControllerReady
-                || binding.AdditionalListeners is { Count: > 256 }
-                || binding.AdditionalListeners?.Any(listener =>
-                    string.IsNullOrWhiteSpace(listener.Name)
-                    || listener.Name.Length > 64
-                    || listener.Port is < 1 or > 65535
-                    || !Enum.IsDefined(listener.Transport)
-                    || !System.Net.IPAddress.TryParse(listener.Address, out _)) == true
-                || binding.ListenerPlanWarning is { Length: > 512 }))
+        if (binding is not null)
         {
-            throw new InvalidDataException("服务返回了无效或未确认的 Mihomo 运行绑定。");
+            RuntimeBindingValidationResult validation = RuntimeBindingValidator.Validate(binding);
+            if (!validation.IsValid)
+            {
+                throw RuntimeBindingValidator.CreateAdmissionException(validation);
+            }
         }
 
+        StoreRuntimeBinding(binding);
+    }
+
+    private void StoreRuntimeBinding(CoreRuntimeBinding? binding)
+    {
         Interlocked.Exchange(ref _runtimeBinding, binding);
         _endpointSessions.UpdateLocalEndpoint(
             ControllerEndpointFactory.CreateLocal(binding?.ControllerPort ?? _settings.ControllerPort));

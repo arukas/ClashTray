@@ -66,6 +66,38 @@ public sealed class RuntimeOneTimeControllerPortTests
     }
 
     [TestMethod]
+    [DataRow("missing-metadata", ServiceErrorCode.RuntimeBindingMetadataMissing)]
+    [DataRow("missing-binding", ServiceErrorCode.RuntimeBindingMetadataMissing)]
+    [DataRow("partial-listeners", ServiceErrorCode.RuntimeBindingInvalid)]
+    public async Task ServiceSuccessWithoutAValidBindingReturnsAStableAdmissionFailure(string kind, ServiceErrorCode expectedCode)
+    {
+        await using OneTimeStartContext context = await OneTimeStartContext.CreateAsync(includeCore: true);
+        await context.ImportConfigurationAsync("mixed-port: 7890\nproxies: []\n");
+        context.Service.StartBehavior = (payload, _) =>
+        {
+            ServiceResponse response = Success(payload, context.Settings.Settings, payload.ControllerPort);
+            CoreRuntimeBinding? binding = kind switch
+            {
+                "missing-metadata" => response.RuntimeBinding! with { ListenerBindings = null },
+                "missing-binding" => null,
+                "partial-listeners" => response.RuntimeBinding! with { ListenerBindings = [response.RuntimeBinding!.ListenerBindings![0]] },
+                _ => throw new ArgumentOutOfRangeException(nameof(kind))
+            };
+            return Task.FromResult(response with { RuntimeBinding = binding });
+        };
+
+        CoreStartOperationResult result = await context.Runtime.StartCoreUsingAvailableControllerPortOnceAsync();
+        Assert.AreEqual(CoreStartOutcome.Failed, result.Outcome);
+        Assert.AreEqual(expectedCode, result.ErrorCode);
+        Assert.IsFalse(context.Runtime.IsCoreHealthConfirmedForTesting);
+        Assert.AreEqual(0, context.Proxy.EnableCount);
+        if (expectedCode == ServiceErrorCode.RuntimeBindingMetadataMissing)
+        {
+            StringAssert.Contains(result.ErrorMessage, "同步升级", StringComparison.Ordinal);
+        }
+    }
+
+    [TestMethod]
     [DataRow("/version", 1)]
     [DataRow("/configs", 1)]
     [DataRow("/configs", 2)]
@@ -217,7 +249,7 @@ public sealed class RuntimeOneTimeControllerPortTests
 
     private static ServiceResponse Success(ServiceCorePayload payload, AppSettings settings, int actualControllerPort)
     {
-        CoreRuntimeBinding binding = RuntimeTestHelpers.CreateRuntimeBinding(settings) with
+        CoreRuntimeBinding binding = RuntimeTestHelpers.CreateRuntimeBinding(settings with { ControllerPort = actualControllerPort }) with
         {
             PreferredControllerPort = payload.ControllerPort,
             ControllerPort = actualControllerPort

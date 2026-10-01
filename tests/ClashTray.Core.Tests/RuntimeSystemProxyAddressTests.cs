@@ -75,14 +75,11 @@ public sealed class RuntimeSystemProxyAddressTests
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
         AppSettings settings = RuntimeTestHelpers.CreatePortSafeSettings() with { SystemProxyEnabled = recover };
-        CoreRuntimeBinding binding = RuntimeTestHelpers.CreateRuntimeBinding(settings) with
+        CoreRuntimeBinding binding = RuntimeTestHelpers.CreateRuntimeBinding(settings);
+        binding = binding with
         {
-            ListenerBindings =
-            [
-                new RuntimeListenerBinding("controller", "127.0.0.1", settings.ControllerPort, RuntimeListenerTransport.Tcp),
-                new RuntimeListenerBinding("mixed-tcp", address, settings.MixedPort, RuntimeListenerTransport.Tcp, dualMode),
-                new RuntimeListenerBinding("mixed-udp", address, settings.MixedPort, RuntimeListenerTransport.Udp, dualMode)
-            ]
+            ListenerBindings = binding.ListenerBindings!.Select(listener => listener.Name == "controller" ? listener
+                : listener with { Address = address, DualMode = dualMode }).ToArray()
         };
         FakeSystemProxyController proxy = new(SystemProxyState.Off);
         using ControllerHandler handler = new();

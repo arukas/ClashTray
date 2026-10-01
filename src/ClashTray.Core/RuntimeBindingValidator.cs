@@ -140,6 +140,13 @@ internal static class RuntimeBindingValidator
             && validation.Listeners.All(listener => inspect(listener).State == ListenerOwnerState.Owned);
     }
 
+    public static ServiceCommandException CreateAdmissionException(RuntimeBindingValidationResult validation) =>
+        validation.Failure == RuntimeBindingValidationFailure.MetadataMissing
+            ? new(ServiceErrorCode.RuntimeBindingMetadataMissing,
+                "ClashTray 服务缺少当前版本所需的核心运行信息，请同步升级桌面程序与服务后重试。")
+            : new(ServiceErrorCode.RuntimeBindingInvalid,
+                $"ClashTray 服务返回的核心运行信息无效，无法确认控制器与代理监听。{validation.Detail}");
+
     private static RuntimeBindingValidationResult Invalid(string detail) =>
         new(RuntimeBindingValidationFailure.Malformed, detail, []);
 

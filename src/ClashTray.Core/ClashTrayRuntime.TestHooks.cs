@@ -41,7 +41,9 @@ public sealed partial class ClashTrayRuntime
     internal void SetRuntimeBindingForTesting(CoreRuntimeBinding binding)
     {
         Interlocked.Exchange(ref _controllerSessionInjectedForTesting, 1);
-        SetRuntimeBinding(binding);
+        // Downstream eligibility tests deliberately inject incomplete facts.
+        // Production admission always goes through SetRuntimeBinding instead.
+        StoreRuntimeBinding(binding);
     }
 
     internal void SetShutdownStateForTesting(

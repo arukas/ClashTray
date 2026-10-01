@@ -227,7 +227,9 @@ public enum ServiceErrorCode
     ControllerCandidatesExhausted,
     InvalidConfiguration,
     OperationTimedOut,
-    OperationCancelled
+    OperationCancelled,
+    RuntimeBindingMetadataMissing,
+    RuntimeBindingInvalid
 }
 
 /// <summary>

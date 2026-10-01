@@ -89,7 +89,14 @@ public sealed class RuntimeServiceReconciliationTests
     }
 
     [TestMethod]
-    public async Task DelayedServiceStartAdoptsBindingBeforeCreatingController()
+    public Task DelayedServiceStartAdoptsBindingBeforeCreatingController() =>
+        VerifyDelayedServiceRecoveryAsync(rejectOldMetadataFirst: false);
+
+    [TestMethod]
+    public Task DelayedServiceRecoveryRejectsOldMetadataThenAdoptsCompatibleBinding() =>
+        VerifyDelayedServiceRecoveryAsync(rejectOldMetadataFirst: true);
+
+    private static async Task VerifyDelayedServiceRecoveryAsync(bool rejectOldMetadataFirst)
     {
         string root = CreateRoot();
         AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
@@ -101,6 +108,7 @@ public sealed class RuntimeServiceReconciliationTests
             new Uri($"http://127.0.0.1:{settings.Settings.ControllerPort}/"), string.Empty);
         TaskCompletionSource<CoreRuntimeBinding?> firstControllerBinding = new(TaskCreationOptions.RunContinuationsAsynchronously);
         TaskCompletionSource healthy = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource incompatible = new(TaskCreationOptions.RunContinuationsAsynchronously);
         ClashTrayRuntime? observedRuntime = null;
         await PrepareManagedCoreAsync(paths);
         await using ClashTrayRuntime runtime = new(paths, null, service, settings,
@@ -113,6 +121,10 @@ public sealed class RuntimeServiceReconciliationTests
         observedRuntime = runtime;
         runtime.SnapshotChanged += (_, _) =>
         {
+            if (runtime.Snapshot.ErrorMessage?.Contains("同步升级", StringComparison.Ordinal) == true)
+            {
+                incompatible.TrySetResult();
+            }
             if (runtime.IsCoreHealthConfirmedForTesting)
             {
                 healthy.TrySetResult();
@@ -126,13 +138,27 @@ public sealed class RuntimeServiceReconciliationTests
             await runtime.StartCoreAsync().WaitAsync(TimeSpan.FromSeconds(3));
             Assert.AreEqual(CoreState.Failed, runtime.Snapshot.Core.State);
 
+            CoreRuntimeBinding compatibleBinding = service.RuntimeBinding;
+            if (rejectOldMetadataFirst)
+            {
+                service.ReportBinding(compatibleBinding with { ListenerBindings = null });
+            }
+
             service.ReportRunning();
-            CoreRuntimeBinding? adopted = await firstControllerBinding.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (rejectOldMetadataFirst)
+            {
+                await incompatible.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.IsFalse(firstControllerBinding.Task.IsCompleted);
+                Assert.IsNull(runtime.ActiveRuntimeBinding);
+                service.ReportBinding(compatibleBinding);
+            }
+
+            CoreRuntimeBinding? adopted = await firstControllerBinding.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.AreSame(service.RuntimeBinding, adopted,
                 "The first polling status must be adopted before the controller is created.");
             await healthy.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.AreEqual(CoreState.Running, runtime.Snapshot.Core.State);
-            Assert.AreEqual(3, service.Commands.Count(command => command == ServiceCommand.GetStatus),
+            Assert.AreEqual(rejectOldMetadataFirst ? 4 : 3, service.Commands.Count(command => command == ServiceCommand.GetStatus),
                 "Recovery must not require a second status query through the exception path.");
         }
         finally
@@ -190,16 +216,19 @@ public sealed class RuntimeServiceReconciliationTests
     {
         private readonly bool _reportRunningAfterUnknown;
         private int _running;
+        private CoreRuntimeBinding _binding;
 
         public UnknownStartService(bool reportRunningAfterUnknown, AppSettings settings)
         {
             _reportRunningAfterUnknown = reportRunningAfterUnknown;
-            RuntimeBinding = RuntimeTestHelpers.CreateRuntimeBinding(settings);
+            _binding = RuntimeTestHelpers.CreateRuntimeBinding(settings);
         }
 
         public ConcurrentQueue<ServiceCommand> Commands { get; } = new();
 
-        public CoreRuntimeBinding RuntimeBinding { get; }
+        public CoreRuntimeBinding RuntimeBinding => Volatile.Read(ref _binding);
+
+        public void ReportBinding(CoreRuntimeBinding binding) => Volatile.Write(ref _binding, binding);
 
         public void ReportRunning() => Volatile.Write(ref _running, 1);
 

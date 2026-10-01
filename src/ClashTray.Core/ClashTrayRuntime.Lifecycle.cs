@@ -109,17 +109,15 @@ public sealed partial class ClashTrayRuntime
             if (serviceStatus.Core == CoreState.Running)
             {
                 _usingServiceCore = true;
-                if (serviceStatus.RuntimeBinding is null)
+                if (!TryAdoptServiceController(serviceStatus, out ServiceCommandException? bindingError))
                 {
                     UpdateCoreState(
                         CoreState.Failed,
-                        "ClashTray 服务报告核心正在运行，但没有提供经确认的进程与控制器绑定；已阻止 API 写操作和系统代理。");
+                        bindingError!.Message);
                     StartPolling();
                 }
                 else
                 {
-                    SetRuntimeBinding(serviceStatus.RuntimeBinding);
-                    SetController(CreateApiClient());
                     try
                     {
                         await RefreshCoreHealthWithRetryAsync(cancellationToken);
@@ -503,7 +501,7 @@ public sealed partial class ClashTrayRuntime
 
                 _usingServiceCore = true;
                 CoreRuntimeBinding binding = serviceResponse.RuntimeBinding
-                    ?? throw new InvalidOperationException("ClashTray 服务未返回经确认的 Mihomo 运行地址，已拒绝连接控制器。");
+                    ?? throw RuntimeBindingValidator.CreateAdmissionException(RuntimeBindingValidator.Validate(null));
                 if (binding.PreferredControllerPort != _settings.ControllerPort)
                 {
                     throw new InvalidOperationException("ClashTray 服务返回的首选控制器端口与本次启动设置不一致。");
@@ -1080,8 +1078,21 @@ public sealed partial class ClashTrayRuntime
             statusException = exception;
         }
 
-        if (status?.Core == CoreState.Running && status.RuntimeBinding is not null)
+        if (status?.Core == CoreState.Running)
         {
+            RuntimeBindingValidationResult validation = RuntimeBindingValidator.Validate(status.RuntimeBinding);
+            if (!validation.IsValid)
+            {
+                ServiceCommandException rejection = RuntimeBindingValidator.CreateAdmissionException(validation);
+                UpdateCoreState(CoreState.Failed, rejection.Message);
+                StartPolling();
+                return status with
+                {
+                    Succeeded = false, Error = rejection.Message, ErrorCode = rejection.ErrorCode,
+                    DispatchState = ServiceDispatchState.DispatchedAwaitingResult
+                };
+            }
+
             SetRuntimeBinding(status.RuntimeBinding);
             _stateStore.Update(snapshot => snapshot with
             {
@@ -1495,7 +1506,14 @@ public sealed partial class ClashTrayRuntime
                         continue;
                     }
 
-                    AdoptServiceController(pendingStatus);
+                    if (!TryAdoptServiceController(pendingStatus, out ServiceCommandException? bindingError))
+                    {
+                        await RevokeSystemProxyForCoreLossWithLeaseAsync();
+                        MarkCoreHealthUnconfirmed("服务恢复", bindingError!, retryCount);
+                        retryDelay = IncreaseRetryDelay(retryDelay);
+                        continue;
+                    }
+
                     SetCoreRunningPendingHealth(pendingStatus.Tun);
                 }
 
@@ -1572,20 +1590,17 @@ public sealed partial class ClashTrayRuntime
 
                 if (serviceStatus.Core == CoreState.Running)
                 {
-                    if (serviceStatus.RuntimeBinding is null)
+                    if (!TryAdoptServiceController(serviceStatus, out ServiceCommandException? bindingError))
                     {
-                        SetController(null);
-                        SetRuntimeBinding(null);
                         await RevokeSystemProxyForCoreLossWithLeaseAsync();
                         MarkCoreHealthUnconfirmed(
                             "服务重连",
-                            new ManagedCoreOwnershipException(),
+                            bindingError!,
                             retryCount);
                         retryDelay = IncreaseRetryDelay(retryDelay);
                         continue;
                     }
 
-                    AdoptServiceController(serviceStatus);
                     await RevokeSystemProxyForCoreLossWithLeaseAsync();
                     _stateStore.Update(snapshot => snapshot with { Tun = AdoptServiceTunState(serviceStatus.Tun) });
                     MarkCoreHealthUnconfirmed("控制器重连", exception, retryCount);
@@ -1615,11 +1630,22 @@ public sealed partial class ClashTrayRuntime
         !_runtimeCts.IsCancellationRequested
         && (_usingServiceCore || (_api is not null && _processManager.State == CoreState.Running));
 
-    private void AdoptServiceController(ServiceResponse status)
+    private bool TryAdoptServiceController(ServiceResponse status, out ServiceCommandException? error)
     {
-        CoreRuntimeBinding binding = status.RuntimeBinding ?? throw new ManagedCoreOwnershipException();
+        CoreRuntimeBinding? binding = status.RuntimeBinding;
+        RuntimeBindingValidationResult validation = RuntimeBindingValidator.Validate(binding);
+        if (binding is null || !validation.IsValid)
+        {
+            SetController(null);
+            SetRuntimeBinding(null);
+            error = RuntimeBindingValidator.CreateAdmissionException(validation);
+            return false;
+        }
+
         SetRuntimeBinding(binding);
         SetController(CreateApiClient());
+        error = null;
+        return true;
     }
 
     private static TimeSpan IncreaseRetryDelay(TimeSpan current) =>
@@ -1706,6 +1732,8 @@ public sealed partial class ClashTrayRuntime
 
     private static string DescribeControllerError(Exception exception) => exception switch
     {
+        ServiceCommandException { ErrorCode: ServiceErrorCode.RuntimeBindingMetadataMissing or ServiceErrorCode.RuntimeBindingInvalid } bindingError
+            => ErrorSanitizer.Sanitize(bindingError.Message),
         HttpRequestException { StatusCode: { } statusCode } => $"HTTP {(int)statusCode}",
         MihomoStreamException streamException => $"{streamException.Path} {streamException.Kind}",
         TimeoutException => "首条记录超时",
