@@ -482,7 +482,8 @@ internal static class WindowsListenerOwnerTable
     {
         byte[] address = new byte[16];
         Marshal.Copy(IntPtr.Add(row, offset), address, 0, address.Length);
-        return new IPAddress(address);
+        uint scope = unchecked((uint)Marshal.ReadInt32(row, offset + address.Length));
+        return new IPAddress(address, scope);
     }
 
     internal static bool AddressMatches(IPAddress expected, IPAddress local) =>
