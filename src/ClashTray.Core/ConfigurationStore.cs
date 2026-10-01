@@ -28,6 +28,8 @@ public sealed class ConfigurationStore
     private readonly AppPaths _paths;
     private readonly HttpMessageHandler? _subscriptionHandler;
     private readonly IConfigurationCandidateValidator? _candidateValidator;
+    private readonly TimeSpan _subscriptionTimeout;
+    private readonly TimeProvider _timeProvider;
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
@@ -38,11 +40,24 @@ public sealed class ConfigurationStore
         AppPaths paths,
         HttpMessageHandler? subscriptionHandler = null,
         IConfigurationCandidateValidator? candidateValidator = null)
+        : this(paths, subscriptionHandler, candidateValidator, TimeSpan.FromSeconds(30), TimeProvider.System)
     {
+    }
+
+    internal ConfigurationStore(
+        AppPaths paths,
+        HttpMessageHandler? subscriptionHandler,
+        IConfigurationCandidateValidator? candidateValidator,
+        TimeSpan subscriptionTimeout,
+        TimeProvider timeProvider)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(subscriptionTimeout, TimeSpan.Zero);
         _paths = paths;
-        // An injected handler is owned by the caller; each download still has its own timeout/client.
+        // An injected handler is owned by the caller; the complete download has one deadline.
         _subscriptionHandler = subscriptionHandler;
         _candidateValidator = candidateValidator;
+        _subscriptionTimeout = subscriptionTimeout;
+        _timeProvider = timeProvider;
         _paths.EnsureDirectories();
     }
 
@@ -619,23 +634,32 @@ public sealed class ConfigurationStore
     private static HttpClient CreateSubscriptionClient(HttpMessageHandler? handler = null)
     {
         HttpClient client = handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false);
-        client.Timeout = TimeSpan.FromSeconds(30);
+        client.Timeout = Timeout.InfiniteTimeSpan;
         client.DefaultRequestHeaders.UserAgent.ParseAdd(BundledMihomo.UserAgent);
         return client;
     }
 
-    private static async Task<byte[]> DownloadSubscriptionAsync(
+    private async Task<byte[]> DownloadSubscriptionAsync(
         HttpClient httpClient,
         Uri subscriptionUri,
         CancellationToken cancellationToken)
     {
-        using HttpResponseMessage response = await httpClient.GetAsync(
-            subscriptionUri,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
-        response.EnsureSuccessStatusCode();
-        await using Stream responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await ReadBytesWithLimitAsync(responseStream, cancellationToken);
+        using CancellationTokenSource deadline = new(_subscriptionTimeout, _timeProvider);
+        using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        try
+        {
+            using HttpResponseMessage response = await httpClient.GetAsync(
+                subscriptionUri,
+                HttpCompletionOption.ResponseHeadersRead,
+                linked.Token);
+            response.EnsureSuccessStatusCode();
+            await using Stream responseStream = await response.Content.ReadAsStreamAsync(linked.Token);
+            return await ReadBytesWithLimitAsync(responseStream, linked.Token);
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException("订阅下载超过 30 秒，请检查网络后重试。", exception);
+        }
     }
 
     private static async Task<byte[]> ReadBytesWithLimitAsync(Stream source, CancellationToken cancellationToken)
