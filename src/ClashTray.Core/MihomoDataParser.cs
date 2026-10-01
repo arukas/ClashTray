@@ -214,18 +214,26 @@ public static class MihomoDataParser
     }
 
     public static IReadOnlyList<ConnectionInfo> ParseConnections(JsonDocument document)
+        => ParseConnectionsWithSummary(document).Items;
+
+    internal static ControllerListData<ConnectionInfo> ParseConnectionsWithSummary(JsonDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
         if (!document.RootElement.TryGetProperty("connections", out JsonElement connections)
             || connections.ValueKind != JsonValueKind.Array)
         {
-            return [];
+            return new([], new(0, false));
         }
 
         List<ConnectionInfo> result = new List<ConnectionInfo>();
         HashSet<string> seenIds = new(StringComparer.Ordinal);
         foreach (JsonElement connection in connections.EnumerateArray().Take(MaxConnectionEntries))
         {
+            if (connection.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
             string? id = GetRawString(connection, "id");
             if (string.IsNullOrWhiteSpace(id)
                 || id.Length > MaxIdentifierCharacters
@@ -254,16 +262,19 @@ public static class MihomoDataParser
                 GetString(connection, "rulePayload", MaxConnectionFieldCharacters) ?? "-"));
         }
 
-        return result;
+        return new(result, new(connections.GetArrayLength(), connections.GetArrayLength() > MaxConnectionEntries));
     }
 
     public static IReadOnlyList<RuleInfo> ParseRules(JsonDocument document)
+        => ParseRulesWithSummary(document).Items;
+
+    internal static ControllerListData<RuleInfo> ParseRulesWithSummary(JsonDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
         if (!document.RootElement.TryGetProperty("rules", out JsonElement rules)
             || rules.ValueKind != JsonValueKind.Array)
         {
-            return [];
+            return new([], new(0, false));
         }
 
         List<RuleInfo> result = new List<RuleInfo>();
@@ -290,7 +301,7 @@ public static class MihomoDataParser
             result.Add(new RuleInfo(type, payload, proxy, GetInt(rule, 3)));
         }
 
-        return result;
+        return new(result, new(rules.GetArrayLength(), rules.GetArrayLength() > MaxRuleEntries));
     }
 
     public static IReadOnlyList<ProviderStatus> ParseProviders(JsonDocument document, string fallbackType)

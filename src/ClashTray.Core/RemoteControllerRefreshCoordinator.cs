@@ -142,6 +142,8 @@ internal sealed class RemoteControllerRefreshCoordinator : IDisposable
                 ProxyNodes = remoteData.ProxyNodes,
                 Connections = remoteData.Connections,
                 Rules = remoteData.Rules,
+                ConnectionsSummary = remoteData.ConnectionsSummary,
+                RulesSummary = remoteData.RulesSummary,
                 Providers = remoteData.Providers,
                 RuleProviders = remoteData.RuleProviders,
                 Logs = remoteData.Logs,

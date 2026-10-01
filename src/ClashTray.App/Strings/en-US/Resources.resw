@@ -454,4 +454,5 @@ Upload {4} B · Download {5} B</value></data>
   <data name="EndpointSecurityHttpConfirmed" xml:space="preserve"><value>HTTP / risk acknowledged</value></data>
   <data name="EndpointSecurityLoopback" xml:space="preserve"><value>Local loopback</value></data>
   <data name="ControllerPortOneTimeStartDetailFormat" xml:space="preserve"><value>{0} Details: {1}</value></data>
+<data name="ControllerListCountFormat" xml:space="preserve"><value>Core reports {0} · Loaded {1} · Filtered {2}</value></data><data name="ControllerListTruncated" xml:space="preserve"><value>. List truncated; search and filters cover loaded entries only.</value></data>
 </root>

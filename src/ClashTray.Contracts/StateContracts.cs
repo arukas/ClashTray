@@ -135,6 +135,8 @@ public sealed record LogEntry(
     int RepeatCount = 1,
     long Sequence = 0);
 
+public sealed record ControllerListSummary(int ReportedCount, bool IsTruncated);
+
 public sealed record RuntimeSnapshot(
     CoreStatus Core,
     SystemProxyState SystemProxy,
@@ -149,7 +151,9 @@ public sealed record RuntimeSnapshot(
     IReadOnlyList<ProviderStatus> RuleProviders,
     IReadOnlyList<LogEntry> Logs,
     string? ErrorMessage,
-    NetworkSwitchStatus? NetworkSwitch = null);
+    NetworkSwitchStatus? NetworkSwitch = null,
+    ControllerListSummary? ConnectionsSummary = null,
+    ControllerListSummary? RulesSummary = null);
 
 public enum ControllerPortConflictPolicy
 {

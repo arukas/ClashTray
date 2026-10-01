@@ -158,7 +158,9 @@ public sealed record ControllerSessionSnapshot(
     IReadOnlyList<LogEntry> Logs,
     EndpointCapability Capabilities,
     string? ErrorMessage,
-    ErrorCode ErrorCode = ErrorCode.None);
+    ErrorCode ErrorCode = ErrorCode.None,
+    ControllerListSummary? ConnectionsSummary = null,
+    ControllerListSummary? RulesSummary = null);
 
 public sealed record AppSnapshot(
     LocalDeviceSnapshot LocalDevice,

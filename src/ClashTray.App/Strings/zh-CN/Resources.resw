@@ -454,4 +454,5 @@
   <data name="EndpointSecurityHttpConfirmed" xml:space="preserve"><value>HTTP / 已确认风险</value></data>
   <data name="EndpointSecurityLoopback" xml:space="preserve"><value>本机回环</value></data>
   <data name="ControllerPortOneTimeStartDetailFormat" xml:space="preserve"><value>{0} 详情：{1}</value></data>
+<data name="ControllerListCountFormat" xml:space="preserve"><value>核心报告 {0} 条 · 已加载 {1} 条 · 筛选结果 {2} 条</value></data><data name="ControllerListTruncated" xml:space="preserve"><value>。列表已截断；搜索和筛选仅覆盖已加载内容。</value></data>
 </root>

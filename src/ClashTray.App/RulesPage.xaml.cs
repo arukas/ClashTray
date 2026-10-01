@@ -9,6 +9,7 @@ public sealed partial class RulesPage : UserControl
 {
     private readonly ClashTrayRuntime _runtime;
     private IReadOnlyList<RuleInfo> _rules = [];
+    private ControllerListSummary? _listSummary;
     private bool _refreshing;
     private bool _controllerWritable = true;
     private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
@@ -47,12 +48,13 @@ public sealed partial class RulesPage : UserControl
         ToolTipService.SetToolTip(
             RefreshRulesButton,
             GetRefreshTooltip());
-        if (ReferenceEquals(_rules, snapshot.Rules) && !interactivityChanged)
+        if (ReferenceEquals(_rules, snapshot.Rules) && Equals(_listSummary, snapshot.RulesSummary) && !interactivityChanged)
         {
             return;
         }
 
         _rules = snapshot.Rules;
+        _listSummary = snapshot.RulesSummary;
         ApplyFilter();
     }
 
@@ -107,6 +109,8 @@ public sealed partial class RulesPage : UserControl
             RulesListView.Items.Add(new ListViewItem { Content = $"{rule.Type}  {rule.Payload}  → {rule.Proxy}" });
         }
         EmptyListText.Visibility = RulesListView.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ListSummaryText.Text = LocalizationService.Format("ControllerListCountFormat", _listSummary?.ReportedCount ?? _rules.Count, _rules.Count, RulesListView.Items.Count)
+            + (_listSummary?.IsTruncated == true ? LocalizationService.Get("ControllerListTruncated") : string.Empty);
     }
 
     private bool CanRefreshRules =>

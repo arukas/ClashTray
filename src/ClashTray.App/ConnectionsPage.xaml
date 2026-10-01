@@ -32,6 +32,7 @@
         </Grid>
 
         <Border Grid.Row="1" Style="{StaticResource ClashTrayCardStyle}">
+            <StackPanel Spacing="6">
             <Grid ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -44,6 +45,8 @@
                     <ComboBoxItem x:Uid="SortDownloadItem" Tag="download" />
                 </ComboBox>
             </Grid>
+            <TextBlock x:Name="ListSummaryText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
+            </StackPanel>
         </Border>
 
         <Border Grid.Row="2" Style="{StaticResource ClashTrayCardStyle}" Padding="8">

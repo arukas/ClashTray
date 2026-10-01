@@ -18,6 +18,45 @@ public sealed class RuntimeDataRefreshCoordinatorTests
     }
 
     [TestMethod]
+    public async Task TruncatedListsKeepReportedCountsAndSummariesThroughFailuresAndAppProjection()
+    {
+        string connections = "{\"connections\":[" + string.Join(',', Enumerable.Range(0, 2001).Select(i => $"{{\"id\":\"{i}\"}}")) + "]}";
+        string rules = "{\"rules\":[" + string.Join(',', Enumerable.Repeat("[\"DOMAIN\",\"example.invalid\",\"DIRECT\"]", 5001)) + "]}";
+        bool fail = false;
+        RuntimeStateStore store = new(CreateSnapshot(CoreState.Running));
+        MihomoApiClient api = CreateApiClient(request => new HttpResponseMessage(fail ? HttpStatusCode.InternalServerError : HttpStatusCode.OK)
+        {
+            Content = new StringContent(request.RequestUri?.AbsolutePath switch { "/connections" => connections, "/rules" => rules, _ => "{}" })
+        });
+        RuntimeDataRefreshCoordinator coordinator = CreateCoordinator(store, static (_, _, _, _) => true, static (_, _, _, _, _) => { }, static () => { }, static () => { });
+        await coordinator.RefreshOptionalDataAsync(api, CancellationToken.None);
+        RuntimeSnapshot accepted = store.Snapshot;
+        Assert.AreEqual(2001, accepted.Core.ConnectionCount);
+        Assert.AreEqual(2000, accepted.Connections.Count);
+        Assert.AreEqual(new ControllerListSummary(2001, true), accepted.ConnectionsSummary);
+        Assert.AreEqual(5000, accepted.Rules.Count);
+        Assert.AreEqual(new ControllerListSummary(5001, true), accepted.RulesSummary);
+        RuntimeSnapshot projected = RuntimeSnapshotAdapter.ToRuntimeSnapshot(RuntimeSnapshotAdapter.ToAppSnapshot(accepted, new AppSettings()));
+        Assert.AreEqual(accepted.ConnectionsSummary, projected.ConnectionsSummary);
+        Assert.AreEqual(accepted.RulesSummary, projected.RulesSummary);
+        MihomoControllerSnapshotData controllerData = await MihomoControllerSnapshotReader.ReadAsync(api, "test", "test", includeLogs: false);
+        Assert.AreEqual(2001, controllerData.Status.ConnectionCount);
+        Assert.AreEqual(accepted.ConnectionsSummary, controllerData.ConnectionsSummary);
+        Assert.AreEqual(accepted.RulesSummary, controllerData.RulesSummary);
+        fail = true;
+        await coordinator.RefreshOptionalDataAsync(api, CancellationToken.None);
+        Assert.AreSame(accepted.Connections, store.Snapshot.Connections);
+        Assert.AreSame(accepted.Rules, store.Snapshot.Rules);
+        Assert.AreEqual(accepted.ConnectionsSummary, store.Snapshot.ConnectionsSummary);
+        Assert.AreEqual(accepted.RulesSummary, store.Snapshot.RulesSummary);
+        Assert.AreEqual(2001, store.Snapshot.Core.ConnectionCount);
+        MihomoControllerSnapshotData retained = await MihomoControllerSnapshotReader.ReadAsync(api, "test", "test", controllerData, includeLogs: false);
+        Assert.AreSame(controllerData.Connections, retained.Connections);
+        Assert.AreEqual(controllerData.ConnectionsSummary, retained.ConnectionsSummary);
+        Assert.AreEqual(controllerData.RulesSummary, retained.RulesSummary);
+    }
+
+    [TestMethod]
     public async Task OptionalDataRefreshSkipsCommitWhenBindingIsStale()
     {
         RuntimeStateStore store = new(CreateSnapshot(CoreState.Running));

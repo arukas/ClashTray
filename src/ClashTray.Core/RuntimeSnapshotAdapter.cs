@@ -34,7 +34,9 @@ public static class RuntimeSnapshotAdapter
             controller.RuleProviders,
             controller.Logs,
             error,
-            networkSwitch ?? snapshot.LocalDevice.NetworkSwitch);
+            networkSwitch ?? snapshot.LocalDevice.NetworkSwitch,
+            controller.ConnectionsSummary,
+            controller.RulesSummary);
     }
 
     public static AppSnapshot ToAppSnapshot(
@@ -92,7 +94,9 @@ public static class RuntimeSnapshotAdapter
             snapshot.RuleProviders,
             snapshot.Logs,
             EndpointCapabilityDefaults.Local,
-            snapshot.ErrorMessage ?? snapshot.Core.ErrorMessage);
+            snapshot.ErrorMessage ?? snapshot.Core.ErrorMessage,
+            ConnectionsSummary: snapshot.ConnectionsSummary,
+            RulesSummary: snapshot.RulesSummary);
 
         return new AppSnapshot(
             localDevice,

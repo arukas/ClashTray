@@ -15,7 +15,8 @@ internal readonly record struct MemoryDataResult(bool Succeeded, long Value);
 
 internal readonly record struct ConnectionDataResult(
     bool Succeeded,
-    IReadOnlyList<ConnectionInfo> Value);
+    IReadOnlyList<ConnectionInfo> Value,
+    ControllerListSummary? Summary = null);
 
 internal readonly record struct CoreBindingEpochs(
     long LifecycleEpoch,
@@ -101,9 +102,9 @@ internal sealed class RuntimeDataRefreshCoordinator
             Task<TrafficDataResult> trafficTask = TryGetTrafficSnapshotAsync(api, cancellationToken);
             Task<MemoryDataResult> memoryTask = TryGetMemoryAsync(api, cancellationToken);
             Task<ConnectionDataResult> connectionsTask = TryGetConnectionDataAsync(api, cancellationToken);
-            Task<IReadOnlyList<RuleInfo>> rulesTask = includeRulesAndProviders
+            Task<ControllerListData<RuleInfo>> rulesTask = includeRulesAndProviders
                 ? TryGetRulesAsync(api, cancellationToken)
-                : Task.FromResult<IReadOnlyList<RuleInfo>>([]);
+                : Task.FromResult(new ControllerListData<RuleInfo>([], null));
             Task<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> providersTask =
                 includeRulesAndProviders
                     ? TryGetProvidersAsync(api, cancellationToken)
@@ -120,7 +121,7 @@ internal sealed class RuntimeDataRefreshCoordinator
             TrafficDataResult trafficData = await trafficTask;
             MemoryDataResult memoryData = await memoryTask;
             ConnectionDataResult connectionData = await connectionsTask;
-            IReadOnlyList<RuleInfo> rulesData = await rulesTask;
+            ControllerListData<RuleInfo> rulesData = await rulesTask;
             (IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders) providerData = await providersTask;
             TrafficSnapshot? traffic = trafficData.Value;
             bool committed = _stateStore.TryUpdate(
@@ -139,7 +140,7 @@ internal sealed class RuntimeDataRefreshCoordinator
                             DownloadBytesPerSecond = traffic?.DownloadBytesPerSecond ?? currentCore.DownloadBytesPerSecond,
                             TrafficAvailable = trafficData.Succeeded,
                             ConnectionCount = connectionData.Succeeded
-                                ? connectionData.Value.Count
+                                ? connectionData.Summary?.ReportedCount ?? connectionData.Value.Count
                                 : currentCore.ConnectionCount,
                             MemoryBytes = memoryData.Value,
                             MemoryAvailable = memoryData.Succeeded
@@ -156,10 +157,12 @@ internal sealed class RuntimeDataRefreshCoordinator
                                 connectionData.Value,
                                 EqualityComparer<ConnectionInfo>.Default.Equals)
                             : snapshot.Connections,
+                        ConnectionsSummary = connectionData.Succeeded ? connectionData.Summary : snapshot.ConnectionsSummary,
+                        RulesSummary = includeRulesAndProviders ? rulesData.Summary : snapshot.RulesSummary,
                         Rules = includeRulesAndProviders
                             ? SnapshotDataComparer.ReuseIfEqual(
                                 snapshot.Rules,
-                                rulesData,
+                                rulesData.Items,
                                 EqualityComparer<RuleInfo>.Default.Equals)
                             : snapshot.Rules,
                         Providers = includeRulesAndProviders
@@ -327,7 +330,8 @@ internal sealed class RuntimeDataRefreshCoordinator
         try
         {
             using JsonDocument document = await api.GetConnectionsAsync(cancellationToken);
-            return new ConnectionDataResult(true, MihomoDataParser.ParseConnections(document));
+            ControllerListData<ConnectionInfo> data = MihomoDataParser.ParseConnectionsWithSummary(document);
+            return new ConnectionDataResult(true, data.Items, data.Summary);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -336,7 +340,8 @@ internal sealed class RuntimeDataRefreshCoordinator
         catch (Exception exception)
         {
             _failureLogger("连接数据刷新", "/connections", exception, 0, null);
-            return new ConnectionDataResult(false, _stateStore.Snapshot.Connections);
+            RuntimeSnapshot previous = _stateStore.Snapshot;
+            return new ConnectionDataResult(false, previous.Connections, previous.ConnectionsSummary);
         }
     }
 
@@ -344,14 +349,14 @@ internal sealed class RuntimeDataRefreshCoordinator
         "Design",
         "CA1031",
         Justification = "Controller read failures are downgraded to the last confirmed snapshot values and logged; they must not fault the aggregated refresh pipeline.")]
-    internal async Task<IReadOnlyList<RuleInfo>> TryGetRulesAsync(
+    internal async Task<ControllerListData<RuleInfo>> TryGetRulesAsync(
         MihomoApiClient api,
         CancellationToken cancellationToken)
     {
         try
         {
             using JsonDocument document = await api.GetRulesAsync(cancellationToken);
-            return MihomoDataParser.ParseRules(document);
+            return MihomoDataParser.ParseRulesWithSummary(document);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -360,7 +365,8 @@ internal sealed class RuntimeDataRefreshCoordinator
         catch (Exception exception)
         {
             _failureLogger("规则数据刷新", "/rules", exception, 0, null);
-            return _stateStore.Snapshot.Rules;
+            RuntimeSnapshot previous = _stateStore.Snapshot;
+            return new(previous.Rules, previous.RulesSummary);
         }
     }
 

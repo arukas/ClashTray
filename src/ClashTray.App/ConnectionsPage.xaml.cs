@@ -12,6 +12,7 @@ public sealed partial class ConnectionsPage : UserControl
     private readonly ClashTrayRuntime _runtime;
     private readonly StableRowReconciler<ConnectionRowIdentity, ConnectionInfo, ConnectionRowViewModel> _rows;
     private IReadOnlyList<ConnectionInfo> _connections = [];
+    private ControllerListSummary? _listSummary;
     private string _controllerIdentity = EndpointId.Local.Value;
     private bool _controllerWritable = true;
     private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
@@ -82,6 +83,7 @@ public sealed partial class ConnectionsPage : UserControl
         _controllerCapabilities = capabilities;
         UpdateActionButtons();
         if (ReferenceEquals(_connections, snapshot.Connections)
+            && Equals(_listSummary, snapshot.ConnectionsSummary)
             && !interactivityChanged
             && !controllerChanged)
         {
@@ -89,6 +91,7 @@ public sealed partial class ConnectionsPage : UserControl
         }
 
         _connections = snapshot.Connections;
+        _listSummary = snapshot.ConnectionsSummary;
         ApplyFilter();
     }
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
@@ -135,6 +138,8 @@ public sealed partial class ConnectionsPage : UserControl
         }
 
         EmptyListText.Visibility = _rows.Rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ListSummaryText.Text = LocalizationService.Format("ControllerListCountFormat", _listSummary?.ReportedCount ?? _connections.Count, _connections.Count, _rows.Rows.Count)
+            + (_listSummary?.IsTruncated == true ? LocalizationService.Get("ControllerListTruncated") : string.Empty);
         UpdateSelectedDetails();
         UpdateActionButtons();
     }

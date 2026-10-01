@@ -14,7 +14,9 @@ public sealed record MihomoControllerSnapshotData(
     IReadOnlyList<ProviderStatus> RuleProviders,
     IReadOnlyList<LogEntry> Logs,
     string? ErrorMessage,
-    DateTimeOffset? LastConfirmedAt = null);
+    DateTimeOffset? LastConfirmedAt = null,
+    ControllerListSummary? ConnectionsSummary = null,
+    ControllerListSummary? RulesSummary = null);
 
 /// <summary>
 /// Reads the bounded, read-only Controller data used by an active endpoint snapshot.
@@ -85,15 +87,15 @@ public sealed class MihomoControllerSnapshotReader
             MihomoDataParser.ParseMemoryBytes,
             previousStatus.MemoryBytes,
             cancellationToken);
-        Task<ReadResult<IReadOnlyList<ConnectionInfo>>> connectionsTask = ReadDocumentAsync(
+        Task<ReadResult<ControllerListData<ConnectionInfo>>> connectionsTask = ReadDocumentAsync(
             () => api.GetConnectionsAsync(cancellationToken),
-            MihomoDataParser.ParseConnections,
-            previousConnections,
+            MihomoDataParser.ParseConnectionsWithSummary,
+            new ControllerListData<ConnectionInfo>(previousConnections, previous?.ConnectionsSummary),
             cancellationToken);
-        Task<ReadResult<IReadOnlyList<RuleInfo>>> rulesTask = ReadDocumentAsync(
+        Task<ReadResult<ControllerListData<RuleInfo>>> rulesTask = ReadDocumentAsync(
             () => api.GetRulesAsync(cancellationToken),
-            MihomoDataParser.ParseRules,
-            previousRules,
+            MihomoDataParser.ParseRulesWithSummary,
+            new ControllerListData<RuleInfo>(previousRules, previous?.RulesSummary),
             cancellationToken);
         Task<ReadResult<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)>> providersTask =
             ReadDocumentAsync(
@@ -142,8 +144,8 @@ public sealed class MihomoControllerSnapshotReader
             await proxyTask.ConfigureAwait(false);
         ReadResult<TrafficSnapshot> traffic = await trafficTask.ConfigureAwait(false);
         ReadResult<long> memory = await memoryTask.ConfigureAwait(false);
-        ReadResult<IReadOnlyList<ConnectionInfo>> connections = await connectionsTask.ConfigureAwait(false);
-        ReadResult<IReadOnlyList<RuleInfo>> rules = await rulesTask.ConfigureAwait(false);
+        ReadResult<ControllerListData<ConnectionInfo>> connections = await connectionsTask.ConfigureAwait(false);
+        ReadResult<ControllerListData<RuleInfo>> rules = await rulesTask.ConfigureAwait(false);
         ReadResult<(IReadOnlyList<ProviderStatus> Providers, IReadOnlyList<ProviderStatus> RuleProviders)> providers =
             await providersTask.ConfigureAwait(false);
         ReadResult<IReadOnlyList<LogEntry>> logs = await logsTask.ConfigureAwait(false);
@@ -174,7 +176,7 @@ public sealed class MihomoControllerSnapshotReader
             trafficValue.DownloadBytesPerSecond,
             trafficValue.UploadBytes,
             trafficValue.DownloadBytes,
-            connections.Succeeded ? connections.Value.Count : previousStatus.ConnectionCount,
+            connections.Succeeded ? connections.Value.Summary?.ReportedCount ?? connections.Value.Items.Count : previousStatus.ConnectionCount,
             memory.Value,
             errorMessage,
             TrafficAvailable: traffic.Succeeded || previousStatus.TrafficAvailable,
@@ -184,13 +186,15 @@ public sealed class MihomoControllerSnapshotReader
             status,
             proxies.Succeeded ? proxies.Value.Groups : previousGroups,
             proxies.Succeeded ? proxies.Value.Nodes : previousNodes,
-            connections.Succeeded ? connections.Value : previousConnections,
-            rules.Succeeded ? rules.Value : previousRules,
+            connections.Value.Items,
+            rules.Value.Items,
             providers.Succeeded ? providers.Value.Providers : previousProviders,
             providers.Succeeded ? providers.Value.RuleProviders : previousRuleProviders,
             logs.Succeeded ? logs.Value : previousLogs,
             errorMessage,
-            lastConfirmedAt);
+            lastConfirmedAt,
+            connections.Value.Summary,
+            rules.Value.Summary);
     }
 
     [SuppressMessage(
