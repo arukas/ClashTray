@@ -129,7 +129,7 @@ internal static class MihomoListenerPlanAnalyzer
             {
                 if (IsUnresolvedRootMapping(lines[index]))
                 {
-                    limitations.Add("无法静态确认根级 merge、anchor 或 alias 对有效监听的影响");
+                    limitations.Add("无法静态确认根级语法对有效监听的影响");
                 }
 
                 continue;
@@ -247,7 +247,7 @@ internal static class MihomoListenerPlanAnalyzer
             {
                 if (IsUnresolvedRootMapping(lines[index]))
                 {
-                    limitations.Add("根级 merge、anchor 或 alias 形式");
+                    limitations.Add("无法静态读取根级 mapping 语法");
                 }
 
                 continue;
@@ -273,7 +273,9 @@ internal static class MihomoListenerPlanAnalyzer
             }
 
             int end = index + 1;
-            while (end < lines.Count && !TryReadRootEntry(lines[end], out _, out _))
+            while (end < lines.Count
+                && (!IsUnresolvedRootMapping(lines[end])
+                    || key == "listeners" && (lines[end].StartsWith("- ", StringComparison.Ordinal) || lines[end].Trim() == "-")))
             {
                 end++;
             }
@@ -576,38 +578,20 @@ internal static class MihomoListenerPlanAnalyzer
         }
 
         string content = StripYamlComment(line).TrimStart();
-        return content.StartsWith("<<:", StringComparison.Ordinal)
-            || content.StartsWith('*')
-            || content.StartsWith('&');
+        return content.Length > 0 && content is not ("---" or "...");
     }
 
     private static bool TrySplitMapping(string line, out string key, out string value)
     {
         key = string.Empty;
         value = string.Empty;
-        int colon = line.IndexOf(':', StringComparison.Ordinal);
-        if (colon <= 0)
+        if (!YamlMappingKeyReader.TryRead(line, out key, out int colon))
         {
             return false;
         }
 
-        string rawKey = line[..colon].Trim();
         value = line[(colon + 1)..].Trim();
-        if (rawKey is "<<")
-        {
-            key = rawKey;
-            return true;
-        }
-
-        if (rawKey.Length >= 2
-            && (rawKey[0] == '\'' && rawKey[^1] == '\''
-                || rawKey[0] == '"' && rawKey[^1] == '"'))
-        {
-            rawKey = rawKey[1..^1];
-        }
-
-        key = rawKey;
-        return key.Length > 0 && key.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+        return true;
     }
 
     private static bool ContainsYamlAnchorOrAlias(string value)

@@ -591,7 +591,10 @@ public static class RuntimeConfigBuilder
                 break;
             }
 
-            string key = entry[..separator].Trim().Trim('\'', '"');
+            if (!YamlMappingKeyReader.TryDecode(entry[..separator].Trim(), out string key))
+            {
+                throw new InvalidDataException("TUN mapping contains an unsupported key; use simple scalar keys.");
+            }
             if (key.Equals(expectedKey, StringComparison.OrdinalIgnoreCase))
             {
                 return position + separator;
@@ -762,7 +765,8 @@ public static class RuntimeConfigBuilder
 
         int separator = FindYamlKeySeparator(trimmed);
         return separator > 0
-            && trimmed[..separator].Trim().Trim('\'', '"').Equals(property, StringComparison.OrdinalIgnoreCase);
+            && YamlMappingKeyReader.TryDecode(trimmed[..separator].Trim(), out string key)
+            && key.Equals(property, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsTunChildContent(string line, int tunIndent)
@@ -874,65 +878,10 @@ public static class RuntimeConfigBuilder
             return false;
         }
 
-        key = trimmed[..separator].Trim().Trim('\'', '"');
-        return key.Length > 0;
+        return YamlMappingKeyReader.TryDecode(trimmed[..separator].Trim(), out key);
     }
 
-    private static int FindYamlKeySeparator(string value)
-    {
-        char quote = '\0';
-        bool escaped = false;
-        for (int index = 0; index < value.Length; index++)
-        {
-            char current = value[index];
-            if (quote == '"')
-            {
-                if (escaped)
-                {
-                    escaped = false;
-                }
-                else if (current == '\\')
-                {
-                    escaped = true;
-                }
-                else if (current == '"')
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (quote == '\'')
-            {
-                if (current == '\'' && index + 1 < value.Length && value[index + 1] == '\'')
-                {
-                    index++;
-                }
-                else if (current == '\'')
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (current is '"' or '\'')
-            {
-                quote = current;
-            }
-            else if (current == ':')
-            {
-                return index;
-            }
-            else if (current is ',' or '}' or ']')
-            {
-                return -1;
-            }
-        }
-
-        return -1;
-    }
+    private static int FindYamlKeySeparator(string value) => YamlMappingKeyReader.FindSeparator(value);
 
     private static void EnsureSupportedTunRootValue(string line)
     {

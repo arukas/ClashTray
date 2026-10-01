@@ -6,6 +6,37 @@ namespace ClashTray.Core.Tests;
 public sealed class RuntimeConfigBuilderRuntimeTests
 {
     [TestMethod]
+    public async Task EscapedManagedKeysUseTheSameDecoderAsListenerAnalysis()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        string source = Path.Combine(root, "source.yaml");
+        string destination = Path.Combine(root, "active.yaml");
+        const string yaml = "\"external-\\u0063ontroller\": 0.0.0.0:9191\n"
+            + "\"se\\x63ret\": old\n\"t\\U00000075n\":\n  \"\\x65nable\": true\n"
+            + "\"d\\u006es\":\n    enable: true\n    listen: 127.0.0.1:15359\nproxies: []\n";
+        await File.WriteAllTextAsync(source, yaml);
+        try
+        {
+            await RuntimeConfigBuilder.BuildAsync(source, destination, new AppSettings(TunEnabled: false));
+            string generated = await File.ReadAllTextAsync(destination);
+            Assert.IsFalse(generated.Contains("0.0.0.0:9191", StringComparison.Ordinal));
+            Assert.IsFalse(generated.Contains("old", StringComparison.Ordinal));
+            Assert.IsFalse(generated.Contains("enable\": true", StringComparison.Ordinal));
+            StringAssert.Contains(generated, "external-controller: 127.0.0.1:9090", StringComparison.Ordinal);
+            StringAssert.Contains(generated, "secret: ''", StringComparison.Ordinal);
+            MihomoEffectiveListenerPlan plan = await MihomoListenerPlanAnalyzer.AnalyzeEffectiveFileAsync(destination);
+            Assert.IsTrue(plan.IsComplete, plan.Warning);
+            Assert.AreEqual(2, plan.AdditionalListenerPlan.Bindings.Count);
+            Assert.AreEqual(yaml, await File.ReadAllTextAsync(source));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task ControllerCandidateRewritePreservesOtherListenersAndForcesLoopbackEmptySecret()
     {
         string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));

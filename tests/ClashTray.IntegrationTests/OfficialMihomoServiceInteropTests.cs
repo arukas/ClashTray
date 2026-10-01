@@ -761,6 +761,52 @@ public sealed class OfficialMihomoServiceInteropTests
         }
     }
 
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
+    public async Task ServiceRejectsEscapedDnsTcpConflictWithoutLaunchingMihomo()
+    {
+        string? executablePath = FindMihomoExecutable();
+        if (executablePath is null)
+        {
+            Assert.Inconclusive("Official pinned Mihomo is required for escaped DNS conflict coverage.");
+            return;
+        }
+
+        (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
+        try
+        {
+            int controllerPort = GetAvailableLoopbackPort();
+            int mixedPort = GetAvailableLoopbackPort();
+            using TcpListener conflict = new(IPAddress.Loopback, 0);
+            conflict.Start();
+            int dnsPort = ((IPEndPoint)conflict.LocalEndpoint).Port;
+            string configurationPath = Path.Combine(runtimeDirectory, "escaped-dns.yaml");
+            string yaml = BuildConflictConfiguration(controllerPort, mixedPort)
+                + $"\"d\\u006es\":{Environment.NewLine}"
+                + $"    enable: true{Environment.NewLine}"
+                + $"    listen: 127.0.0.1:{dnsPort}{Environment.NewLine}";
+            await File.WriteAllTextAsync(configurationPath, yaml);
+            await using ServiceRuntimeController controller = new(paths, managedUserSid: null,
+                tunHealthProbe: new DisabledTunNetworkHealthProbe(), restoreOwnedProxyStates: static () => { });
+
+            ServiceResponse response = await StartServiceCoreAsync(controller,
+                new ServiceCorePayload(configurationPath, runtimeDirectory, controllerPort, string.Empty, MixedPort: mixedPort));
+
+            Assert.IsFalse(response.Succeeded);
+            Assert.AreEqual(ServiceErrorCode.ProxyPortConflict, response.ErrorCode);
+            StringAssert.Contains(response.Error, "dns", StringComparison.OrdinalIgnoreCase);
+            Assert.AreEqual(yaml, await File.ReadAllTextAsync(configurationPath));
+            ServiceResponse status = await controller.HandleAsync(new ServiceRequest(Guid.NewGuid(), ServiceCommand.GetStatus,
+                ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None);
+            Assert.AreEqual(CoreState.Stopped, status.Core);
+            Assert.IsNull(status.RuntimeBinding);
+        }
+        finally
+        {
+            await DeleteTemporaryDirectoryAsync(root);
+        }
+    }
+
     private static async Task<ServiceResponse> StartServiceCoreAsync(
         ServiceRuntimeController controller,
         ServiceCorePayload payload) => await controller.HandleAsync(

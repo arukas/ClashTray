@@ -6,6 +6,73 @@ namespace ClashTray.Core.Tests;
 public sealed class MihomoListenerPlanAnalyzerTests
 {
     [TestMethod]
+    [DataRow("\"d\\u006es\":")]
+    [DataRow("\"d\\x6es\":")]
+    [DataRow("\"d\\U0000006es\":")]
+    public void EscapedDnsRootKeyStillPlansBothTransports(string rootKey)
+    {
+        string[] yaml = [rootKey, "    enable: true", "    listen: 127.0.0.1:15357"];
+        string[] original = yaml.ToArray();
+
+        MihomoListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeLines(yaml);
+
+        Assert.IsTrue(plan.IsComplete, plan.Warning);
+        Assert.AreEqual(2, plan.Bindings.Count);
+        Assert.AreEqual(15357, plan.Bindings[0].Port);
+        CollectionAssert.AreEqual(original, yaml);
+    }
+
+    [TestMethod]
+    [DataRow("!!str dns:")]
+    [DataRow("&key dns:")]
+    [DataRow("? dns")]
+    [DataRow("\"d\\qns\":")]
+    [DataRow("{dns: {enable: true, listen: '127.0.0.1:15357'}}")]
+    public void UnknownRootSyntaxNeverClaimsACompleteListenerPlan(string root)
+    {
+        string[] yaml = ["allow-lan: false", "mixed-port: 18080", root, "    enable: true", "    listen: 127.0.0.1:15357"];
+
+        MihomoEffectiveListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeEffectiveLines(yaml);
+
+        Assert.IsFalse(plan.IsComplete);
+        Assert.IsNotNull(plan.Warning);
+    }
+
+    [TestMethod]
+    public void UnknownRootAfterDnsIsNotHiddenInsideItsSection()
+    {
+        MihomoListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeLines(
+            ["dns:", "  enable: false", "!!str listeners: []"]);
+
+        Assert.IsFalse(plan.IsComplete);
+        Assert.IsNotNull(plan.Warning);
+    }
+
+    [TestMethod]
+    public void IndentationlessCustomListenerSequenceStillBelongsToItsSection()
+    {
+        MihomoListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeLines(
+            ["listeners:", "- name: local", "  type: http", "  listen: 127.0.0.1", "  port: 15358", "rules: []"]);
+
+        Assert.IsTrue(plan.IsComplete, plan.Warning);
+        Assert.AreEqual(1, plan.Bindings.Count);
+        Assert.AreEqual(15358, plan.Bindings[0].Port);
+    }
+
+    [TestMethod]
+    public void EscapedDnsChildKeysAreDecodedWithoutChangingSingleQuotedBackslashes()
+    {
+        MihomoListenerPlan plan = MihomoListenerPlanAnalyzer.AnalyzeLines(
+            ["dns:", "  \"\\x65nable\": true", "  \"l\\u0069sten\": 127.0.0.1:15358"]);
+        Assert.IsTrue(plan.IsComplete, plan.Warning);
+        Assert.AreEqual(2, plan.Bindings.Count);
+
+        MihomoListenerPlan literal = MihomoListenerPlanAnalyzer.AnalyzeLines(
+            ["'d\\u006es':", "  enable: true", "  listen: 127.0.0.1:15358"]);
+        Assert.AreEqual(0, literal.Bindings.Count, "Single quotes preserve a literal backslash.");
+    }
+
+    [TestMethod]
     public void EnabledDnsWithFixedIpv4AddressPlansTcpAndUdpWithoutChangingYaml()
     {
         string[] yaml =
