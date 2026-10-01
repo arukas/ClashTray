@@ -9,6 +9,51 @@ public sealed class StableRowReconcilerTests
 {
     private static readonly string[] ExpectedUploadOrder = ["second", "third", "first"];
     [TestMethod]
+    public void OneHeadInsertionInLargeListRemainsIncremental()
+    {
+        ConnectionInfo[] source = Enumerable.Range(0, 2000).Select(i => Connection(i.ToString(CultureInfo.InvariantCulture), i, "destination")).ToArray();
+        StableRowReconciler<string, ConnectionInfo, TestConnectionRow> rows = new(item => item.Id);
+        rows.Reconcile(source, source.Select(item => item.Id).ToArray(), item => new TestConnectionRow(item), (row, item) => row.Update(item));
+        TestConnectionRow selected = rows.Rows[1000];
+        int notifications = 0;
+        rows.Rows.CollectionChanged += (_, e) =>
+        {
+            notifications++;
+            Assert.AreEqual(System.Collections.Specialized.NotifyCollectionChangedAction.Add, e.Action);
+        };
+        ConnectionInfo[] inserted = [Connection("new", 0, "destination"), .. source];
+        StableRowReconcileResult result = rows.Reconcile(inserted, inserted.Select(item => item.Id).ToArray(), item => new TestConnectionRow(item), (row, item) => row.Update(item));
+        Assert.IsFalse(result.ViewReset);
+        Assert.AreEqual(1, notifications);
+        Assert.AreSame(selected, rows.Rows[1001]);
+    }
+
+    [TestMethod]
+    public void LargeReverseUsesOneResetKeepsRowIdentityAndNoChangeUsesNoEvents()
+    {
+        ConnectionInfo[] source = Enumerable.Range(0, 2000).Select(i => Connection(i.ToString(CultureInfo.InvariantCulture), i, "destination")).ToArray();
+        string[] keys = source.Select(item => item.Id).ToArray();
+        StableRowReconciler<string, ConnectionInfo, TestConnectionRow> rows = new(item => item.Id);
+        rows.Reconcile(source, keys, item => new TestConnectionRow(item), (row, item) => row.Update(item));
+        TestConnectionRow selected = rows.Rows[1000];
+        int notifications = 0;
+        rows.Rows.CollectionChanged += (_, e) =>
+        {
+            notifications++;
+            Assert.AreEqual(System.Collections.Specialized.NotifyCollectionChangedAction.Reset, e.Action);
+        };
+        string[] reversed = keys.Reverse().ToArray();
+        StableRowReconcileResult result = rows.Reconcile(source, reversed, item => new TestConnectionRow(item), (row, item) => row.Update(item));
+        Assert.IsTrue(result.ViewReset);
+        Assert.AreEqual(1, notifications);
+        Assert.AreEqual(0, result.CreatedRows);
+        Assert.AreSame(selected, rows.Rows[999]);
+        CollectionAssert.AreEqual(reversed, rows.Rows.Select(row => row.Item.Id).ToArray());
+        rows.Reconcile(source, reversed, item => new TestConnectionRow(item), (row, item) => row.Update(item));
+        Assert.AreEqual(1, notifications);
+    }
+
+    [TestMethod]
     public void SameConnectionIdentityUpdatesInPlaceAndDeletionRemovesSelectionTarget()
     {
         StableRowReconciler<string, ConnectionInfo, TestConnectionRow> rows = new(item => item.Id);

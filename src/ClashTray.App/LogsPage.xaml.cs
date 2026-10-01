@@ -9,22 +9,29 @@ using Windows.ApplicationModel.DataTransfer;
 
 namespace ClashTray.App;
 
-public sealed partial class LogsPage : UserControl
+public sealed partial class LogsPage : UserControl, IDisposable
 {
     private readonly ClashTrayRuntime _runtime;
     private readonly StableRowReconciler<LogRowIdentity, LogEntry, LogRowViewModel> _rows;
     private IReadOnlyList<LogEntry> _logs = [];
     private string _controllerIdentity = EndpointId.Local.Value;
     private bool _controllerWritable = true;
+    private readonly DebouncedAction _searchDebounce;
+    private long _viewRevision;
 
     public LogsPage(ClashTrayRuntime runtime)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
+        _searchDebounce = new(action => DispatcherQueue.TryEnqueue(() => action()), ApplyFilter);
+        Unloaded += (_, _) => _searchDebounce.Cancel();
+        Loaded += (_, _) => ApplyFilter();
         _rows = new(log => new LogRowIdentity(_controllerIdentity, log.Sequence));
         InitializeComponent();
         LogsListView.ItemsSource = _rows.Rows;
     }
+
+    public void Dispose() { _searchDebounce.Dispose(); GC.SuppressFinalize(this); }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
@@ -59,6 +66,7 @@ public sealed partial class LogsPage : UserControl
             controllerIdentity,
             StringComparison.Ordinal);
         _controllerIdentity = controllerIdentity;
+        if (controllerChanged) { _searchDebounce.Cancel(); }
         bool interactivityChanged = _controllerWritable != controllerWritable;
         _controllerWritable = controllerWritable;
         ClearLogsButton.IsEnabled = _controllerWritable;
@@ -73,14 +81,14 @@ public sealed partial class LogsPage : UserControl
         }
 
         _logs = snapshot.Logs;
-        ApplyFilter();
+        if (!_searchDebounce.IsPending) { ApplyFilter(); }
     }
 
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => _searchDebounce.Schedule();
 
-    private void LevelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplyFilter();
+    private void LevelBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { _searchDebounce.Cancel(); ApplyFilter(); }
 
-    private void SourceBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplyFilter();
+    private void SourceBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { _searchDebounce.Cancel(); ApplyFilter(); }
 
     private void ApplyFilter()
     {
@@ -96,11 +104,14 @@ public sealed partial class LogsPage : UserControl
             SearchBox.Text,
             level,
             source);
-        _rows.Reconcile(
+        long revision = ++_viewRevision;
+        ListViewUpdateState viewState = ListViewUpdateState.Capture(LogsListView);
+        StableRowReconcileResult reconciliation = _rows.Reconcile(
             _logs,
             filtered.Select(log => new LogRowIdentity(_controllerIdentity, log.Sequence)).ToArray(),
             log => new LogRowViewModel(log),
             (row, log) => row.Update(log));
+        if (reconciliation.ViewReset) { viewState.Restore(LogsListView, () => revision == _viewRevision); }
         EmptyListText.Visibility = _rows.Rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 

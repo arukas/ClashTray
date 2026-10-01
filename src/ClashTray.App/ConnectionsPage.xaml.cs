@@ -7,7 +7,7 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace ClashTray.App;
 
-public sealed partial class ConnectionsPage : UserControl
+public sealed partial class ConnectionsPage : UserControl, IDisposable
 {
     private readonly ClashTrayRuntime _runtime;
     private readonly StableRowReconciler<ConnectionRowIdentity, ConnectionInfo, ConnectionRowViewModel> _rows;
@@ -19,15 +19,22 @@ public sealed partial class ConnectionsPage : UserControl
     private EndpointCommandTarget? _expectedCommandTarget;
     private string? _selectedConnectionId;
     private bool _synchronizingSelection;
+    private readonly DebouncedAction _searchDebounce;
+    private long _viewRevision;
 
     public ConnectionsPage(ClashTrayRuntime runtime)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
+        _searchDebounce = new(action => DispatcherQueue.TryEnqueue(() => action()), ApplyFilter);
+        Unloaded += (_, _) => _searchDebounce.Cancel();
+        Loaded += (_, _) => ApplyFilter();
         _rows = new(connection => new ConnectionRowIdentity(_controllerIdentity, connection.Id));
         InitializeComponent();
         ConnectionsListView.ItemsSource = _rows.Rows;
     }
+
+    public void Dispose() { _searchDebounce.Dispose(); GC.SuppressFinalize(this); }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
@@ -76,6 +83,7 @@ public sealed partial class ConnectionsPage : UserControl
         _expectedCommandTarget = expectedCommandTarget;
         if (controllerChanged)
         {
+            _searchDebounce.Cancel();
             _selectedConnectionId = null;
         }
 
@@ -92,11 +100,11 @@ public sealed partial class ConnectionsPage : UserControl
 
         _connections = snapshot.Connections;
         _listSummary = snapshot.ConnectionsSummary;
-        ApplyFilter();
+        if (!_searchDebounce.IsPending) { ApplyFilter(); }
     }
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => _searchDebounce.Schedule();
 
-    private void SortBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplyFilter();
+    private void SortBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { _searchDebounce.Cancel(); ApplyFilter(); }
 
     private void ApplyFilter()
     {
@@ -111,10 +119,12 @@ public sealed partial class ConnectionsPage : UserControl
             SearchBox.Text,
             sort);
         _synchronizingSelection = true;
+        long revision = ++_viewRevision;
+        ListViewUpdateState viewState = ListViewUpdateState.Capture(ConnectionsListView);
         ConnectionRowViewModel? selectedRow;
         try
         {
-            _rows.Reconcile(
+            StableRowReconcileResult reconciliation = _rows.Reconcile(
                 _connections,
                 filtered.Select(connection => new ConnectionRowIdentity(_controllerIdentity, connection.Id)).ToArray(),
                 connection => new ConnectionRowViewModel(connection),
@@ -131,6 +141,7 @@ public sealed partial class ConnectionsPage : UserControl
             {
                 _selectedConnectionId = null;
             }
+            if (reconciliation.ViewReset) { viewState.Restore(ConnectionsListView, () => revision == _viewRevision); }
         }
         finally
         {

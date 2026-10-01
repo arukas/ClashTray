@@ -882,18 +882,31 @@ public sealed class OfficialMihomoServiceInteropTests
             int mixedPort = GetAvailableLoopbackPort();
             string configurationPath = Path.Combine(runtimeDirectory, "readiness-timeout.yaml");
             await File.WriteAllTextAsync(configurationPath, BuildConflictConfiguration(controllerPort, mixedPort));
+            CancellationTokenSource? operationDeadline = null;
+            bool observedUdp = false;
             await using ServiceRuntimeController controller = new(paths, managedUserSid: null,
                 tunHealthProbe: new DisabledTunNetworkHealthProbe(), restoreOwnedProxyStates: static () => { },
-                operationTimeoutForTest: TimeSpan.FromSeconds(3),
-                listenerInspectorForTest: (listener, identity) => listener.Name == "mixed-udp"
-                    ? new ListenerOwnerObservation(ownerState, "deterministic UDP observation")
-                    : WindowsListenerOwnerTable.InspectListener(listener.Address, listener.Port,
-                        listener.Transport, identity, listener.DualMode));
+                operationDeadlineForTest: lifetime => operationDeadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime),
+                listenerInspectorForTest: (listener, identity) =>
+                {
+                    if (listener.Name != "mixed-udp")
+                    {
+                        return WindowsListenerOwnerTable.InspectListener(listener.Address, listener.Port,
+                            listener.Transport, identity, listener.DualMode);
+                    }
+
+                    // Expire the command only after the relevant observation exists.
+                    // Cold CI startup must not consume a short real-time fixture budget.
+                    observedUdp = true;
+                    operationDeadline!.Cancel();
+                    return new ListenerOwnerObservation(ownerState, "deterministic UDP observation");
+                });
 
             ServiceResponse response = await StartServiceCoreAsync(controller,
                 new ServiceCorePayload(configurationPath, runtimeDirectory, controllerPort, string.Empty, MixedPort: mixedPort));
 
             Assert.IsFalse(response.Succeeded);
+            Assert.IsTrue(observedUdp, "The diagnostic test must reach the injected UDP observation before expiry.");
             Assert.AreEqual(ServiceErrorCode.OperationTimedOut, response.ErrorCode);
             StringAssert.Contains(response.Error, "mixed-udp", StringComparison.Ordinal);
             StringAssert.Contains(response.Error, $"127.0.0.1:{mixedPort}", StringComparison.Ordinal);

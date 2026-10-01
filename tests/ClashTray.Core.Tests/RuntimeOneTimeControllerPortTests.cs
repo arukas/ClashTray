@@ -348,7 +348,7 @@ public sealed class RuntimeOneTimeControllerPortTests
             _httpClient.Dispose();
             if (Directory.Exists(_root))
             {
-                Directory.Delete(_root, recursive: true);
+                await TestDirectoryCleanup.DeleteAsync(_root);
             }
         }
 

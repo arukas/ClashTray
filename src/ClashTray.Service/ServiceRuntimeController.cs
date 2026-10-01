@@ -41,6 +41,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private readonly Func<int, CancellationToken, Task>? _afterCoreStartForTest;
     private readonly Func<LocalPortBinding, LocalCoreProcessIdentity, ListenerOwnerObservation>? _listenerInspectorForTest;
     private readonly TimeSpan _defaultOperationTimeout;
+    private readonly Func<CancellationToken, CancellationTokenSource>? _operationDeadlineForTest;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly object _requestCacheGate = new();
     private readonly Dictionary<Guid, CachedRequest> _requestCache = [];
@@ -78,7 +79,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         Action<int>? beforeCoreStartForTest = null,
         Func<int, CancellationToken, Task>? afterCoreStartForTest = null,
         TimeSpan? operationTimeoutForTest = null,
-        Func<LocalPortBinding, LocalCoreProcessIdentity, ListenerOwnerObservation>? listenerInspectorForTest = null)
+        Func<LocalPortBinding, LocalCoreProcessIdentity, ListenerOwnerObservation>? listenerInspectorForTest = null,
+        Func<CancellationToken, CancellationTokenSource>? operationDeadlineForTest = null)
     {
         _paths = paths ?? new AppPaths();
         _logger = loggerFactory?.CreateLogger<ServiceRuntimeController>() ?? NullLogger<ServiceRuntimeController>.Instance;
@@ -86,6 +88,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         _beforeCoreStartForTest = beforeCoreStartForTest;
         _afterCoreStartForTest = afterCoreStartForTest;
         _listenerInspectorForTest = listenerInspectorForTest;
+        _operationDeadlineForTest = operationDeadlineForTest;
         _defaultOperationTimeout = operationTimeoutForTest ?? DefaultOperationTimeout;
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_defaultOperationTimeout, TimeSpan.Zero);
         _restoreOwnedProxyStates = restoreOwnedProxyStates ?? SystemProxyRecovery.RestoreOwnedStatesForLoadedUsers;
@@ -207,8 +210,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         CancellationToken operationToken = default;
         try
         {
-            using CancellationTokenSource operationTimeout = CreateTimeout(
-                GetOperationTimeout(request.Command), _lifetimeCts.Token);
+            using CancellationTokenSource operationTimeout = CreateOperationTimeout(request.Command);
             operationToken = operationTimeout.Token;
             ServiceResponse response = await HandleCoreAsync(request, operationTimeout.Token)
                 .ConfigureAwait(false);
@@ -1386,6 +1388,16 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         {
             _operationGate.Release();
         }
+    }
+
+    private CancellationTokenSource CreateOperationTimeout(ServiceCommand command)
+    {
+        if (_operationDeadlineForTest is { } factory)
+        {
+            return factory(_lifetimeCts.Token);
+        }
+
+        return CreateTimeout(GetOperationTimeout(command), _lifetimeCts.Token);
     }
 
     private static CancellationTokenSource CreateTimeout(TimeSpan timeout, CancellationToken cancellationToken)

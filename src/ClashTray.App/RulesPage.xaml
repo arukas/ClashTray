@@ -9,7 +9,14 @@
         </Style>
     </UserControl.Resources>
 
-    <StackPanel Spacing="10" Padding="0,2,0,12">
+    <Grid RowSpacing="10" Padding="0,2,0,12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
@@ -22,7 +29,7 @@
             </StackPanel>
         </Grid>
 
-        <Border Style="{StaticResource ClashTrayCardStyle}">
+        <Border Grid.Row="1" Style="{StaticResource ClashTrayCardStyle}">
             <Grid ColumnSpacing="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -39,9 +46,9 @@
                 </StackPanel>
             </Grid>
         </Border>
-        <TextBlock x:Name="ListSummaryText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
-        <TextBlock x:Name="StatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+        <TextBlock Grid.Row="2" x:Name="ListSummaryText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
+        <TextBlock Grid.Row="3" x:Name="StatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
 
-        <Border Style="{StaticResource ClashTrayCardStyle}" Padding="8"><Grid MinHeight="80"><ListView x:Name="RulesListView" x:Uid="RulesListView" ScrollViewer.VerticalScrollMode="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled" /><TextBlock x:Name="EmptyListText" x:Uid="RulesEmptyListText" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></Grid></Border>
-    </StackPanel>
+        <Border Grid.Row="4" Style="{StaticResource ClashTrayCardStyle}" Padding="8"><Grid MinHeight="80"><ListView x:Name="RulesListView" x:Uid="RulesListView" ScrollViewer.VerticalScrollMode="Enabled" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled"><ListView.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" /></DataTemplate></ListView.ItemTemplate></ListView><TextBlock x:Name="EmptyListText" x:Uid="RulesEmptyListText" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></Grid></Border>
+    </Grid>
 </UserControl>

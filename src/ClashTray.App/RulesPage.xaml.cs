@@ -5,11 +5,13 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace ClashTray.App;
 
-public sealed partial class RulesPage : UserControl
+public sealed partial class RulesPage : UserControl, IDisposable
 {
     private readonly ClashTrayRuntime _runtime;
     private IReadOnlyList<RuleInfo> _rules = [];
     private ControllerListSummary? _listSummary;
+    private readonly DebouncedAction _searchDebounce;
+    private IReadOnlyList<(RuleInfo Rule, string SearchText, string DisplayText)> _ruleRows = [];
     private bool _refreshing;
     private bool _controllerWritable = true;
     private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
@@ -18,8 +20,13 @@ public sealed partial class RulesPage : UserControl
     {
         ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
+        _searchDebounce = new(action => DispatcherQueue.TryEnqueue(() => action()), ApplyFilter);
+        Unloaded += (_, _) => _searchDebounce.Cancel();
+        Loaded += (_, _) => ApplyFilter();
         InitializeComponent();
     }
+
+    public void Dispose() { _searchDebounce.Dispose(); GC.SuppressFinalize(this); }
 
     public void UpdateSnapshot(RuntimeSnapshot snapshot)
     {
@@ -54,13 +61,14 @@ public sealed partial class RulesPage : UserControl
         }
 
         _rules = snapshot.Rules;
+        _ruleRows = _rules.Select(rule => (rule, $"{rule.Type} {rule.Payload} {rule.Proxy}", $"{rule.Type}  {rule.Payload}  → {rule.Proxy}")).ToArray();
         _listSummary = snapshot.RulesSummary;
-        ApplyFilter();
+        if (!_searchDebounce.IsPending) { ApplyFilter(); }
     }
 
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => _searchDebounce.Schedule();
 
-    private void FilterBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplyFilter();
+    private void FilterBox_SelectionChanged(object sender, SelectionChangedEventArgs e) { _searchDebounce.Cancel(); ApplyFilter(); }
 
     private async void RefreshRulesButton_Click(object sender, RoutedEventArgs e)
     {
@@ -99,15 +107,12 @@ public sealed partial class RulesPage : UserControl
 
         string search = SearchBox.Text.Trim();
         string? filter = (FilterBox.SelectedItem as ComboBoxItem)?.Tag as string;
-        RulesListView.Items.Clear();
-        foreach (RuleInfo rule in _rules.Where(rule =>
-                     (string.IsNullOrWhiteSpace(search) || $"{rule.Type} {rule.Payload} {rule.Proxy}".Contains(search, StringComparison.OrdinalIgnoreCase))
+        RulesListView.ItemsSource = _ruleRows.Where(row =>
+                     (string.IsNullOrWhiteSpace(search) || row.SearchText.Contains(search, StringComparison.OrdinalIgnoreCase))
                      && (filter is "all" or null
-                         || filter == "domain" && rule.Type.Contains("DOMAIN", StringComparison.OrdinalIgnoreCase)
-                         || filter == "ip" && rule.Type.Contains("IP", StringComparison.OrdinalIgnoreCase))))
-        {
-            RulesListView.Items.Add(new ListViewItem { Content = $"{rule.Type}  {rule.Payload}  → {rule.Proxy}" });
-        }
+                         || filter == "domain" && row.Rule.Type.Contains("DOMAIN", StringComparison.OrdinalIgnoreCase)
+                         || filter == "ip" && row.Rule.Type.Contains("IP", StringComparison.OrdinalIgnoreCase)))
+            .Select(row => row.DisplayText).ToArray();
         EmptyListText.Visibility = RulesListView.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         ListSummaryText.Text = LocalizationService.Format("ControllerListCountFormat", _listSummary?.ReportedCount ?? _rules.Count, _rules.Count, RulesListView.Items.Count)
             + (_listSummary?.IsTruncated == true ? LocalizationService.Get("ControllerListTruncated") : string.Empty);

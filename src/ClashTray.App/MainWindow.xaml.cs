@@ -15,6 +15,7 @@ using System.Reflection;
 
 namespace ClashTray.App;
 
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable", Justification = "WinUI owns this Window lifetime. AllowClose explicitly disposes the reusable page controls before the window is closed; transient page Unloaded only cancels pending searches.")]
 public sealed partial class MainWindow : Window
 {
     private enum PanelPage
@@ -154,6 +155,9 @@ public sealed partial class MainWindow : Window
     public void AllowClose()
     {
         _allowClose = true;
+        _connectionsPage?.Dispose();
+        _logsPage?.Dispose();
+        _rulesPage?.Dispose();
         StopThemeTracking();
     }
 
@@ -777,7 +781,7 @@ public sealed partial class MainWindow : Window
     {
         _activePage = target;
         bool isDashboard = page == _proxyPage;
-        bool isListPage = target is PanelPage.Connections or PanelPage.Logs;
+        bool isListPage = target is PanelPage.Rules or PanelPage.Connections or PanelPage.Logs;
         DashboardScrollViewer.Visibility = isDashboard ? Visibility.Visible : Visibility.Collapsed;
         OtherPageHost.Visibility = isDashboard ? Visibility.Collapsed : Visibility.Visible;
         OtherPageScrollViewer.Visibility = isDashboard || isListPage

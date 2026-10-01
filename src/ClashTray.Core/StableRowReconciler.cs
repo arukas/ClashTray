@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 
 namespace ClashTray.Core;
 
@@ -8,7 +10,8 @@ public sealed record StableRowReconcileResult(
     int RemovedRows,
     int AddedToView,
     int RemovedFromView,
-    int MovedInView);
+    int MovedInView,
+    bool ViewReset = false);
 
 /// <summary>
 /// Keeps row view models keyed by stable domain identity and applies only the
@@ -20,6 +23,7 @@ public sealed class StableRowReconciler<TKey, TItem, TRow>
 {
     private readonly Func<TItem, TKey> _keySelector;
     private readonly Dictionary<TKey, TRow> _rowsByKey = [];
+    private readonly BatchRowCollection _view = [];
 
     public StableRowReconciler(Func<TItem, TKey> keySelector)
     {
@@ -27,7 +31,7 @@ public sealed class StableRowReconciler<TKey, TItem, TRow>
         _keySelector = keySelector;
     }
 
-    public ObservableCollection<TRow> Rows { get; } = [];
+    public ObservableCollection<TRow> Rows => _view;
 
     public int CachedRowCount => _rowsByKey.Count;
     private int IndexOfReference(TRow target)
@@ -107,7 +111,51 @@ public sealed class StableRowReconciler<TKey, TItem, TRow>
             }
         }
 
+        int differences = Math.Abs(Rows.Count - targetRows.Count);
+        for (int i = 0; i < Math.Min(Rows.Count, targetRows.Count) && differences <= 64; i++)
+        {
+            if (!ReferenceEquals(Rows[i], targetRows[i]))
+            {
+                differences++;
+            }
+        }
+
+        if (differences == 0)
+        {
+            return new(createdRows, updatedRows, removedRows, 0, 0, 0);
+        }
+
         HashSet<TRow> targetRowSet = new(targetRows, ReferenceEqualityComparer.Instance);
+        HashSet<TRow> previousRows = new(Rows, ReferenceEqualityComparer.Instance);
+        int removedCount = Rows.Count(row => !targetRowSet.Contains(row));
+        int addedCount = targetRows.Count(row => !previousRows.Contains(row));
+
+        if (differences > 64 && removedCount + addedCount <= 64)
+        {
+            // An insertion/removal at the head shifts every position, but can
+            // still be a small edit when the surviving rows retain their order.
+            using IEnumerator<TRow> previousOrder = Rows.Where(targetRowSet.Contains).GetEnumerator();
+            bool sameOrder = true;
+            foreach (TRow row in targetRows.Where(previousRows.Contains))
+            {
+                if (!previousOrder.MoveNext() || !ReferenceEquals(row, previousOrder.Current))
+                {
+                    sameOrder = false;
+                    break;
+                }
+            }
+
+            if (sameOrder) { differences = removedCount + addedCount; }
+        }
+
+        // Limit costly UI collection notifications and linear move searches for
+        // large projections; smaller edits keep their incremental notifications.
+        if (Math.Max(Rows.Count, targetRows.Count) >= 128 && differences > 64)
+        {
+            _view.ReplaceAll(targetRows);
+            return new(createdRows, updatedRows, removedRows, addedCount, removedCount, 0, ViewReset: true);
+        }
+
         int removedFromView = 0;
         for (int index = Rows.Count - 1; index >= 0; index--)
         {
@@ -126,6 +174,12 @@ public sealed class StableRowReconciler<TKey, TItem, TRow>
             if (index < Rows.Count && ReferenceEquals(Rows[index], target))
             {
                 continue;
+            }
+
+            if (targetRows.Count >= 128 && removedFromView + addedToView + movedInView >= 64)
+            {
+                _view.ReplaceAll(targetRows);
+                return new(createdRows, updatedRows, removedRows, addedCount, removedCount, movedInView, ViewReset: true);
             }
 
             int existingIndex = IndexOfReference(target);
@@ -154,5 +208,22 @@ public sealed class StableRowReconciler<TKey, TItem, TRow>
             addedToView,
             removedFromView,
             movedInView);
+    }
+
+    private sealed class BatchRowCollection : ObservableCollection<TRow>
+    {
+        public void ReplaceAll(List<TRow> rows)
+        {
+            CheckReentrancy();
+            Items.Clear();
+            foreach (TRow row in rows)
+            {
+                Items.Add(row);
+            }
+
+            OnPropertyChanged(new PropertyChangedEventArgs(nameof(Count)));
+            OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+            OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Reset));
+        }
     }
 }
