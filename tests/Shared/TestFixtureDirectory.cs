@@ -95,7 +95,7 @@ internal static class TestFixtureDirectory
         using WindowsIdentity identity = WindowsIdentity.GetCurrent();
         SecurityIdentifier sid = identity.User ?? throw new InvalidOperationException("Fixture owner SID is unavailable.");
         FileSystemSecurity security = directory ? new DirectoryInfo(path).GetAccessControl() : new FileInfo(path).GetAccessControl();
-        if (!sid.Equals(security.GetOwner(typeof(SecurityIdentifier))))
+        if (!IsOwnedByCurrentToken(identity, sid, security.GetOwner(typeof(SecurityIdentifier))))
         { throw new InvalidOperationException("Fixture cleanup refuses to modify a different owner's ACL."); }
         security.SetAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl,
             directory ? InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit : InheritanceFlags.None,
@@ -107,5 +107,19 @@ internal static class TestFixtureDirectory
         {
             foreach (string child in Directory.EnumerateFileSystemEntries(path)) { RestoreOwnedTree(root, child, depth + 1, beforeEntryInspection); }
         }
+    }
+
+    private static bool IsOwnedByCurrentToken(WindowsIdentity identity, SecurityIdentifier user, object? owner)
+    {
+        if (owner is not SecurityIdentifier ownerSid) { return false; }
+        if (user.Equals(ownerSid)) { return true; }
+        // Elevated members of Administrators create objects owned by the
+        // Administrators group, not the user SID (Windows default owner policy).
+        if (identity.Groups is null) { return false; }
+        foreach (SecurityIdentifier? group in identity.Groups)
+        {
+            if (group is not null && group.Equals(ownerSid)) { return true; }
+        }
+        return false;
     }
 }
