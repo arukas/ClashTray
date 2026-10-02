@@ -298,7 +298,6 @@ jobs:
             $env:GITHUB_SHA,
             '--title',
             "ClashTray $env:RELEASE_VERSION",
-            '--generate-notes',
             '--notes-file',
             (Join-Path $env:RUNNER_TEMP 'clashtray-release-notes.md')
           )
