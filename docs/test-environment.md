@@ -2,7 +2,7 @@
 
 普通逻辑测试用隔离路径、可控任务和观察证据。CoreUpdater 的文件事务通过窄权限策略测试；生产默认 Windows ACL 策略保持不变，并由真实权限用例单独验证。不得为了让测试清理通过而放宽 ProgramData 权限。
 
-TestFixtureDirectory 只注册本测试进程创建的 Temp/ClashTrayTests/GUID 根。清理校验绝对根、祖先和子项 reparse、当前创建者所有权，且仅在该根内恢复创建者删除所需 ACL。拒绝未知旧目录/真实用户数据；不递归处理未知 reparse 目标。临时文件在枚举后被原子移走只视为已清理；权限、归属、reparse 和其他 I/O 错误仍失败。文件分享冲突保留 2 秒短重试，主体和清理同时失败保留双异常及原堆栈。官方核心 fixture 也复用该生命周期。测试历史遗留目录不自动清理。
+TestFixtureDirectory 只注册本测试进程创建的 Temp/ClashTrayTests/GUID 根。清理校验绝对根、祖先和子项 reparse、当前创建者所有权（创建者用户 SID 或当前进程令牌内的组 SID；提升权限进程创建的对象默认归 Administrators 组），且仅在该根内恢复创建者删除所需 ACL。拒绝未知旧目录/真实用户数据；不递归处理未知 reparse 目标。临时文件在枚举后被原子移走只视为已清理；权限、归属、reparse 和其他 I/O 错误仍失败。文件分享冲突与删除刚执行二进制时的短暂拒绝访问（杀软扫描/进程收尾）共用 2 秒短重试，主体和清理同时失败保留双异常及原堆栈。官方核心 fixture 也复用该生命周期。测试历史遗留目录不自动清理。
 
 | 类别 | 能力与门禁 |
 | --- | --- |
@@ -19,7 +19,7 @@ TestFixtureDirectory 只注册本测试进程创建的 Temp/ClashTrayTests/GUID 
 
 资源释放须先于目录清理：尤其 await using 声明在 try 外时，普通 finally 先执行，不能在其中先删目录。RuntimeSubscriptionSwitchTests 使用真实独占文件句柄确定性验证这个顺序，主体/清理接入共享生命周期。共享 fixture 根在 TRX 标准输出记录，便于定位本次失败，无须扫描删除未知旧目录。
 
-受限与普通 Windows 执行身份可能不同。清理必须以创建者 SID 验证，不能为方便而改变所有者或放宽真实数据权限。CLR FileSystemAclExtensions.SetAccessControl 只持久化修改的 DACL；不要把 PowerShell Set-Acl 申请 SACL 所需 SeSecurityPrivilege 当成清理前置条件。
+受限与普通 Windows 执行身份可能不同。清理必须以创建者用户或当前令牌组 SID 验证（提升令牌下新对象归 Administrators 组所有），不能为方便而改变所有者或放宽真实数据权限。CLR FileSystemAclExtensions.SetAccessControl 只持久化修改的 DACL；不要把 PowerShell Set-Acl 申请 SACL 所需 SeSecurityPrivilege 当成清理前置条件。
 
 2026-10-02 R1/R3/R2 后续回归使用独立根 `artifacts/design-followup-20261002-01a0fbde`，修复前红用例、各切片、最终 TRX 与覆盖率均保留。NetworkDisableRecoveryTests 使用隔离代理/服务、实际独占文件句柄和受控存储故障验证关闭及意图；ConfigurationSettingsRecoveryTests 验证配置与设置 journal 的组合。ServiceCleanupAdmissionTests 用可控任务/时钟验证配额、并发、指纹、取消和过期；OfficialMihomoServiceInteropTests 的新增清理用例运行固定官方子进程，真实确认 TUN 已经 Off（从未启用）及进程退出、普通压力下排队和可控期限结束。没有固定 sleep 制造竞争，也没有启动真实 TUN。
 

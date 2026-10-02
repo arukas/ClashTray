@@ -56,7 +56,7 @@ internal static class TestFixtureDirectory
         {
             ValidateAncestors(root);
             try { Directory.Delete(root, recursive: true); }
-            catch (IOException exception) when ((exception.HResult & 0xffff) == 32 && Stopwatch.GetElapsedTime(start) < TimeSpan.FromSeconds(2))
+            catch (Exception exception) when (IsTransientDeleteConflict(exception) && Stopwatch.GetElapsedTime(start) < TimeSpan.FromSeconds(2))
             {
                 sharingViolationObserved?.Invoke();
                 await Task.Delay(TimeSpan.FromMilliseconds(40)).ConfigureAwait(false);
@@ -108,6 +108,12 @@ internal static class TestFixtureDirectory
             foreach (string child in Directory.EnumerateFileSystemEntries(path)) { RestoreOwnedTree(root, child, depth + 1, beforeEntryInspection); }
         }
     }
+
+    private static bool IsTransientDeleteConflict(Exception exception) =>
+        // Antivirus scans and process teardown briefly deny deleting a
+        // just-executed binary even after its process has fully exited.
+        exception is UnauthorizedAccessException
+        || (exception is IOException ioException && (ioException.HResult & 0xffff) == 32);
 
     private static bool IsOwnedByCurrentToken(WindowsIdentity identity, SecurityIdentifier user, object? owner)
     {
