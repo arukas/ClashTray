@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Diagnostics.CodeAnalysis;
+using ClashTray.Testing;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core.Tests;
@@ -9,9 +11,11 @@ public sealed class RuntimeSubscriptionSwitchTests
     private static readonly string[] SelectionThenClose = ["select", "close"];
 
     [TestMethod]
+    [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "Runtime owns and disposes the injected file-lease source; it deterministically verifies cleanup ordering.")]
     public async Task SubscriptionSuccessIsPublishedOnlyAfterSwitchCompletes()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
+        Console.WriteLine($"Fixture lifetime root: {root}");
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         byte[] body = "port: 17890\nsocks-port: 17891\nmode: rule\nlog-level: info\n"u8.ToArray();
         using LoopbackSubscriptionServer server = new(body);
@@ -19,10 +23,12 @@ public sealed class RuntimeSubscriptionSwitchTests
         ConfigurationStore setupStore = new(paths);
         ConfigurationProfile imported = await setupStore.ImportSubscriptionAsync(subscriptionUri, "sub");
         TestSettingsStore settings = new TestSettingsStore(new AppSettings(ActiveConfigurationId: "other-config"));
+        Directory.CreateDirectory(root);
+        DisposalFileLeaseSource fileLease = new(Path.Combine(root, "candidate-lifetime.tmp"));
         await using ClashTrayRuntime runtime = new ClashTrayRuntime(
-            paths, null, null, settings, null, new FailingCandidateValidator());
+            paths, null, null, settings, null, new FailingCandidateValidator(), networkContextSource: fileLease);
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             List<SubscriptionState> transitions = new();
             object gate = new();
@@ -48,27 +54,36 @@ public sealed class RuntimeSubscriptionSwitchTests
                     transitions.Contains(SubscriptionState.Succeeded),
                     "Succeeded must not be published before the configuration switch commits.");
             }
-        }
-        finally
+        }, async () =>
         {
+            await runtime.DisposeAsync();
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
+    }
+
+    private sealed class DisposalFileLeaseSource(string path) : INetworkContextSource
+    {
+        private readonly FileStream _lease = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        public event EventHandler<NetworkContextSnapshot>? ContextChanged { add { } remove { } }
+        public Task<NetworkContextSnapshot> GetCurrentAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new NetworkContextSnapshot(0, DateTimeOffset.UtcNow, NetworkConnectivityKind.None, null, null, NetworkPermissionState.Unavailable, false, false));
+        public ValueTask DisposeAsync() => _lease.DisposeAsync();
     }
 
     [TestMethod]
     public async Task SwitchingProxyOptionDisconnectsOnlyAfterSuccessfulSelection()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         using ProxySwitchHandler handler = new ProxySwitchHandler();
         using HttpClient httpClient = new HttpClient(handler);
         MihomoApiClient api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
         await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await runtime.UpdateSettingsAsync(new AppSettingsPatch(DisconnectConnectionsAfterProxySwitch: SettingPatchValue.Set(true)));
             runtime.AttachControllerForTesting(api, usingServiceCore: false);
@@ -78,27 +93,27 @@ public sealed class RuntimeSubscriptionSwitchTests
 
             CollectionAssert.AreEqual(SelectionThenClose, handler.Operations.Take(2).ToArray());
             Assert.AreEqual("new", runtime.Snapshot.ProxyGroups.Single(group => group.Name == "Auto").Current);
-        }
-        finally
+        }, async () =>
         {
+            await runtime.DisposeAsync();
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
     public async Task FailedDisconnectReportsPartialSuccessWithoutChangingSelection()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         using ProxySwitchHandler handler = new ProxySwitchHandler { FailCloseAll = true };
         using HttpClient httpClient = new HttpClient(handler);
         MihomoApiClient api = new MihomoApiClient(httpClient, new Uri("http://127.0.0.1:9090/"), string.Empty);
         await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await runtime.UpdateSettingsAsync(new AppSettingsPatch(DisconnectConnectionsAfterProxySwitch: SettingPatchValue.Set(true)));
             runtime.AttachControllerForTesting(api, usingServiceCore: false);
@@ -112,20 +127,20 @@ public sealed class RuntimeSubscriptionSwitchTests
             Assert.AreEqual("new", runtime.Snapshot.ProxyGroups.Single(group => group.Name == "Auto").Current);
             StringAssert.Contains(runtime.Snapshot.ErrorMessage, "节点已切换", StringComparison.Ordinal);
             Assert.IsTrue(runtime.Snapshot.Logs.Any(log => log.Message.Contains("未能断开旧连接", StringComparison.Ordinal)));
-        }
-        finally
+        }, async () =>
         {
+            await runtime.DisposeAsync();
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
     public async Task RuntimeInitializationKeepsOnlyOneActiveConfiguration()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         ConfigurationStore store = new ConfigurationStore(paths);
         ConfigurationProfile first = await store.ImportLocalAsync(
@@ -137,24 +152,23 @@ public sealed class RuntimeSubscriptionSwitchTests
         await RuntimeTestHelpers.WriteMetadataAsync(paths, first with { IsActive = true });
         await RuntimeTestHelpers.WriteMetadataAsync(paths, second with { IsActive = true });
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths);
             await runtime.InitializeAsync();
 
             Assert.AreEqual(1, runtime.Snapshot.Configurations.Count(configuration => configuration.IsActive));
             Assert.AreEqual(first.Id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
-        }
-        finally
+        }, async () =>
         {
-            Directory.Delete(root, recursive: true);
-        }
+            await TestFixtureDirectory.DeleteAsync(root);
+        });
     }
 
     [TestMethod]
     public async Task SelectingConfigurationWhileCoreIsStoppedCommitsWithoutStartingCore()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         Directory.CreateDirectory(paths.CoreRoot);
         File.Copy(Environment.ProcessPath!, paths.ManagedCoreExecutable);
@@ -174,7 +188,7 @@ public sealed class RuntimeSubscriptionSwitchTests
         TestSettingsStore settings = new TestSettingsStore(
             new AppSettings(ActiveConfigurationId: first.Id));
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await using ClashTrayRuntime runtime = new ClashTrayRuntime(
                 paths,
@@ -191,20 +205,19 @@ public sealed class RuntimeSubscriptionSwitchTests
             Assert.AreEqual("second", runtime.Snapshot.Core.ConfigurationName);
             Assert.AreEqual(second.Id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
             Assert.AreEqual(1, settings.SaveCount);
-        }
-        finally
+        }, async () =>
         {
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
     public async Task SelectingUnknownConfigurationDoesNotPersistOrChangeActiveSelection()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         ConfigurationStore store = new ConfigurationStore(paths);
         ConfigurationProfile first = await store.ImportLocalAsync(
@@ -213,7 +226,7 @@ public sealed class RuntimeSubscriptionSwitchTests
         TestSettingsStore settings = new TestSettingsStore(
             new AppSettings(ActiveConfigurationId: first.Id));
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, settings);
             await runtime.InitializeAsync();
@@ -224,20 +237,19 @@ public sealed class RuntimeSubscriptionSwitchTests
             Assert.AreEqual(first.Id, runtime.Settings.ActiveConfigurationId);
             Assert.AreEqual(first.Id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
             Assert.AreEqual(0, settings.SaveCount);
-        }
-        finally
+        }, async () =>
         {
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
     public async Task FailedCandidateValidationDoesNotPersistOrChangeActiveSelection()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         ConfigurationStore store = new ConfigurationStore(paths);
         ConfigurationProfile first = await store.ImportLocalAsync(
@@ -249,7 +261,7 @@ public sealed class RuntimeSubscriptionSwitchTests
         TestSettingsStore settings = new TestSettingsStore(
             new AppSettings(ActiveConfigurationId: first.Id));
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await using ClashTrayRuntime runtime = new ClashTrayRuntime(
                 paths,
@@ -266,20 +278,19 @@ public sealed class RuntimeSubscriptionSwitchTests
             Assert.AreEqual(first.Id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
             Assert.AreEqual(0, settings.SaveCount);
             Assert.IsFalse(File.Exists(paths.ConfigurationSwitchJournalFile));
-        }
-        finally
+        }, async () =>
         {
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
     public async Task StartupRecoversIncompleteSwitchBeforeUsingCandidateConfiguration()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         ConfigurationStore store = new ConfigurationStore(paths);
         ConfigurationProfile first = await store.ImportLocalAsync(
@@ -304,7 +315,7 @@ public sealed class RuntimeSubscriptionSwitchTests
             previousControllerGeneration: 0).WithStage(ConfigurationSwitchStage.RuntimePromoted);
         await journalStore.SaveAsync(journal);
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, settings);
             await runtime.InitializeAsync();
@@ -313,20 +324,19 @@ public sealed class RuntimeSubscriptionSwitchTests
             Assert.AreEqual(first.Id, runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Id);
             Assert.AreEqual(1, settings.SaveCount);
             Assert.IsFalse(File.Exists(paths.ConfigurationSwitchJournalFile));
-        }
-        finally
+        }, async () =>
         {
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
     public async Task StartupRestoresPersistedSubscriptionBackupBeforeCompletingRecovery()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         ConfigurationStore store = new ConfigurationStore(paths);
         string id = "0123456789abcdef";
@@ -364,7 +374,7 @@ public sealed class RuntimeSubscriptionSwitchTests
             .WithStage(ConfigurationSwitchStage.RuntimePromoted);
         await journalStore.SaveAsync(journal);
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await using ClashTrayRuntime runtime = new ClashTrayRuntime(paths, null, null, settings);
             await runtime.InitializeAsync();
@@ -375,20 +385,19 @@ public sealed class RuntimeSubscriptionSwitchTests
             Assert.AreEqual(1, settings.SaveCount);
             Assert.IsFalse(File.Exists(paths.ConfigurationSwitchJournalFile));
             Assert.IsFalse(Directory.EnumerateFiles(paths.ConfigurationSwitchBackupsRoot).Any());
-        }
-        finally
+        }, async () =>
         {
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
     public async Task ReimportingActiveConfigurationRefreshesSnapshotAfterNoOpSelection()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         ConfigurationStore store = new ConfigurationStore(paths);
         string source = await RuntimeTestHelpers.WriteConfigAsync(root, "active.yaml");
@@ -401,7 +410,7 @@ public sealed class RuntimeSubscriptionSwitchTests
             settings,
             candidateValidator: new AcceptingCandidateValidator());
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await runtime.InitializeAsync();
             Assert.AreEqual(
@@ -413,20 +422,20 @@ public sealed class RuntimeSubscriptionSwitchTests
             Assert.AreEqual(
                 "new name",
                 runtime.Snapshot.Configurations.Single(configuration => configuration.IsActive).Name);
-        }
-        finally
+        }, async () =>
         {
+            await runtime.DisposeAsync();
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
     public async Task DeleteConfigurationDoesNotHoldReadRefreshBehindSettingsSave()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         BlockingSettingsStore settings = new(new AppSettings());
         FakeSystemProxyController proxy = new(SystemProxyState.Off);
@@ -444,7 +453,7 @@ public sealed class RuntimeSubscriptionSwitchTests
         Task? delete = null;
         Task? refresh = null;
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             string source = Path.Combine(root, "source.yaml");
             await File.WriteAllTextAsync(source, "proxies: []\n");
@@ -462,8 +471,7 @@ public sealed class RuntimeSubscriptionSwitchTests
 
             settings.ReleaseSave();
             await Task.WhenAll(delete, refresh);
-        }
-        finally
+        }, async () =>
         {
             settings.ReleaseSave();
             if (delete is not null)
@@ -476,17 +484,18 @@ public sealed class RuntimeSubscriptionSwitchTests
                 await refresh.WaitAsync(TimeSpan.FromSeconds(2));
             }
 
+            await runtime.DisposeAsync();
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
     public async Task ReloadConfigurationDoesNotHoldReadRefreshDuringValidation()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         ConfigurationStore store = new ConfigurationStore(paths);
         ConfigurationProfile imported = await store.ImportLocalAsync(
@@ -504,7 +513,7 @@ public sealed class RuntimeSubscriptionSwitchTests
         Task? reload = null;
         Task? refresh = null;
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await runtime.InitializeAsync();
             ConfigurationProfile profile = runtime.Snapshot.Configurations
@@ -519,8 +528,7 @@ public sealed class RuntimeSubscriptionSwitchTests
 
             validator.ReleaseValidation();
             await Task.WhenAll(reload, refresh);
-        }
-        finally
+        }, async () =>
         {
             validator.ReleaseValidation();
             if (reload is not null)
@@ -533,10 +541,11 @@ public sealed class RuntimeSubscriptionSwitchTests
                 await refresh.WaitAsync(TimeSpan.FromSeconds(2));
             }
 
+            await runtime.DisposeAsync();
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
     }
 }

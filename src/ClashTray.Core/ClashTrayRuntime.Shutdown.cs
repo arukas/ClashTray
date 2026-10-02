@@ -213,7 +213,7 @@ public sealed partial class ClashTrayRuntime
             }
 
             _operationLock.BeginQuiescing();
-            Interlocked.Increment(ref _coreLifecycleEpoch);
+            _coreLifecycle.BeginTransition();
 
             if (!await RunStepAsync(
                     "取消运行时工作",
@@ -472,7 +472,7 @@ public sealed partial class ClashTrayRuntime
                     shutdownDeadline.Token).ConfigureAwait(false)
                 || !await RunStepAsync(
                     "释放核心进程管理器",
-                    _ => _processManager.DisposeAsync().AsTask(),
+                    _ => _coreLifecycle.DisposeAsync().AsTask(),
                     shutdownDeadline.Token).ConfigureAwait(false)
                 || !await RunStepAsync(
                     "释放配置切换协调器",

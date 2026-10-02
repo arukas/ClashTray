@@ -5,6 +5,7 @@
     <RootNamespace>ClashTray.IntegrationTests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../Shared/TestFixtureDirectory.cs" Link="TestFixtureDirectory.cs" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="MSTest.TestAdapter" />

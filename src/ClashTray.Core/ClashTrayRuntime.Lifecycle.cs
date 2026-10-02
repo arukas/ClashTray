@@ -17,12 +17,14 @@ public sealed partial class ClashTrayRuntime
             cancellationToken);
         SettingsLoadResult settingsLoad = await _settingsStore.LoadWithStatusAsync(cancellationToken);
         _settings = settingsLoad.Settings;
+        await RecoverPendingSettingsAsync(cancellationToken, initializing: true);
         await LoadEndpointCatalogAsync(cancellationToken);
         ConfigurationSwitchJournalLoadResult journalLoad =
             await _configurationSwitchJournalStore.LoadAsync(cancellationToken);
         ConfigurationSwitchJournal? recoveryJournal = journalLoad.Journal;
         string? journalRecoveryMessage = journalLoad.Message;
         bool journalContentRestored = true;
+        bool journalSelectionRestored = true;
         if (recoveryJournal is { Stage: ConfigurationSwitchStage.Committed })
         {
             try
@@ -58,15 +60,28 @@ public sealed partial class ClashTrayRuntime
                 }
             }
 
-            IReadOnlyList<ConfigurationProfile> configurationsBeforeRestore =
-                await _configurationStore.ListAsync(cancellationToken);
-            string? restoreMessage = await RestoreConfigurationFromJournalAsync(
-                recoveryJournal,
-                configurationsBeforeRestore,
-                cancellationToken);
-            if (!string.IsNullOrWhiteSpace(restoreMessage))
+            try
             {
-                journalRecoveryMessage = restoreMessage;
+                IReadOnlyList<ConfigurationProfile> configurationsBeforeRestore =
+                    await _configurationStore.ListAsync(cancellationToken);
+                string? restoreMessage = await RestoreConfigurationFromJournalAsync(
+                    recoveryJournal,
+                    configurationsBeforeRestore,
+                    cancellationToken);
+                if (!string.IsNullOrWhiteSpace(restoreMessage))
+                {
+                    journalRecoveryMessage = restoreMessage;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception exception)
+            {
+                // A pending selection must not prevent observing and taking
+                // control of the existing service or restoring owned proxy state.
+                // Retain both journals and suppress automatic network enables.
+                journalSelectionRestored = false;
+                RecordSettingsRecoveryFailure(exception);
+                journalRecoveryMessage = $"配置切换恢复未完成，已保留恢复记录：{ErrorSanitizer.Sanitize(exception)}";
             }
         }
 
@@ -138,7 +153,7 @@ public sealed partial class ClashTrayRuntime
                     StartOptionalRefreshInBackground(_api);
                 }
 
-                if (recoveryJournal is not null)
+                if (recoveryJournal is not null && journalSelectionRestored)
                 {
                     (bool completed, string? message) = await CompleteConfigurationSwitchRecoveryAsync(
                         recoveryJournal,
@@ -155,7 +170,7 @@ public sealed partial class ClashTrayRuntime
                     }
                 }
             }
-            else if (recoveryJournal is not null)
+            else if (recoveryJournal is not null && journalSelectionRestored)
             {
                 (bool completed, string? message) = await CompleteConfigurationSwitchRecoveryAsync(
                     recoveryJournal,
@@ -177,7 +192,7 @@ public sealed partial class ClashTrayRuntime
             _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
             if (recoveryJournal is not null)
             {
-                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored)
+                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored && journalSelectionRestored)
                 {
                     await ClearRecoveredConfigurationSwitchArtifactsAsync(recoveryJournal);
                     recoveryJournal = null;
@@ -193,7 +208,7 @@ public sealed partial class ClashTrayRuntime
             _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
             if (recoveryJournal is not null)
             {
-                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored)
+                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored && journalSelectionRestored)
                 {
                     await ClearRecoveredConfigurationSwitchArtifactsAsync(recoveryJournal);
                     recoveryJournal = null;
@@ -209,7 +224,7 @@ public sealed partial class ClashTrayRuntime
             _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
             if (recoveryJournal is not null)
             {
-                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored)
+                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored && journalSelectionRestored)
                 {
                     await ClearRecoveredConfigurationSwitchArtifactsAsync(recoveryJournal);
                     recoveryJournal = null;
@@ -364,7 +379,7 @@ public sealed partial class ClashTrayRuntime
                 return null;
             }
 
-            Interlocked.Increment(ref _coreLifecycleEpoch);
+            _coreLifecycle.BeginTransition();
             SetController(null);
             SetRuntimeBinding(null);
 
@@ -461,7 +476,9 @@ public sealed partial class ClashTrayRuntime
             ServiceResponse? serviceResponse = null;
             try
             {
-                serviceResponse = await _localDevice.StartCoreAsync(servicePayload, coreStartupDeadline.Token);
+                CoreLaunchResult result = await _coreLifecycle.ServiceExecutor.StartAsync(
+                    new CoreLaunchRequest(executable, servicePayload, _paths.ExternalUiRoot), coreStartupDeadline.Token);
+                serviceResponse = result.ServiceResponse;
             }
             catch (ServiceUnavailableException exception) when (exception.DispatchState == ServiceDispatchState.NotDispatched)
             {
@@ -539,24 +556,14 @@ public sealed partial class ClashTrayRuntime
                         }
                     }
 
-                    if (!await _processManager.ValidateAsync(
-                        executable,
-                        runtimeConfigPath,
-                        runtimeDirectory,
-                        safePaths: _paths.ExternalUiRoot,
-                        cancellationToken: coreStartOperationToken))
+                    CoreLaunchResult localStart = await _coreLifecycle.LocalExecutor.StartAsync(
+                        new CoreLaunchRequest(executable, servicePayload, _paths.ExternalUiRoot), coreStartOperationToken);
+                    if (!localStart.Succeeded)
                     {
                         UpdateCoreState(CoreState.Failed, "Mihomo 配置验证失败");
                         return new CoreStartFailure(CoreStartOutcome.InvalidConfiguration,
                             Snapshot.Core.ErrorMessage!, ServiceErrorCode.InvalidConfiguration);
                     }
-
-                    await _processManager.StartAsync(
-                        executable,
-                        runtimeConfigPath,
-                        runtimeDirectory,
-                        safePaths: _paths.ExternalUiRoot,
-                        cancellationToken: coreStartOperationToken);
 
                     localCoreStarted = true;
                     LocalCoreProcessIdentity identity = _processManager.CaptureRunningProcessIdentity()
@@ -784,17 +791,6 @@ public sealed partial class ClashTrayRuntime
         MihomoEffectiveListenerPlan listenerPlan,
         CancellationToken cancellationToken)
     {
-        if (_controllerApiFactory is not null)
-        {
-            return CreateTestRuntimeBinding(settings, controllerPort) with
-            {
-                ListenerPlanComplete = listenerPlan.IsComplete,
-                AdditionalListeners = listenerPlan.AdditionalListenerPlan.ToContractBindings(),
-                ListenerPlanWarning = listenerPlan.Warning,
-                ListenerBindings = CreateRuntimeListenerBindings(controllerPort, listenerPlan)
-            };
-        }
-
         using ListenerReadinessDeadline readinessDeadline = new(TimeSpan.FromSeconds(30), cancellationToken);
         try
         {
@@ -859,11 +855,11 @@ public sealed partial class ClashTrayRuntime
                         throw new InvalidOperationException("Mihomo 有效配置未确认 TUN 关闭。");
                     }
 
-                    ListenerOwnerObservationScope observation = WindowsListenerOwnerTable.CreateObservation(identity, listenerPlan.AllBindings);
+                    Func<LocalPortBinding, ListenerOwnerObservation> observation = _coreLifecycle.CreateListenerSnapshot(identity, listenerPlan.AllBindings);
                     ListenerReadinessResult listenerReadiness = ListenerReadinessEvaluator.Evaluate(
                         listenerPlan.ProxyBindings,
                         listenerPlan.AdditionalListenerPlan.Bindings,
-                        observation.Inspect);
+                        observation);
                     readinessDeadline.Observe(listenerReadiness);
                     if (listenerReadiness.Disposition == ListenerReadinessDisposition.ForeignOwner)
                     {
@@ -961,31 +957,6 @@ public sealed partial class ClashTrayRuntime
         return bindings;
     }
 
-    private static bool AreRuntimeListenerBindingsOwned(CoreRuntimeBinding binding)
-    {
-        if (binding.ListenerBindings is null || binding.ListenerBindings.Count is < 1 or > 256)
-        {
-            return false;
-        }
-
-        try
-        {
-            LocalCoreProcessIdentity identity = new(
-                binding.ProcessId,
-                binding.ProcessStartedUtcTicks,
-                binding.ExecutablePath);
-            return RuntimeBindingValidator.AreListenersOwned(binding, identity);
-        }
-        catch (Exception exception) when (exception is IOException
-            or UnauthorizedAccessException
-            or System.ComponentModel.Win32Exception
-            or InvalidOperationException
-            or PlatformNotSupportedException)
-        {
-            return false;
-        }
-    }
-
     private bool IsLocalProcessCurrent(
         LocalCoreProcessIdentity identity,
         long processGeneration,
@@ -997,7 +968,7 @@ public sealed partial class ClashTrayRuntime
                 && _processManager.Generation == processGeneration
                 && _processManager.InstanceId == instanceId
                 && _processManager.CaptureRunningProcessIdentity() == identity
-                && WindowsListenerOwnerTable.IsCurrentProcessIdentity(identity);
+                && _coreLifecycle.IsProcessCurrent(identity);
         }
         catch (Exception exception) when (exception is InvalidOperationException
             or UnauthorizedAccessException
@@ -1008,27 +979,6 @@ public sealed partial class ClashTrayRuntime
         }
     }
 
-    private static CoreRuntimeBinding CreateTestRuntimeBinding(AppSettings settings, int controllerPort)
-    {
-        using Process process = Process.GetCurrentProcess();
-        return new CoreRuntimeBinding(
-            settings.ControllerPort,
-            controllerPort,
-            Guid.NewGuid(),
-            Guid.NewGuid(),
-            process.Id,
-            process.StartTime.ToUniversalTime().Ticks,
-            1,
-            settings.HttpPort,
-            settings.SocksPort,
-            settings.MixedPort,
-            ControllerReady: true,
-            HttpReady: settings.HttpPort > 0,
-            SocksReady: settings.SocksPort > 0,
-            MixedReady: settings.MixedPort > 0,
-            Environment.ProcessPath ?? string.Empty);
-    }
-
     private async Task StopUnreadyLocalCoreAsync()
     {
         SetController(null);
@@ -1037,7 +987,7 @@ public sealed partial class ClashTrayRuntime
         {
             if (_processManager.State is not CoreState.Stopped)
             {
-                await _processManager.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                await _coreLifecycle.LocalExecutor.StopAsync(CancellationToken.None).ConfigureAwait(false);
             }
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException)
@@ -1117,7 +1067,7 @@ public sealed partial class ClashTrayRuntime
     {
         try
         {
-            Interlocked.Increment(ref _coreLifecycleEpoch);
+            _coreLifecycle.BeginTransition();
             UpdateCoreState(CoreState.Stopping, null);
             InvalidateCoreHealth();
             SetController(null);
@@ -1126,7 +1076,8 @@ public sealed partial class ClashTrayRuntime
             {
                 try
                 {
-                    ServiceResponse response = await _localDevice.StopCoreAsync(cancellationToken);
+                    ServiceResponse response = await _coreLifecycle.ServiceExecutor.StopAsync(cancellationToken)
+                        ?? throw new InvalidOperationException("服务未返回停止结果。");
                     if (!response.Succeeded)
                     {
                         _stateStore.Update(snapshot => snapshot with { Tun = AdoptServiceTunState(response.Tun) });
@@ -1194,7 +1145,7 @@ public sealed partial class ClashTrayRuntime
             }
             else
             {
-                await _processManager.StopAsync(cancellationToken);
+                await _coreLifecycle.LocalExecutor.StopAsync(cancellationToken);
                 SetRuntimeBinding(null);
                 _confirmedTunState = TunState.Off;
                 _stateStore.Update(snapshot => snapshot with { Tun = TunState.Off });
@@ -1323,35 +1274,16 @@ public sealed partial class ClashTrayRuntime
 
     private async Task RefreshCoreHealthAsync(MihomoApiClient api, CancellationToken cancellationToken)
     {
-        long lifecycleEpoch = Volatile.Read(ref _coreLifecycleEpoch);
+        long lifecycleEpoch = _coreLifecycle.Epoch;
         long processGeneration = _processManager.Generation;
         long controllerGeneration = ControllerGeneration;
-        using JsonDocument version = await api.GetVersionAsync(cancellationToken);
-        string? versionText = MihomoDataParser.ParseVersion(version);
-        using JsonDocument configurationState = await api.GetConfigurationAsync(force: false, cancellationToken);
         CoreRuntimeBinding binding = ActiveRuntimeBinding
             ?? throw new ManagedCoreOwnershipException();
-        MihomoListenerPorts listenerPorts = MihomoDataParser.ParseListenerPorts(configurationState);
-        bool additionalListenerOwnershipConfirmed = _controllerApiFactory is not null
-            || Volatile.Read(ref _controllerSessionInjectedForTesting) != 0
-            || AreRuntimeListenerBindingsOwned(binding);
-        if (_controllerApiFactory is null
-            && Volatile.Read(ref _controllerSessionInjectedForTesting) == 0
-            && (!binding.ControllerReady
-                || listenerPorts.Http != binding.HttpPort
-                || listenerPorts.Socks != binding.SocksPort
-                || listenerPorts.Mixed != binding.MixedPort
-                || !binding.HttpReady
-                || !binding.SocksReady
-                || binding.MixedReady && binding.MixedPort <= 0
-                || !additionalListenerOwnershipConfirmed))
-        {
-            throw new InvalidOperationException("当前 Mihomo 有效监听与已确认的运行绑定不一致。");
-        }
-
-        ProxyMode? mode = MihomoDataParser.ParseMode(configurationState);
-        bool? tunEnabled = MihomoDataParser.ParseTunEnabled(configurationState);
-
+        CoreHealthObservation observation = await _coreLifecycle.ObserveHealthAsync(api, binding, cancellationToken);
+        string? versionText = observation.Version;
+        ProxyMode? mode = observation.Mode;
+        bool? tunEnabled = observation.TunEnabled;
+        if (!ReferenceEquals(ActiveRuntimeBinding, binding)) { return; }
         TunState observedTun = ResolveConfirmedTunState(tunEnabled);
         bool committed = _stateStore.TryUpdate(
             snapshot => snapshot.Core.State == CoreState.Running
@@ -1379,7 +1311,7 @@ public sealed partial class ClashTrayRuntime
             return;
         }
 
-        ConfirmCoreHealth(lifecycleEpoch, processGeneration, controllerGeneration);
+        ConfirmCoreHealth(lifecycleEpoch, processGeneration, controllerGeneration, binding);
         if (!CoreHealthConfirmed)
         {
             return;
@@ -1798,7 +1730,7 @@ public sealed partial class ClashTrayRuntime
         if (unexpectedCoreLost)
         {
             QueueSystemProxyRecovery(new CoreLossContext(
-                Volatile.Read(ref _coreLifecycleEpoch),
+                _coreLifecycle.Epoch,
                 _processManager.Generation,
                 ControllerGeneration,
                 Volatile.Read(ref _proxyOwnershipRevision),
@@ -1807,29 +1739,10 @@ public sealed partial class ClashTrayRuntime
         }
     }
 
-    private bool CoreHealthConfirmed =>
-        Volatile.Read(ref _confirmedCoreLifecycleEpoch)
-            == Volatile.Read(ref _coreLifecycleEpoch)
-        && Volatile.Read(ref _confirmedCoreProcessGeneration)
-            == _processManager.Generation
-        && Volatile.Read(ref _confirmedControllerGeneration)
-            == ControllerGeneration
-        && _controllerSessions.Current is not null;
+    private bool CoreHealthConfirmed => _coreLifecycle.IsHealthConfirmed(ControllerGeneration, _controllerSessions.Current is not null);
 
-    private void ConfirmCoreHealth(
-        long lifecycleEpoch,
-        long processGeneration,
-        long controllerGeneration)
-    {
-        Volatile.Write(ref _confirmedCoreProcessGeneration, processGeneration);
-        Volatile.Write(ref _confirmedControllerGeneration, controllerGeneration);
-        Volatile.Write(ref _confirmedCoreLifecycleEpoch, lifecycleEpoch);
-    }
+    private void ConfirmCoreHealth(long lifecycleEpoch, long processGeneration, long controllerGeneration, CoreRuntimeBinding? observedBinding = null) =>
+        _coreLifecycle.ConfirmHealth(lifecycleEpoch, processGeneration, controllerGeneration, observedBinding ?? ActiveRuntimeBinding);
 
-    private void InvalidateCoreHealth()
-    {
-        Volatile.Write(ref _confirmedCoreLifecycleEpoch, long.MinValue);
-        Volatile.Write(ref _confirmedCoreProcessGeneration, long.MinValue);
-        Volatile.Write(ref _confirmedControllerGeneration, long.MinValue);
-    }
+    private void InvalidateCoreHealth() => _coreLifecycle.InvalidateHealth();
 }

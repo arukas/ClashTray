@@ -1,3 +1,4 @@
+using ClashTray.Testing;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using ClashTray.Contracts;
@@ -11,10 +12,37 @@ namespace ClashTray.IntegrationTests;
 public sealed class ServiceFileLoggerTests
 {
     [TestMethod]
+    [TestCategory("RequiresWindowsAcl")]
+    public void CoreUpdatePermissionPolicyPreservesTheManagedUserReadOnlyBoundary()
+    {
+        string root = TestFixtureDirectory.Create();
+        TestFixtureDirectory.Run(root, () =>
+        {
+            AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
+            using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+            string sid = identity.User!.Value;
+            WindowsCoreUpdatePermissionPolicy policy = new();
+            Directory.CreateDirectory(paths.CoreRoot);
+            File.WriteAllText(paths.ManagedCoreExecutable, "fixture executable");
+            File.WriteAllText(paths.ManagedCoreMetadata, "fixture metadata");
+            policy.PrepareDirectories(paths, sid);
+            policy.ProtectInstalledFiles(paths, sid, protectDirectory: true);
+            foreach (string path in new[] { paths.ManagedCoreExecutable, paths.ManagedCoreMetadata })
+            {
+                FileSecurity security = new FileInfo(path).GetAccessControl();
+                Assert.IsTrue(security.AreAccessRulesProtected);
+                FileSystemAccessRule[] rules = security.GetAccessRules(true, false, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().Where(rule => rule.IdentityReference.Value == sid).ToArray();
+                Assert.HasCount(1, rules);
+                Assert.AreEqual(FileSystemRights.ReadAndExecute | FileSystemRights.Synchronize, rules[0].FileSystemRights);
+            }
+        });
+    }
+
+    [TestMethod]
     public async Task ServiceEventIsPersistedToLogFile()
     {
         string root = CreateTempRoot();
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
             string logDirectory = Path.Combine(root, "logs");
@@ -33,18 +61,14 @@ public sealed class ServiceFileLoggerTests
             string content = await File.ReadAllTextAsync(files[0]);
             StringAssert.Contains(content, "unsupported protocol version", StringComparison.Ordinal);
             StringAssert.Contains(content, "Warning", StringComparison.Ordinal);
-        }
-        finally
-        {
-            DeleteTempRoot(root);
-        }
+        });
     }
 
     [TestMethod]
     public void RollingFileLoggerBoundsTotalLogVolume()
     {
         string root = CreateTempRoot();
-        try
+        TestFixtureDirectory.Run(root, () =>
         {
             const long maxFileBytes = 4096;
             const int maxRetainedFiles = 3;
@@ -67,18 +91,14 @@ public sealed class ServiceFileLoggerTests
                 // One entry may straddle the rotation boundary.
                 Assert.IsTrue(new FileInfo(file).Length < maxFileBytes + 4096, $"{file} exceeded the size cap");
             }
-        }
-        finally
-        {
-            DeleteTempRoot(root);
-        }
+        });
     }
 
     [TestMethod]
     public void RollingFileLoggerRedactsSecrets()
     {
         string root = CreateTempRoot();
-        try
+        TestFixtureDirectory.Run(root, () =>
         {
             using (RollingFileLoggerProvider provider = new(root))
             {
@@ -93,14 +113,11 @@ public sealed class ServiceFileLoggerTests
             Assert.IsFalse(content.Contains("topsecretvalue123", StringComparison.Ordinal), "authorization header leaked");
             Assert.IsFalse(content.Contains("querysecret456", StringComparison.Ordinal), "query secret leaked");
             StringAssert.Contains(content, "[已隐藏]", StringComparison.Ordinal);
-        }
-        finally
-        {
-            DeleteTempRoot(root);
-        }
+        });
     }
 
     [TestMethod]
+    [TestCategory("RequiresWindowsAcl")]
     public void ServiceLogDirectoryIsAdministratorsWriteUsersReadOnly()
     {
         if (!OperatingSystem.IsWindows())
@@ -110,7 +127,7 @@ public sealed class ServiceFileLoggerTests
         }
 
         string root = CreateTempRoot();
-        try
+        TestFixtureDirectory.Run(root, () =>
         {
             AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
             paths.EnsureProgramDataDirectories();
@@ -128,11 +145,7 @@ public sealed class ServiceFileLoggerTests
             Assert.IsTrue(HasRule(rules, WellKnownSidType.LocalSystemSid, FileSystemRights.FullControl));
             Assert.IsTrue(HasRule(rules, WellKnownSidType.BuiltinUsersSid, FileSystemRights.ReadAndExecute));
             Assert.IsFalse(HasRule(rules, WellKnownSidType.BuiltinUsersSid, FileSystemRights.Write), "users must not write service logs");
-        }
-        finally
-        {
-            DeleteTempRoot(root);
-        }
+        });
     }
 
     private static bool HasRule(
@@ -157,26 +170,9 @@ public sealed class ServiceFileLoggerTests
 
     private static string CreateTempRoot()
     {
-        string root = Path.Combine(Path.GetTempPath(), "clashtray-svclog-tests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         Directory.CreateDirectory(root);
         return root;
     }
 
-    private static void DeleteTempRoot(string root)
-    {
-        // Freshly written log files can be transiently locked by the search
-        // indexer or antivirus; retry briefly before failing the test run.
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                Directory.Delete(root, recursive: true);
-                return;
-            }
-            catch (IOException) when (attempt < 4)
-            {
-                Thread.Sleep(200);
-            }
-        }
-    }
 }

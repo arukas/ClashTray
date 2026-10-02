@@ -198,7 +198,9 @@ public enum ServiceCommand
 
 public static class ServiceProtocol
 {
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
+    public const int MaximumRequestCharacters = 64 * 1024;
+    public const int MaximumResponseCharacters = 256 * 1024;
 }
 
 public enum ServiceDispatchState
@@ -215,7 +217,9 @@ public sealed record ServiceRequest(
     // 0 means the peer did not state a version (legacy payload); both sides
     // must send ServiceProtocol.CurrentVersion explicitly so a version skew
     // can never masquerade as the current protocol.
-    int ProtocolVersion = 0);
+    int ProtocolVersion = 0,
+    bool RecoveryOnly = false,
+    Guid ExpectedServiceInstanceId = default);
 
 public enum ServiceErrorCode
 {
@@ -233,7 +237,9 @@ public enum ServiceErrorCode
     OperationTimedOut,
     OperationCancelled,
     RuntimeBindingMetadataMissing,
-    RuntimeBindingInvalid
+    RuntimeBindingInvalid,
+    RequestResultUnavailable,
+    RequestIdentityConflict
 }
 
 /// <summary>
@@ -285,7 +291,8 @@ public sealed record ServiceResponse(
     ServiceErrorCode ErrorCode = ServiceErrorCode.None,
     ServiceDispatchState DispatchState = ServiceDispatchState.Completed,
     int ProtocolVersion = 0,
-    CoreRuntimeBinding? RuntimeBinding = null);
+    CoreRuntimeBinding? RuntimeBinding = null,
+    Guid ServiceInstanceId = default);
 
 public sealed record ServiceCorePayload(
     string ConfigurationPath,

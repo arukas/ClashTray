@@ -1,5 +1,11 @@
 # Development and licensing policy
 
+## Agent Vibe execution
+
+Implementation and coding use `gpt-6.1-sol` with reasoning effort `max`, as required by the root [AGENTS.md](../AGENTS.md). This is the current execution requirement even when a historical guide or prompt names an older model. Historical implementation reports retain the model information recorded at the time. Session configuration selects the actual model; repository text does not switch it.
+
+The current design-improvement work is specified in the [2026-10-02 Agent Vibe guide](design-optimization-vibe-2026-10-02.md). The [companion execution prompt](design-optimization-prompt-2026-10-02.md) authorizes implementation when the user sends it as an instruction. Preparing these documents alone is documentation work.
+
 ## ClashTray
 
 New ClashTray source code is intended to be independently authored and distributed under the MIT License.

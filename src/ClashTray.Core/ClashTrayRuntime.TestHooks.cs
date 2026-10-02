@@ -1,7 +1,23 @@
 using System.Diagnostics;
+using System.Text.Json;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core;
+
+// Compatibility adapter for existing controller fixtures: missing port fields
+// are supplied as observation facts, while the same production admission,
+// ownership and generation predicates still execute.
+internal sealed class FixtureCoreOwnershipObservationSource : ICoreOwnershipObservationSource
+{
+    public MihomoListenerPorts ReadControllerPorts(JsonDocument configuration, CoreRuntimeBinding binding)
+    {
+        MihomoListenerPorts ports = MihomoDataParser.ParseListenerPorts(configuration);
+        return new(ports.Http ?? binding.HttpPort, ports.Socks ?? binding.SocksPort, ports.Mixed ?? binding.MixedPort);
+    }
+    public bool IsProcessCurrent(LocalCoreProcessIdentity identity) => true;
+    public Func<LocalPortBinding, ListenerOwnerObservation> CreateListenerSnapshot(LocalCoreProcessIdentity identity, IReadOnlyList<LocalPortBinding> listeners) =>
+        _ => new ListenerOwnerObservation(ListenerOwnerState.Owned);
+}
 
 public sealed partial class ClashTrayRuntime
 {
@@ -9,7 +25,7 @@ public sealed partial class ClashTrayRuntime
     internal void AttachControllerForTesting(MihomoApiClient api, bool usingServiceCore)
     {
         ArgumentNullException.ThrowIfNull(api);
-        Interlocked.Exchange(ref _controllerSessionInjectedForTesting, 1);
+        _coreLifecycle.SetObservationSource(new FixtureCoreOwnershipObservationSource());
         using Process process = Process.GetCurrentProcess();
         int controllerPort = api.ControllerUri.Port;
         SetRuntimeBinding(new CoreRuntimeBinding(
@@ -32,7 +48,7 @@ public sealed partial class ClashTrayRuntime
         SetController(api);
         _usingServiceCore = usingServiceCore;
         ConfirmCoreHealth(
-            Volatile.Read(ref _coreLifecycleEpoch),
+            _coreLifecycle.Epoch,
             _processManager.Generation,
             ControllerGeneration);
         _stateStore.Update(snapshot => snapshot with { Core = snapshot.Core with { State = CoreState.Running } });
@@ -40,10 +56,15 @@ public sealed partial class ClashTrayRuntime
 
     internal void SetRuntimeBindingForTesting(CoreRuntimeBinding binding)
     {
-        Interlocked.Exchange(ref _controllerSessionInjectedForTesting, 1);
+        bool healthWasConfirmed = CoreHealthConfirmed;
+        _coreLifecycle.SetObservationSource(new FixtureCoreOwnershipObservationSource());
         // Downstream eligibility tests deliberately inject incomplete facts.
         // Production admission always goes through SetRuntimeBinding instead.
         StoreRuntimeBinding(binding);
+        if (healthWasConfirmed)
+        {
+            ConfirmCoreHealth(_coreLifecycle.Epoch, _processManager.Generation, ControllerGeneration);
+        }
     }
 
     internal void SetShutdownStateForTesting(
@@ -52,7 +73,7 @@ public sealed partial class ClashTrayRuntime
         TunState tun,
         SystemProxyState systemProxy)
     {
-        Interlocked.Exchange(ref _controllerSessionInjectedForTesting, 1);
+        _coreLifecycle.SetObservationSource(new FixtureCoreOwnershipObservationSource());
         _usingServiceCore = serviceOwnsCore;
         if (serviceOwnsCore && core == CoreState.Running && ActiveRuntimeBinding is null)
         {
@@ -85,6 +106,9 @@ public sealed partial class ClashTrayRuntime
         });
     }
     internal bool IsCoreHealthConfirmedForTesting => CoreHealthConfirmed;
+
+    internal Task ApplyProgramOverridesForTestingAsync(CancellationToken cancellationToken = default) =>
+        ApplyProgramOverridesWithLeaseAsync(coreRunning: IsCoreHealthy(), cancellationToken);
 
     private List<RuntimeListenerBinding> CreateLoopbackListenerBindingsForTesting(int controllerPort) =>
         CreateRuntimeListenerBindings(controllerPort, MihomoListenerPlanAnalyzer.AnalyzeEffectiveLines(

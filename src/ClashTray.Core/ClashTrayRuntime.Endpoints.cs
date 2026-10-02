@@ -389,7 +389,7 @@ public sealed partial class ClashTrayRuntime
         new(EndpointId.Local, ControllerGeneration);
 
 private CoreBindingEpochs CaptureCoreBindingEpochs() => new(
-        Volatile.Read(ref _coreLifecycleEpoch),
+        _coreLifecycle.Epoch,
         _processManager.Generation,
         ControllerGeneration);
 
@@ -399,7 +399,7 @@ private CoreBindingEpochs CaptureCoreBindingEpochs() => new(
         long lifecycleEpoch,
         long processGeneration) =>
         !_runtimeCts.IsCancellationRequested
-        && lifecycleEpoch == Volatile.Read(ref _coreLifecycleEpoch)
+        && lifecycleEpoch == _coreLifecycle.Epoch
         && processGeneration == _processManager.Generation
         && _controllerSessions.IsCurrent(api, controllerGeneration);
 

@@ -23,13 +23,13 @@ public sealed class BoundaryTests
     }
 
     [TestMethod]
-    public async Task ServiceProtocolTwoRejectsVersionOneAndReportsNoUnconfirmedBinding()
+    public async Task ServiceProtocolThreeRejectsOlderPeersAndReportsNoUnconfirmedBinding()
     {
-        Assert.AreEqual(2, ServiceProtocol.CurrentVersion);
+        Assert.AreEqual(3, ServiceProtocol.CurrentVersion);
         await using ServiceRuntimeController controller = CreateIsolatedController();
 
         ServiceResponse oldPeer = await controller.HandleAsync(
-            new ServiceRequest(Guid.NewGuid(), ServiceCommand.GetStatus, ProtocolVersion: 1),
+            new ServiceRequest(Guid.NewGuid(), ServiceCommand.GetStatus, ProtocolVersion: 2),
             CancellationToken.None);
         ServiceResponse stopped = await controller.HandleAsync(
             new ServiceRequest(Guid.NewGuid(), ServiceCommand.GetStatus, ProtocolVersion: ServiceProtocol.CurrentVersion),

@@ -15,7 +15,7 @@ public sealed class RuntimeBindingCompatibilityTests
         Assert.AreEqual(12, (int)ServiceErrorCode.OperationCancelled);
         Assert.AreEqual(13, (int)ServiceErrorCode.RuntimeBindingMetadataMissing);
         Assert.AreEqual(14, (int)ServiceErrorCode.RuntimeBindingInvalid);
-        Assert.AreEqual(2, ServiceProtocol.CurrentVersion);
+        Assert.AreEqual(3, ServiceProtocol.CurrentVersion);
     }
 
     [TestMethod]
@@ -82,7 +82,7 @@ public sealed class RuntimeBindingCompatibilityTests
 
         Assert.IsNotNull(oldBinding);
         Assert.IsNull(oldBinding.ListenerBindings);
-        Assert.AreEqual(2, ServiceProtocol.CurrentVersion, "The additive binding metadata must not silently bump the IPC protocol.");
+        Assert.AreEqual(3, ServiceProtocol.CurrentVersion, "Request-result recovery explicitly requires protocol 3; older metadata remains deserializable but cannot downgrade admission.");
     }
 
     [TestMethod]

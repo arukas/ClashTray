@@ -4,6 +4,7 @@ using ClashTray.Contracts;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Automation.Provider;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -833,13 +834,28 @@ public sealed partial class MainWindow
             throw new InvalidOperationException("Live snapshots overwrote an unsaved settings field.");
         }
 
+        port.ApplyTemplate();
+        TextBox input = FindSettingsNumberInput(port) ?? throw new InvalidOperationException("NumberBox template input is unavailable.");
+        input.Focus(FocusState.Programmatic);
+        string pendingText = (draftPort + 1).ToString(System.Globalization.CultureInfo.CurrentCulture);
+        input.Text = pendingText;
+        UpdateSnapshot(_runtime.Snapshot);
+        if (input.Text != pendingText || !ReferenceEquals(FocusManager.GetFocusedElement(RootGrid.XamlRoot), input))
+        { throw new InvalidOperationException("A snapshot changed the focused uncommitted NumberBox text."); }
+
         await _runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set("dark")));
         page.UpdateSnapshot(_runtime.Snapshot);
-        if (!windows.IsOn || !core.IsOn || port.Value != draftPort
+        if (!windows.IsOn || !core.IsOn || input.Text != pendingText
             || (theme.SelectedItem as ComboBoxItem)?.Tag?.ToString() != "dark")
         {
             throw new InvalidOperationException("An external theme change lost drafts or failed to update the untouched theme.");
         }
+
+        input.Text = "not-a-port";
+        invokeSave.Invoke();
+        await Task.Delay(100);
+        if (input.Text != "not-a-port" || !windows.IsOn || !core.IsOn || _runtime.Settings.StartCoreAutomatically)
+        { throw new InvalidOperationException("Invalid pending numeric text was discarded or saved as the old Value."); }
 
         port.Value = _runtime.Settings.MixedPort;
         invokeSave.Invoke();
@@ -890,6 +906,8 @@ public sealed partial class MainWindow
             BothStartupSwitchesSurviveSnapshots = true,
             PortAndTextDraftsPreserved = true,
             ExternalThemeMergesWithoutLosingDrafts = true,
+            FocusedUncommittedNumberTextPreserved = true,
+            InvalidUncommittedTextPreservedAndRejected = true,
             InvalidSavePreservesDrafts = true,
             SavedCoreStartupSurvivesReload = true,
             RecreatedPageLoadsSavedValues = true,
@@ -897,6 +915,18 @@ public sealed partial class MainWindow
             ManualChecks = "Windows sign-in startup and automatic core launch after sign-in were not exercised."
         }, DiagnosticJsonOptions));
         NavigateTo(_proxyPage, PanelPage.Proxy);
+    }
+
+    private static TextBox? FindSettingsNumberInput(DependencyObject parent, int depth = 0)
+    {
+        if (parent is TextBox input) { return input; }
+        if (depth >= 16) { return null; }
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            TextBox? child = FindSettingsNumberInput(VisualTreeHelper.GetChild(parent, index), depth + 1);
+            if (child is not null) { return child; }
+        }
+        return null;
     }
 
     private async Task VerifyNetworkSwitchErrorPresentationAsync(string directory)

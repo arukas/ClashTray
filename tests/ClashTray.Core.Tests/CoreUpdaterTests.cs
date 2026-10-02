@@ -1,3 +1,4 @@
+using ClashTray.Testing;
 using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
@@ -74,7 +75,7 @@ public sealed class CoreUpdaterTests
     [TestMethod]
     public async Task CoreUpdaterRejectsForeignRepositoryBeforeRequestAndLeavesInstalledStateUntouched()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         Directory.CreateDirectory(paths.CoreRoot);
@@ -91,12 +92,12 @@ public sealed class CoreUpdaterTests
         await File.WriteAllBytesAsync(paths.ManagedCoreExecutable + ".previous", backupExecutable);
         await File.WriteAllBytesAsync(paths.ManagedCoreMetadata + ".previous", backupMetadata);
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await ManagedCoreVerifier.ValidateAsync(paths);
             using CountingFailureHandler handler = new();
             using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
-            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient, null, new FixtureUpdatePermissions());
             CoreUpdateManifest manifest = new(
                 "v1.19.31",
                 new Uri("https://github.com/example-untrusted-owner/example-repo/raw/refs/heads/main/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-windows-amd64-v1.19.31.zip"),
@@ -109,24 +110,17 @@ public sealed class CoreUpdaterTests
             CollectionAssert.AreEqual(oldMetadataBytes, await File.ReadAllBytesAsync(paths.ManagedCoreMetadata));
             CollectionAssert.AreEqual(backupExecutable, await File.ReadAllBytesAsync(paths.ManagedCoreExecutable + ".previous"));
             CollectionAssert.AreEqual(backupMetadata, await File.ReadAllBytesAsync(paths.ManagedCoreMetadata + ".previous"));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
+        });
     }
     [TestMethod]
     public async Task CoreUpdaterAcceptsVerifiedWindowsAmd64Executable()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         string archivePath = Path.Combine(root, "mihomo.zip");
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
             using (ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Create))
@@ -137,7 +131,7 @@ public sealed class CoreUpdaterTests
             byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
             using ArchiveHandler handler = new ArchiveHandler(archiveBytes);
             using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
-            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient, null, new FixtureUpdatePermissions());
             CoreUpdateManifest manifest = CreateManifest(archiveBytes);
 
             string installedPath = await updater.DownloadAndInstallAsync(manifest);
@@ -146,22 +140,18 @@ public sealed class CoreUpdaterTests
             Assert.IsTrue(File.Exists(installedPath));
             Assert.IsTrue(File.Exists(paths.ManagedCoreMetadata));
             await ManagedCoreVerifier.ValidateAsync(paths);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        });
     }
 
     [TestMethod]
     public async Task CoreUpdaterRejectsArchiveWithoutWindowsExecutable()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         string archivePath = Path.Combine(root, "mihomo.zip");
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             using (ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Create))
             {
@@ -173,26 +163,22 @@ public sealed class CoreUpdaterTests
             byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
             using ArchiveHandler handler = new ArchiveHandler(archiveBytes);
             using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
-            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient, null, new FixtureUpdatePermissions());
 
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(CreateManifest(archiveBytes)));
             Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        });
     }
 
     [TestMethod]
     public async Task CoreUpdaterRejectsDuplicateOfficialArchiveExecutables()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         string archivePath = Path.Combine(root, "mihomo.zip");
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
             using (ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Create))
@@ -204,52 +190,41 @@ public sealed class CoreUpdaterTests
             byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
             using ArchiveHandler handler = new(archiveBytes);
             using HttpClient httpClient = new(handler, disposeHandler: false);
-            using CoreUpdater updater = new(paths, httpClient);
+            using CoreUpdater updater = new(paths, httpClient, null, new FixtureUpdatePermissions());
 
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(CreateManifest(archiveBytes)));
             Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable));
             Assert.IsFalse(File.Exists(paths.ManagedCoreMetadata));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
+        });
     }
     [TestMethod]
     public async Task CoreUpdaterRejectsOversizedArchiveBeforeDownloadingBody()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             using OversizedArchiveHandler handler = new OversizedArchiveHandler();
             using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
-            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient, null, new FixtureUpdatePermissions());
 
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(
                 CreateManifest([])));
             Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        });
     }
 
     [TestMethod]
     public async Task CoreUpdaterRollsBackToPreviousVerifiedInstall()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         string archivePath = Path.Combine(root, "mihomo.zip");
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
             using (ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Create))
@@ -260,7 +235,7 @@ public sealed class CoreUpdaterTests
             byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
             using MutableArchiveHandler handler = new MutableArchiveHandler(archiveBytes);
             using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
-            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient, null, new FixtureUpdatePermissions());
 
             await updater.DownloadAndInstallAsync(CreateManifest(archiveBytes, "v1.0.0"));
             await updater.DownloadAndInstallAsync(CreateManifest(archiveBytes, "v2.0.0"));
@@ -275,67 +250,55 @@ public sealed class CoreUpdaterTests
             await ManagedCoreVerifier.ValidateAsync(paths);
             Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable + ".previous"));
             Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable + ".failed"));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        });
     }
 
     [TestMethod]
     public async Task CoreUpdaterRefusesToOverwriteUnknownCore()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         Directory.CreateDirectory(paths.CoreRoot);
         string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
         File.Copy(executablePath, paths.ManagedCoreExecutable);
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
-            using CoreUpdater updater = new CoreUpdater(paths);
+            using CoreUpdater updater = new CoreUpdater(paths, null, null, new FixtureUpdatePermissions());
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(
                 new CoreUpdateManifest(
                     "v0.0.0-test",
                     new Uri("https://github.com/MetaCubeX/mihomo/releases/download/v0.0.0-test/mihomo-windows-amd64-v0.0.0-test.zip"),
                     new string('0', 64))));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        });
     }
 
     [TestMethod]
     public void CoreDiscoveryIgnoresUserWritableLocalCore()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         string localCore = Path.Combine(paths.LocalRoot, "core", "mihomo.exe");
         Directory.CreateDirectory(Path.GetDirectoryName(localCore)!);
         File.Copy(Environment.ProcessPath!, localCore);
 
-        try
+        TestFixtureDirectory.Run(root, () =>
         {
             Assert.IsNull(new CoreDiscovery(paths).FindExecutable());
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        });
     }
 
     [TestMethod]
     public async Task CoreUpdaterInstallsWithoutChecksumWhenManifestOmitsIt()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         string archivePath = Path.Combine(root, "mihomo.zip");
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
             using (ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Create))
@@ -346,7 +309,7 @@ public sealed class CoreUpdaterTests
             byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
             using ArchiveHandler handler = new ArchiveHandler(archiveBytes);
             using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
-            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient, null, new FixtureUpdatePermissions());
 
             string installedPath = await updater.DownloadAndInstallAsync(CreateManifest(archiveBytes) with { Sha256 = "" });
 
@@ -357,22 +320,18 @@ public sealed class CoreUpdaterTests
                 ?? throw new InvalidDataException("Installed metadata is missing.");
             Assert.AreEqual(string.Empty, metadata.ArchiveSha256);
             await ManagedCoreVerifier.ValidateAsync(paths);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        });
     }
 
     [TestMethod]
     public async Task CoreUpdaterRejectsChecksumMismatchWhenProvided()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         string archivePath = Path.Combine(root, "mihomo.zip");
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
             using (ZipArchive archive = await ZipFile.OpenAsync(archivePath, ZipArchiveMode.Create))
@@ -383,27 +342,23 @@ public sealed class CoreUpdaterTests
             byte[] archiveBytes = await File.ReadAllBytesAsync(archivePath);
             using ArchiveHandler handler = new ArchiveHandler(archiveBytes);
             using HttpClient httpClient = new HttpClient(handler, disposeHandler: false);
-            using CoreUpdater updater = new CoreUpdater(paths, httpClient);
+            using CoreUpdater updater = new CoreUpdater(paths, httpClient, null, new FixtureUpdatePermissions());
 
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => updater.DownloadAndInstallAsync(
                 CreateManifest(archiveBytes) with { Sha256 = new string('0', 64) }));
             Assert.IsFalse(File.Exists(paths.ManagedCoreExecutable));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        });
     }
 
     [TestMethod]
     public async Task ManagedCoreVerifierIgnoresExecutableHashDrift()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         Directory.CreateDirectory(paths.CoreRoot);
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             string executablePath = Environment.ProcessPath ?? throw new InvalidOperationException("Test process path is unavailable.");
             File.Copy(executablePath, paths.ManagedCoreExecutable);
@@ -416,28 +371,20 @@ public sealed class CoreUpdaterTests
 
             await ManagedCoreVerifier.ValidateAsync(paths);
             Assert.AreEqual("v0.0.0-test", ManagedCoreVerifier.TryReadInstalledVersion(paths));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        });
     }
 
     [TestMethod]
     public void ManagedCoreVersionFallsBackToNullWithoutMetadata()
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
 
-        try
+        TestFixtureDirectory.Run(root, () =>
         {
             Assert.IsNull(ManagedCoreVerifier.TryReadInstalledVersion(paths));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
+        });
     }
 
     private static CoreUpdateManifest CreateManifest(byte[] archiveBytes, string version = "v0.0.0-test") =>

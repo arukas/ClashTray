@@ -130,10 +130,21 @@ public sealed partial class ClashTrayRuntime
             ownedLease = await _operationLock.AcquireAsync(cancellationToken);
         }
 
+        if (!enabled)
+        {
+            try { await DisableSystemProxyCoreAsync(persistPreference, cancellationToken); }
+            finally { ownedLease?.Dispose(); }
+            return;
+        }
+
         AppSettings previousSettings = _settings;
         bool preferenceChanged = persistPreference && previousSettings.SystemProxyEnabled != enabled;
+        bool preferenceWriteStarted = false;
         try
         {
+            await RecoverPendingSettingsAsync(cancellationToken);
+            previousSettings = _settings;
+            preferenceChanged = persistPreference && previousSettings.SystemProxyEnabled != enabled;
             if (persistPreference)
             {
                 Interlocked.Increment(ref _proxyIntentRevision);
@@ -141,6 +152,7 @@ public sealed partial class ClashTrayRuntime
 
             if (preferenceChanged)
             {
+                preferenceWriteStarted = true;
                 await SaveSettingsForOperationAsync(
                     previousSettings with { SystemProxyEnabled = enabled },
                     cancellationToken);
@@ -159,6 +171,8 @@ public sealed partial class ClashTrayRuntime
                     SystemProxy = _localDevice.SystemProxyState,
                     ErrorMessage = message
                 });
+                if (persistPreference) { await ClearNetworkDisableIntentAsync(tun: false, cancellationToken); }
+                if (preferenceChanged) { _settingsRecovery.Complete(); }
                 Publish();
                 return;
             }
@@ -176,18 +190,21 @@ public sealed partial class ClashTrayRuntime
 
             Interlocked.Increment(ref _proxyOwnershipRevision);
             _stateStore.Update(snapshot => snapshot with { SystemProxy = _localDevice.SystemProxyState, ErrorMessage = null });
+            if (persistPreference) { await ClearNetworkDisableIntentAsync(tun: false, cancellationToken); }
+            if (preferenceChanged) { _settingsRecovery.Complete(); }
             Publish();
         }
-        catch
+        catch (Exception exception)
         {
             Interlocked.Increment(ref _proxyOwnershipRevision);
-            if (preferenceChanged)
+            if (preferenceWriteStarted)
             {
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
-            _stateStore.Update(snapshot => snapshot with { SystemProxy = _localDevice.SystemProxyState });
+            _stateStore.Update(snapshot => snapshot with { SystemProxy = _localDevice.SystemProxyState, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
             Publish();
+            ThrowIfSettingsRecoveryIncomplete(exception);
             throw;
         }
         finally
@@ -236,11 +253,21 @@ public sealed partial class ClashTrayRuntime
             }
         }
 
+        if (!enabled)
+        {
+            try { return await DisableTunCoreAsync(persistPreference, cancellationToken); }
+            finally { ownedLease?.Dispose(); }
+        }
+
         AppSettings previousSettings = _settings;
         bool preferenceChanged = persistPreference && previousSettings.TunEnabled != enabled;
+        bool preferenceWriteStarted = false;
         TunState? serviceResponseState = null;
         try
         {
+            await RecoverPendingSettingsAsync(cancellationToken);
+            previousSettings = _settings;
+            preferenceChanged = persistPreference && previousSettings.TunEnabled != enabled;
             _stateStore.Update(snapshot => snapshot with { Tun = enabled ? TunState.Enabling : TunState.Disabling });
             Publish();
             CoreRuntimeBinding binding = ActiveRuntimeBinding
@@ -282,6 +309,7 @@ public sealed partial class ClashTrayRuntime
 
             if (preferenceChanged)
             {
+                preferenceWriteStarted = true;
                 await SaveSettingsForOperationAsync(
                     previousSettings with { TunEnabled = enabled },
                     cancellationToken)
@@ -290,12 +318,14 @@ public sealed partial class ClashTrayRuntime
 
             _confirmedTunState = response.Tun;
             _stateStore.Update(snapshot => snapshot with { Tun = response.Tun, ErrorMessage = null });
+            if (persistPreference) { await ClearNetworkDisableIntentAsync(tun: true, cancellationToken); }
+            if (preferenceChanged) { _settingsRecovery.Complete(); }
             Publish();
             return response.Tun;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
-            if (preferenceChanged)
+            if (preferenceWriteStarted)
             {
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
@@ -312,23 +342,25 @@ public sealed partial class ClashTrayRuntime
                     : "TUN 操作已取消，状态无法确认。"
             });
             Publish();
+            ThrowIfSettingsRecoveryIncomplete(exception);
             throw;
         }
         catch (TimeoutException exception)
         {
-            if (preferenceChanged)
+            if (preferenceWriteStarted)
             {
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
-            _confirmedTunState = TunState.Unavailable;
-            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
+            _confirmedTunState = serviceResponseState ?? TunState.Unavailable;
+            _stateStore.Update(snapshot => snapshot with { Tun = _confirmedTunState, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
             Publish();
+            ThrowIfSettingsRecoveryIncomplete(exception);
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
         catch (ServiceRequestUnknownException exception)
         {
-            if (preferenceChanged)
+            if (preferenceWriteStarted)
             {
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
@@ -336,35 +368,38 @@ public sealed partial class ClashTrayRuntime
             _confirmedTunState = TunState.Failed;
             _stateStore.Update(snapshot => snapshot with { Tun = TunState.Failed, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
             Publish();
+            ThrowIfSettingsRecoveryIncomplete(exception);
             throw new InvalidOperationException("TUN 操作结果无法确认，请检查服务状态后重试。", exception);
         }
         catch (IOException exception)
         {
-            if (preferenceChanged)
+            if (preferenceWriteStarted)
             {
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
-            _confirmedTunState = TunState.Unavailable;
-            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
+            _confirmedTunState = serviceResponseState ?? TunState.Unavailable;
+            _stateStore.Update(snapshot => snapshot with { Tun = _confirmedTunState, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
             Publish();
+            ThrowIfSettingsRecoveryIncomplete(exception);
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
         catch (UnauthorizedAccessException exception)
         {
-            if (preferenceChanged)
+            if (preferenceWriteStarted)
             {
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
 
-            _confirmedTunState = TunState.Unavailable;
-            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
+            _confirmedTunState = serviceResponseState ?? TunState.Unavailable;
+            _stateStore.Update(snapshot => snapshot with { Tun = _confirmedTunState, ErrorMessage = ErrorSanitizer.Sanitize(exception) });
             Publish();
+            ThrowIfSettingsRecoveryIncomplete(exception);
             throw new InvalidOperationException("TUN 需要已安装并运行的 ClashTray 服务。", exception);
         }
-        catch
+        catch (Exception exception)
         {
-            if (preferenceChanged)
+            if (preferenceWriteStarted)
             {
                 await RestoreSettingsAfterOperationFailureAsync(previousSettings);
             }
@@ -384,6 +419,7 @@ public sealed partial class ClashTrayRuntime
                 _stateStore.Update(snapshot => snapshot with { Tun = TunState.Failed });
             }
             Publish();
+            ThrowIfSettingsRecoveryIncomplete(exception);
             throw;
         }
         finally
@@ -477,7 +513,7 @@ public sealed partial class ClashTrayRuntime
     }
 
     private bool CanApplyCoreLossRecovery(CoreLossContext context) =>
-        context.LifecycleEpoch == Volatile.Read(ref _coreLifecycleEpoch)
+        context.LifecycleEpoch == _coreLifecycle.Epoch
         && context.ProcessGeneration == _processManager.Generation
         && context.ControllerGeneration == ControllerGeneration
         && context.ProxyOwnershipRevision == Volatile.Read(ref _proxyOwnershipRevision)

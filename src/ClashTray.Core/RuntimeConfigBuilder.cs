@@ -1,4 +1,5 @@
 using System.Text;
+using static ClashTray.Core.YamlStructure;
 using ClashTray.Contracts;
 
 namespace ClashTray.Core;
@@ -10,15 +11,6 @@ public static class RuntimeConfigBuilder
     public const int MaximumLineCharacters = 64 * 1024;
 
     private const int CancellationCheckLineMask = 0x3F;
-    private const int CancellationCheckCharacterMask = 0xFFF;
-    private const int MaximumFlowCollectionDepth = 128;
-
-    private readonly record struct YamlDocumentScope(
-        int RootIndent,
-        int EndMarkerLine,
-        bool HasExplicitStartMarker);
-
-    private readonly record struct YamlNodeRange(int FirstLine, int LastLine);
     public static Task<string> BuildAsync(
         string sourcePath,
         string destinationPath,
@@ -74,13 +66,13 @@ public static class RuntimeConfigBuilder
             throw new InvalidDataException("The managed runtime configuration is missing or exceeds its size limit.");
         }
 
-        string[] source = await File.ReadAllLinesAsync(sourcePath, cancellationToken).ConfigureAwait(false);
+        string[] source = await BoundedYamlReader.ReadFileAsync(sourcePath, cancellationToken).ConfigureAwait(false);
         if (source.Length > MaximumInputLines || source.Any(line => line.Length > MaximumLineCharacters))
         {
             throw new InvalidDataException("The managed runtime configuration exceeds its line limits.");
         }
 
-        YamlDocumentScope scope = ValidateYamlDocumentScope(source, cancellationToken);
+        YamlDocumentScope scope = YamlStructureDocument.Read(source, cancellationToken).RequireMappingScope();
         List<string> filtered = RemoveSpecificRootEntries(
             source.ToList(),
             new HashSet<string>(["external-controller", "secret"], StringComparer.OrdinalIgnoreCase),
@@ -139,99 +131,6 @@ public static class RuntimeConfigBuilder
             cancellationToken);
     }
 
-    private static YamlDocumentScope ValidateYamlDocumentScope(
-        string[] source,
-        CancellationToken cancellationToken)
-    {
-        bool hasExplicitStartMarker = false;
-        bool hasDocumentContent = false;
-        bool ended = false;
-        int endMarkerLine = -1;
-        for (int index = 0; index < source.Length; index++)
-        {
-            if ((index & CancellationCheckLineMask) == 0)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-
-            string line = source[index];
-            if (IsYamlDocumentStartMarker(line))
-            {
-                if (hasExplicitStartMarker || hasDocumentContent || ended)
-                {
-                    throw new InvalidDataException(
-                        "Multiple YAML documents are not supported by the managed runtime configuration builder.");
-                }
-
-                hasExplicitStartMarker = true;
-                continue;
-            }
-
-            if (IsYamlDocumentEndMarker(line))
-            {
-                if (ended)
-                {
-                    throw new InvalidDataException("The YAML document has more than one end marker.");
-                }
-
-                ended = true;
-                endMarkerLine = index;
-                continue;
-            }
-
-            string trimmed = line.TrimStart();
-            if (trimmed.Length == 0 || trimmed.StartsWith('#'))
-            {
-                continue;
-            }
-
-            if (ended)
-            {
-                throw new InvalidDataException(
-                    "Non-comment YAML content follows the explicit document end marker.");
-            }
-
-            int indentation = GetIndent(line);
-            if (indentation > 0)
-            {
-                if (!hasDocumentContent)
-                {
-                    throw new InvalidDataException(
-                        "An overall-indented YAML root mapping is not supported; remove the leading indentation and retry.");
-                }
-
-                continue;
-            }
-
-            if (!TryGetRootKey(line, out _))
-            {
-                throw new InvalidDataException(
-                    "The managed runtime configuration builder requires a single block-mapping YAML document.");
-            }
-
-            hasDocumentContent = true;
-        }
-
-        return new YamlDocumentScope(RootIndent: 0, endMarkerLine, hasExplicitStartMarker);
-    }
-
-    private static bool IsYamlDocumentStartMarker(string line) =>
-        IsYamlDocumentMarker(line, "---");
-
-    private static bool IsYamlDocumentEndMarker(string line) =>
-        IsYamlDocumentMarker(line, "...");
-
-    private static bool IsYamlDocumentMarker(string line, string marker)
-    {
-        if (line.Length < marker.Length
-            || !line.AsSpan().StartsWith(marker, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return line.Length == marker.Length || char.IsWhiteSpace(line[marker.Length]);
-    }
-
     private static void InsertBeforeDocumentEnd(
         List<string> destination,
         List<string> additions,
@@ -275,39 +174,9 @@ public static class RuntimeConfigBuilder
         SettingsValidator.Validate(settings);
         cancellationToken.ThrowIfCancellationRequested();
 
-        FileInfo sourceInfo = new(sourcePath);
-        if (sourceInfo.Exists && sourceInfo.Length > MaximumInputBytes)
-        {
-            throw new InvalidDataException($"Configuration exceeds the {MaximumInputBytes}-byte runtime builder limit.");
-        }
+        string[] source = await BoundedYamlReader.ReadFileAsync(sourcePath, cancellationToken).ConfigureAwait(false);
 
-        string[] source = await File.ReadAllLinesAsync(sourcePath, cancellationToken);
-        if (source.Length > MaximumInputLines)
-        {
-            throw new InvalidDataException($"Configuration exceeds the {MaximumInputLines}-line runtime builder limit.");
-        }
-
-        for (int index = 0; index < source.Length; index++)
-        {
-            if ((index & CancellationCheckLineMask) == 0)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-
-            if (source[index].Length > MaximumLineCharacters)
-            {
-                throw new InvalidDataException(
-                    $"Configuration line {index + 1} exceeds the {MaximumLineCharacters}-character runtime builder limit.");
-            }
-        }
-
-        sourceInfo.Refresh();
-        if (sourceInfo.Exists && sourceInfo.Length > MaximumInputBytes)
-        {
-            throw new InvalidDataException($"Configuration exceeds the {MaximumInputBytes}-byte runtime builder limit.");
-        }
-
-        YamlDocumentScope documentScope = ValidateYamlDocumentScope(source, cancellationToken);
+        YamlDocumentScope documentScope = YamlStructureDocument.Read(source, cancellationToken).RequireMappingScope();
         List<string> withTunOverride = ApplyTunOverride(
             source,
             documentScope,
@@ -611,145 +480,6 @@ public static class RuntimeConfigBuilder
         return -1;
     }
 
-    private static int FindInlineEntryEnd(string value, int start)
-    {
-        char quote = '\0';
-        bool escaped = false;
-        List<char> delimiters = [];
-        for (int index = start; index < value.Length; index++)
-        {
-            char current = value[index];
-            if (quote == '"')
-            {
-                if (escaped)
-                {
-                    escaped = false;
-                }
-                else if (current == '\\')
-                {
-                    escaped = true;
-                }
-                else if (current == '"')
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (quote == '\'')
-            {
-                if (current == '\'' && index + 1 < value.Length && value[index + 1] == '\'')
-                {
-                    index++;
-                }
-                else if (current == '\'')
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (current is '"' or '\'')
-            {
-                quote = current;
-                continue;
-            }
-
-            if (current is '{' or '[' or '(')
-            {
-                delimiters.Add(current);
-                continue;
-            }
-
-            if (current is '}' or ']' or ')')
-            {
-                if (delimiters.Count == 0)
-                {
-                    return current == '}' ? index : value.Length;
-                }
-
-                char expectedOpening = current switch
-                {
-                    '}' => '{',
-                    ']' => '[',
-                    _ => '('
-                };
-                if (delimiters[^1] != expectedOpening)
-                {
-                    return value.Length;
-                }
-
-                delimiters.RemoveAt(delimiters.Count - 1);
-                continue;
-            }
-
-            if (current == ',' && delimiters.Count == 0)
-            {
-                return index;
-            }
-        }
-
-        return value.Length;
-    }
-
-    private static int FindMatchingFlowMapEnd(string value, int start)
-    {
-        char quote = '\0';
-        bool escaped = false;
-        int depth = 0;
-        for (int index = start; index < value.Length; index++)
-        {
-            char current = value[index];
-            if (quote == '"')
-            {
-                if (escaped)
-                {
-                    escaped = false;
-                }
-                else if (current == '\\')
-                {
-                    escaped = true;
-                }
-                else if (current == '"')
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (quote == '\'')
-            {
-                if (current == '\'' && index + 1 < value.Length && value[index + 1] == '\'')
-                {
-                    index++;
-                }
-                else if (current == '\'')
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (current is '"' or '\'')
-            {
-                quote = current;
-            }
-            else if (current == '{')
-            {
-                depth++;
-            }
-            else if (current == '}' && --depth == 0)
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
     private static bool IsTunPropertyLine(string line, int childIndent, string property)
     {
         if (childIndent < 0 || GetIndent(line) != childIndent)
@@ -798,58 +528,6 @@ public static class RuntimeConfigBuilder
         return replacement + line[suffixStart..];
     }
 
-    private static int FindInlineCommentStart(string line)
-    {
-        char quote = '\0';
-        bool escaped = false;
-        for (int index = 0; index < line.Length; index++)
-        {
-            char current = line[index];
-            if (quote == '"')
-            {
-                if (escaped)
-                {
-                    escaped = false;
-                }
-                else if (current == '\\')
-                {
-                    escaped = true;
-                }
-                else if (current == '"')
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (quote == '\'')
-            {
-                if (current == '\'' && index + 1 < line.Length && line[index + 1] == '\'')
-                {
-                    index++;
-                }
-                else if (current == '\'')
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (current is '"' or '\'')
-            {
-                quote = current;
-            }
-            else if (current == '#'
-                && (index == 0 || char.IsWhiteSpace(line[index - 1])))
-            {
-                return index;
-            }
-        }
-
-        return -1;
-    }
     private static bool IsRootBoundary(string line, int tunIndent)
     {
         string trimmed = line.TrimStart();
@@ -857,31 +535,6 @@ public static class RuntimeConfigBuilder
             && !trimmed.StartsWith('#')
             && GetIndent(line) <= tunIndent;
     }
-
-    private static bool TryGetRootKey(string line, out string key)
-    {
-        key = string.Empty;
-        if (line.Length > 0 && char.IsWhiteSpace(line[0]))
-        {
-            return false;
-        }
-
-        string trimmed = line.Trim();
-        if (trimmed.Length == 0 || trimmed.StartsWith('#') || trimmed is "---" or "...")
-        {
-            return false;
-        }
-
-        int separator = FindYamlKeySeparator(trimmed);
-        if (separator <= 0)
-        {
-            return false;
-        }
-
-        return YamlMappingKeyReader.TryDecode(trimmed[..separator].Trim(), out key);
-    }
-
-    private static int FindYamlKeySeparator(string value) => YamlMappingKeyReader.FindSeparator(value);
 
     private static void EnsureSupportedTunRootValue(string line)
     {
@@ -911,6 +564,8 @@ public static class RuntimeConfigBuilder
         CancellationToken cancellationToken)
     {
         List<string> result = new(source.Count + 12);
+        YamlStructureDocument structure = YamlStructureDocument.Read(source, cancellationToken);
+        Dictionary<int, YamlRootNode> nodes = structure.Roots.ToDictionary(node => node.Section.FirstLine);
         for (int index = 0; index < source.Count;)
         {
             if ((index & CancellationCheckLineMask) == 0)
@@ -919,14 +574,14 @@ public static class RuntimeConfigBuilder
             }
 
             string line = source[index];
-            if (!TryGetRootKey(line, out string key) || !IsManagedRootKey(key))
+            if (!nodes.TryGetValue(index, out YamlRootNode? node) || !IsManagedRootKey(node.Key))
             {
                 result.Add(line);
                 index++;
                 continue;
             }
 
-            YamlNodeRange range = FindYamlNodeRange(source, index, key, cancellationToken);
+            YamlNodeRange range = structure.ReplacementSpan(node, cancellationToken);
             index = range.LastLine + 1;
         }
 
@@ -939,323 +594,28 @@ public static class RuntimeConfigBuilder
         CancellationToken cancellationToken)
     {
         List<string> result = new(source.Count + keys.Count);
+        YamlStructureDocument structure = YamlStructureDocument.Read(source, cancellationToken);
+        Dictionary<int, YamlRootNode> nodes = structure.Roots.ToDictionary(node => node.Section.FirstLine);
         for (int index = 0; index < source.Count;)
         {
             cancellationToken.ThrowIfCancellationRequested();
             string line = source[index];
-            if (!TryGetRootKey(line, out string key) || !keys.Contains(key))
+            if (!nodes.TryGetValue(index, out YamlRootNode? node) || !keys.Contains(node.Key))
             {
                 result.Add(line);
                 index++;
                 continue;
             }
 
-            YamlNodeRange range = FindYamlNodeRange(source, index, key, cancellationToken);
+            YamlNodeRange range = structure.ReplacementSpan(node, cancellationToken);
             index = range.LastLine + 1;
         }
 
         return result;
     }
 
-    private static YamlNodeRange FindYamlNodeRange(
-        IReadOnlyList<string> source,
-        int firstLine,
-        string key,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        int nodeIndent = GetIndent(source[firstLine]);
-        string value = GetRootValue(source[firstLine]);
-        if (value.StartsWith('&'))
-        {
-            throw new InvalidDataException(
-                $"受管 YAML 字段 {key} 定义了 anchor，无法安全替换；请移除该 anchor 后重试。");
-        }
-
-        if (value.StartsWith('|') || value.StartsWith('>'))
-        {
-            if (!IsBlockScalarHeader(value))
-            {
-                throw new InvalidDataException($"受管 YAML 字段 {key} 的块标量标记无法识别；已保留现有运行配置。");
-            }
-
-            return new YamlNodeRange(firstLine, FindIndentedNodeEnd(source, firstLine, nodeIndent, cancellationToken));
-        }
-
-        if (value.StartsWith('\'') || value.StartsWith('"'))
-        {
-            int lastLine = FindQuotedScalarEnd(
-                source,
-                firstLine,
-                nodeIndent,
-                value[0],
-                cancellationToken);
-            return new YamlNodeRange(
-                firstLine,
-                FindIndentedNodeEnd(source, lastLine, nodeIndent, cancellationToken));
-        }
-
-        if ((value.StartsWith('{') || value.StartsWith('['))
-            && !IsFlowCollectionBalanced(value))
-        {
-            throw new InvalidDataException(
-                $"受管 YAML 字段 {key} 使用不平衡的 flow 集合，无法安全替换；已保留现有运行配置。");
-        }
-
-        return new YamlNodeRange(firstLine, FindIndentedNodeEnd(source, firstLine, nodeIndent, cancellationToken));
-    }
-
-    private static int FindIndentedNodeEnd(
-        IReadOnlyList<string> source,
-        int firstLine,
-        int parentIndent,
-        CancellationToken cancellationToken)
-    {
-        int lastNodeLine = firstLine;
-        for (int index = firstLine + 1; index < source.Count; index++)
-        {
-            if ((index & CancellationCheckLineMask) == 0)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-
-            string line = source[index];
-            if (string.IsNullOrWhiteSpace(line) || GetIndent(line) > parentIndent)
-            {
-                lastNodeLine = index;
-                continue;
-            }
-
-            break;
-        }
-
-        return lastNodeLine;
-    }
-
-    private static bool IsIndentedYamlContinuation(string line, int parentIndent) =>
-        string.IsNullOrWhiteSpace(line) || GetIndent(line) > parentIndent;
-
-    private static string GetRootValue(string line)
-    {
-        int separator = FindYamlKeySeparator(line);
-        if (separator < 0)
-        {
-            return string.Empty;
-        }
-
-        string value = line[(separator + 1)..].Trim();
-        int commentStart = FindInlineCommentStart(value);
-        if (commentStart >= 0)
-        {
-            value = value[..commentStart].TrimEnd();
-        }
-
-        return value.Trim();
-    }
-
-    internal static int FindQuotedScalarEnd(
-        IReadOnlyList<string> source,
-        int firstLine,
-        int parentIndent,
-        char quote,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        bool escaped = false;
-        int scannedCharacters = 0;
-        for (int lineIndex = firstLine; lineIndex < source.Count; lineIndex++)
-        {
-            if ((lineIndex & CancellationCheckLineMask) == 0)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-            string line = source[lineIndex];
-            int scanStart;
-            if (lineIndex == firstLine)
-            {
-                int separator = FindYamlKeySeparator(line);
-                scanStart = separator + 1;
-                while (scanStart < line.Length && char.IsWhiteSpace(line[scanStart]))
-                {
-                    scanStart++;
-                }
-
-                if (scanStart >= line.Length || line[scanStart] != quote)
-                {
-                    throw new InvalidDataException("受管 YAML 引号标量无法安全定位；已保留现有运行配置。");
-                }
-
-                scanStart++;
-            }
-            else
-            {
-                if (!IsIndentedYamlContinuation(line, parentIndent))
-                {
-                    throw new InvalidDataException(
-                        "受管 YAML 多行引号值未闭合；已保留现有运行配置。");
-                }
-
-                scanStart = GetIndent(line);
-            }
-
-            for (int index = scanStart; index < line.Length; index++)
-            {
-                if ((++scannedCharacters & CancellationCheckCharacterMask) == 0)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                }
-
-                char current = line[index];
-                if (quote == '"')
-                {
-                    if (escaped)
-                    {
-                        escaped = false;
-                    }
-                    else if (current == '\\')
-                    {
-                        escaped = true;
-                    }
-                    else if (current == '"')
-                    {
-                        return lineIndex;
-                    }
-
-                    continue;
-                }
-
-                if (current == '\'' && index + 1 < line.Length && line[index + 1] == '\'')
-                {
-                    index++;
-                    scannedCharacters++;
-                }
-                else if (current == '\'')
-                {
-                    return lineIndex;
-                }
-            }
-
-            // In YAML, a trailing backslash escapes the line break itself.
-            escaped = false;
-        }
-
-        throw new InvalidDataException("受管 YAML 多行引号值未闭合；已保留现有运行配置。");
-    }
-
-    private static bool IsBlockScalarHeader(string value)
-    {
-        if (value.Length == 0 || value[0] is not ('|' or '>'))
-        {
-            return false;
-        }
-
-        bool hasChomping = false;
-        bool hasIndent = false;
-        foreach (char indicator in value.AsSpan(1).Trim())
-        {
-            if (indicator is '+' or '-')
-            {
-                if (hasChomping)
-                {
-                    return false;
-                }
-
-                hasChomping = true;
-            }
-            else if (indicator is >= '1' and <= '9')
-            {
-                if (hasIndent)
-                {
-                    return false;
-                }
-
-                hasIndent = true;
-            }
-            else
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool IsFlowCollectionBalanced(string value)
-    {
-        Stack<char> closing = new();
-        char quote = '\0';
-        bool escaped = false;
-        for (int index = 0; index < value.Length; index++)
-        {
-            char current = value[index];
-            if (quote == '"')
-            {
-                if (escaped)
-                {
-                    escaped = false;
-                }
-                else if (current == '\\')
-                {
-                    escaped = true;
-                }
-                else if (current == '"')
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (quote == '\'')
-            {
-                if (current == '\'' && index + 1 < value.Length && value[index + 1] == '\'')
-                {
-                    index++;
-                }
-                else if (current == '\'')
-                {
-                    quote = '\0';
-                }
-
-                continue;
-            }
-
-            if (current is '"' or '\'')
-            {
-                quote = current;
-            }
-            else if (current == '{')
-            {
-                if (closing.Count >= MaximumFlowCollectionDepth)
-                {
-                    return false;
-                }
-                closing.Push('}');
-            }
-            else if (current == '[')
-            {
-                if (closing.Count >= MaximumFlowCollectionDepth)
-                {
-                    return false;
-                }
-                closing.Push(']');
-            }
-            else if (current is '}' or ']')
-            {
-                if (closing.Count == 0 || closing.Pop() != current)
-                {
-                    return false;
-                }
-
-                if (closing.Count == 0 && index != value.Length - 1)
-                {
-                    return false;
-                }
-            }
-        }
-
-        return quote == '\0' && closing.Count == 0;
-    }
+    internal static int FindQuotedScalarEnd(IReadOnlyList<string> source, int firstLine, int parentIndent, char quote, CancellationToken cancellationToken) =>
+        YamlStructure.FindQuotedScalarEnd(source, firstLine, parentIndent, quote, cancellationToken);
 
     private static bool IsManagedRootKey(string key) =>
         key.Equals("external-controller", StringComparison.OrdinalIgnoreCase)
@@ -1271,7 +631,7 @@ public static class RuntimeConfigBuilder
         || key.Equals("mixed-port", StringComparison.OrdinalIgnoreCase)
         || key.Equals("socks-port", StringComparison.OrdinalIgnoreCase);
 
-    private static int GetIndent(string line) => line.Length - line.TrimStart().Length;
+
 
     private static string CreateTunPropertyLine(int indent, string property, string value) =>
         new string(' ', Math.Max(0, indent)) + $"{property}: {value}";

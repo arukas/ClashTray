@@ -24,7 +24,7 @@
                 <ToggleSwitch x:Name="DisconnectAfterProxySwitch" x:Uid="DisconnectAfterProxySwitch" />
                 <TextBlock x:Uid="DisconnectAfterProxySwitchHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" Margin="0,2,0,0" />
                 <TextBlock x:Uid="SubscriptionRefreshHeader" FontWeight="SemiBold" Margin="0,6,0,0" />
-                <NumberBox x:Name="SubscriptionRefreshHoursBox" x:Uid="SubscriptionRefreshHoursBox" Minimum="1" Maximum="168" SmallChange="1" Value="24" />
+                <NumberBox ValidationMode="Disabled" x:Name="SubscriptionRefreshHoursBox" x:Uid="SubscriptionRefreshHoursBox" Minimum="1" Maximum="168" SmallChange="1" Value="24" />
                 <TextBlock x:Name="StartupStatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
                 <Button x:Name="SaveSettingsButton" x:Uid="SaveSettingsButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveButton_Click" HorizontalAlignment="Left" />
             </StackPanel>
@@ -73,16 +73,16 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <NumberBox x:Name="HttpPortBox" x:Uid="HttpPortBox" Minimum="1" Maximum="65535" />
-                    <NumberBox x:Name="SocksPortBox" x:Uid="SocksPortBox" Grid.Column="1" Minimum="1" Maximum="65535" />
+                    <NumberBox ValidationMode="Disabled" x:Name="HttpPortBox" x:Uid="HttpPortBox" Minimum="1" Maximum="65535" />
+                    <NumberBox ValidationMode="Disabled" x:Name="SocksPortBox" x:Uid="SocksPortBox" Grid.Column="1" Minimum="1" Maximum="65535" />
                 </Grid>
                 <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <NumberBox x:Name="MixedPortBox" x:Uid="MixedPortBox" Minimum="1" Maximum="65535" />
-                    <NumberBox x:Name="ControllerPortBox" Grid.Column="1" x:Uid="ControllerPortBox" Minimum="1" Maximum="65535" />
+                    <NumberBox ValidationMode="Disabled" x:Name="MixedPortBox" x:Uid="MixedPortBox" Minimum="1" Maximum="65535" />
+                    <NumberBox ValidationMode="Disabled" x:Name="ControllerPortBox" Grid.Column="1" x:Uid="ControllerPortBox" Minimum="1" Maximum="65535" />
                 </Grid>
                 <ComboBox x:Name="ControllerPortPolicyBox" x:Uid="ControllerPortPolicyBox">
                     <ComboBoxItem x:Uid="ControllerPortAutomaticItem" Tag="automatic" />

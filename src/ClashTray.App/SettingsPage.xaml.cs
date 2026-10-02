@@ -3,14 +3,17 @@ using ClashTray.Contracts;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.System;
+using System.Globalization;
+using Microsoft.UI.Xaml.Media;
 
 namespace ClashTray.App;
 
 public sealed partial class SettingsPage : UserControl
 {
     private readonly ClashTrayRuntime _runtime;
-    private AppSettings? _loadedSettings;
-    private bool _saving;
+    private readonly SettingsEditModel _edit = new();
+    private readonly SettingsPageCommands _commands;
+    private bool _saving => _commands.Settings.IsBusy;
     private bool _savingNetworkSwitch;
     private IReadOnlyList<ProviderStatus>? _providers;
     private IReadOnlyList<ProviderStatus>? _ruleProviders;
@@ -20,7 +23,7 @@ public sealed partial class SettingsPage : UserControl
     private string _endpointSignature = string.Empty;
     private bool _updatingEndpointControls;
     private bool _updatingNetworkControls;
-    private bool _applyingNetworkControl;
+    private bool _applyingNetworkControl => _commands.Network.IsBusy;
     private EndpointId? _editingEndpointId;
     private EndpointId? _testingEndpointId;
     private readonly List<NetworkRuleEditorRow> _networkRuleRows = [];
@@ -32,7 +35,10 @@ public sealed partial class SettingsPage : UserControl
     {
         ArgumentNullException.ThrowIfNull(runtime);
         _runtime = runtime;
+        _commands = new(runtime);
         InitializeComponent();
+        Loaded += (_, _) => _commands.Activate();
+        Unloaded += (_, _) => _commands.Deactivate();
         LoadSettings(runtime.Settings);
         UpdateEndpointList(runtime.Endpoints);
         UpdateNetworkConfigurationState(runtime.Snapshot);
@@ -130,27 +136,25 @@ public sealed partial class SettingsPage : UserControl
                 customCaPem: EndpointCustomCaBox.Text,
                 isEditing: _editingEndpointId is not null,
                 nowUtc: DateTimeOffset.UtcNow);
-            if (_editingEndpointId is EndpointId editingEndpointId)
+            EndpointId? editingEndpointId = _editingEndpointId;
+            PageCommandResult result = await _commands.Endpoints.RunAsync(async () =>
             {
-                await _runtime.UpdateRemoteEndpointAsync(
-                    editingEndpointId,
-                    submission.Descriptor,
-                    submission.Secret,
-                    submission.CustomCaCertificate,
-                    submission.InsecureHttpAcknowledgedAtUtc);
-            }
-            else
+                if (editingEndpointId is EndpointId id)
+                {
+                    await _runtime.UpdateRemoteEndpointAsync(id, submission.Descriptor, submission.Secret,
+                        submission.CustomCaCertificate, submission.InsecureHttpAcknowledgedAtUtc);
+                }
+                else
+                {
+                    await _runtime.ProvisionRemoteEndpointAsync(submission.Descriptor, submission.Secret,
+                        submission.CustomCaCertificate, submission.InsecureHttpAcknowledgedAtUtc);
+                }
+            });
+            if (result.CanPresent)
             {
-                await _runtime.ProvisionRemoteEndpointAsync(
-                    submission.Descriptor,
-                    submission.Secret,
-                    submission.CustomCaCertificate,
-                    submission.InsecureHttpAcknowledgedAtUtc);
-            }
-            UpdateEndpointList(_runtime.Endpoints);
-            ClearEndpointEditor();
-            StatusText.Text = LocalizationService.Get("EndpointSaved");
-        }
+                if (result.Succeeded) { UpdateEndpointList(_runtime.Endpoints); ClearEndpointEditor(); }
+                StatusText.Text = result.Succeeded ? LocalizationService.Get("EndpointSaved") : result.Error;
+            }        }
         catch (Exception exception)
         {
             StatusText.Text = ErrorSanitizer.Sanitize(exception);
@@ -166,21 +170,15 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
-        try
+        EndpointRemovalResult? removed = null;
+        PageCommandResult result = await _commands.Endpoints.RunAsync(async () => removed = await _runtime.RemoveRemoteEndpointAsync(endpoint.Id));
+        if (result.CanPresent)
         {
-            EndpointRemovalResult result = await _runtime.RemoveRemoteEndpointAsync(endpoint.Id);
-            UpdateEndpointList(_runtime.Endpoints);
-            ClearEndpointEditor();
-            StatusText.Text = result.Removed
-                ? LocalizationService.Get("EndpointRemoved")
-                : LocalizationService.Get("EndpointNotFound");
-        }
-        catch (Exception exception)
-        {
-            StatusText.Text = ErrorSanitizer.Sanitize(exception);
+            if (result.Succeeded) { UpdateEndpointList(_runtime.Endpoints); ClearEndpointEditor(); }
+            StatusText.Text = !result.Succeeded ? result.Error
+                : LocalizationService.Get(removed!.Removed ? "EndpointRemoved" : "EndpointNotFound");
         }
     }
-
     private void EndpointListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_updatingEndpointControls)
@@ -224,20 +222,13 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
-        try
+        PageCommandResult result = await _commands.Endpoints.RunAsync(() => _runtime.SelectEndpointAsync(endpoint.Id));
+        if (result.CanPresent)
         {
-            await _runtime.SelectEndpointAsync(endpoint.Id);
-            StatusText.Text = LocalizationService.Format(
-                "EndpointSelected",
-                endpoint.DisplayName);
-            UpdateEndpointList(_runtime.Endpoints);
-        }
-        catch (Exception exception)
-        {
-            StatusText.Text = ErrorSanitizer.Sanitize(exception);
+            if (result.Succeeded) { UpdateEndpointList(_runtime.Endpoints); }
+            StatusText.Text = result.Succeeded ? LocalizationService.Format("EndpointSelected", endpoint.DisplayName) : result.Error;
         }
     }
-
     private async void TestEndpointButton_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button
@@ -253,27 +244,18 @@ public sealed partial class SettingsPage : UserControl
         _testingEndpointId = endpoint.Id;
         UpdateEndpointList(_runtime.Endpoints);
         StatusText.Text = LocalizationService.Get("EndpointTesting");
-        try
+        EndpointHandshakeResult? handshake = null;
+        PageCommandResult result = await _commands.Endpoints.RunAsync(async () => handshake = await _runtime.TestRemoteEndpointAsync(endpoint.Id));
+        _testingEndpointId = null;
+        if (result.CanPresent)
         {
-            EndpointHandshakeResult handshake = await _runtime.TestRemoteEndpointAsync(endpoint.Id);
-            string version = handshake.Version
-                ?? LocalizationService.Get("EndpointVersionUnknown");
-            StatusText.Text = LocalizationService.Format(
-                "EndpointTestSucceeded",
-                endpoint.DisplayName,
-                version);
-        }
-        catch (Exception exception)
-        {
-            StatusText.Text = ErrorSanitizer.Sanitize(exception);
-        }
-        finally
-        {
-            _testingEndpointId = null;
             UpdateEndpointList(_runtime.Endpoints);
+            StatusText.Text = result.Succeeded
+                ? LocalizationService.Format("EndpointTestSucceeded", endpoint.DisplayName,
+                    handshake!.Version ?? LocalizationService.Get("EndpointVersionUnknown"))
+                : result.Error;
         }
     }
-
     private void EndpointTransportBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (EndpointHttpRiskCheckBox is null)
@@ -563,90 +545,57 @@ public sealed partial class SettingsPage : UserControl
 
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_saving)
-        {
-            return;
-        }
-
-        if (!TryReadPort(HttpPortBox, LocalizationService.Get("HttpPortLabel"), out int httpPort)
-            || !TryReadPort(SocksPortBox, LocalizationService.Get("SocksPortLabel"), out int socksPort)
-            || !TryReadPort(MixedPortBox, LocalizationService.Get("MixedPortLabel"), out int mixedPort)
-            || !TryReadPort(ControllerPortBox, LocalizationService.Get("ControllerPortLabel"), out int controllerPort))
-        {
-            return;
-        }
-
-        if (!TryReadSubscriptionRefreshHours(out int subscriptionRefreshHours))
-        {
-            StatusText.Text = LocalizationService.Get("ErrorInvalidRefreshHours");
-            return;
-        }
-
+        if (_saving) { return; }
+        CaptureDraft();
         AppSettings current = _runtime.Settings;
-        AppSettings baseline = _loadedSettings ?? current;
-        string logLevel = (LogLevelBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.LogLevel;
-        string theme = (ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Theme;
-        string language = (LanguageBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.Language;
-        string tunStack = (TunStackBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? current.TunStack;
-        AppSettings proposed = baseline with
+        if (!_edit.TryCreatePatch(current, CultureInfo.CurrentCulture, out AppSettingsPatch patch, out SettingsEditValidationError? error))
         {
-            StartWithWindows = StartWithWindowsSwitch.IsOn,
-            StartCoreAutomatically = StartCoreSwitch.IsOn,
-            AllowLan = AllowLanSwitch.IsOn,
-            Ipv6 = Ipv6Switch.IsOn,
-            TcpConcurrent = TcpConcurrentSwitch.IsOn,
-            DisconnectConnectionsAfterProxySwitch = DisconnectAfterProxySwitch.IsOn,
-            HttpPort = httpPort,
-            SocksPort = socksPort,
-            MixedPort = mixedPort,
-            ControllerPort = controllerPort,
-            ControllerPortConflictPolicy = ParseControllerPortConflictPolicy(
-                (ControllerPortPolicyBox.SelectedItem as ComboBoxItem)?.Tag?.ToString()),
-            LogLevel = logLevel,
-            Theme = theme,
-            Language = language,
-            TunStack = tunStack,
-            BypassList = BypassListBox.Text.Trim(),
-            SubscriptionRefreshHours = subscriptionRefreshHours
-        };
-        AppSettingsPatch patch = AppSettingsPatch.Diff(baseline, proposed) with
-        {
-            // These are controlled by Proxy/configuration actions outside this form.
-            ActiveConfigurationId = default,
-            SystemProxyEnabled = default,
-            TunEnabled = default
-        };
+            StatusText.Text = ValidationMessage(error!);
+            return;
+        }
+
+        SettingsSaveCheckpoint submitted = _edit.CaptureSave();
         bool languageChanged = patch.Language.IsSpecified
             && !string.Equals(patch.Language.Value, current.Language, StringComparison.OrdinalIgnoreCase);
-        _saving = true;
         SaveSettingsButton.IsEnabled = false;
         SaveNetworkSettingsButton.IsEnabled = false;
-        try
+        PageCommandResult result = await _commands.SaveAsync(patch);
+        CaptureDraft(); // Edits made while saving remain a new draft.
+        if (result.Succeeded)
         {
-            await _runtime.UpdateSettingsAsync(patch, reconcileStartup: true);
-            UpdateStartupStatus(_runtime.Settings);
-            // The language override is applied before the first window exists, so
-            // changing it only takes effect on the next app start; the core keeps running.
-            StatusText.Text = !languageChanged
-                ? LocalizationService.Get("SettingsSaved")
-                : $"{LocalizationService.Get("SettingsSaved")} {LocalizationService.Get("LanguageRestartPrompt")}";
+            _edit.AcceptSaved(_runtime.Settings, submitted);
+            if (result.CanPresent)
+            {
+                PresentDraft();
+                UpdateStartupStatus(_runtime.Settings);
+                StatusText.Text = !languageChanged
+                    ? LocalizationService.Get("SettingsSaved")
+                    : $"{LocalizationService.Get("SettingsSaved")} {LocalizationService.Get("LanguageRestartPrompt")}";
+            }
         }
-        catch (ArgumentException exception)
+        else if (result.CanPresent)
         {
-            StatusText.Text = ErrorSanitizer.Sanitize(exception);
+            StatusText.Text = LocalizationService.Format("SettingsSaveFailedFormat", result.Error ?? string.Empty);
         }
-        catch (Exception exception)
-        {
-            StatusText.Text = LocalizationService.Format("SettingsSaveFailedFormat", ErrorSanitizer.Sanitize(exception));
-        }
-        finally
-        {
-            _saving = false;
-            SaveSettingsButton.IsEnabled = true;
-            SaveNetworkSettingsButton.IsEnabled = true;
-        }
+        SaveSettingsButton.IsEnabled = !_saving;
+        SaveNetworkSettingsButton.IsEnabled = !_saving;
     }
 
+    private static string ValidationMessage(SettingsEditValidationError error)
+    {
+        if (error.Field == SettingsNumberField.SubscriptionRefreshHours) { return LocalizationService.Get("ErrorInvalidRefreshHours"); }
+        string? label = error.Field switch
+        {
+            SettingsNumberField.HttpPort => "HttpPortLabel",
+            SettingsNumberField.SocksPort => "SocksPortLabel",
+            SettingsNumberField.MixedPort => "MixedPortLabel",
+            SettingsNumberField.ControllerPort => "ControllerPortLabel",
+            _ => null
+        };
+        return label is null
+            ? error.Detail ?? LocalizationService.Get("SettingsSaveFailedFormat")
+            : LocalizationService.Format("ErrorPortRangeFormat", LocalizationService.Get(label));
+    }
     private static ControllerPortConflictPolicy ParseControllerPortConflictPolicy(string? value) =>
         string.Equals(value, "fixed", StringComparison.OrdinalIgnoreCase)
             ? ControllerPortConflictPolicy.Fixed
@@ -698,138 +647,75 @@ public sealed partial class SettingsPage : UserControl
         }
 
         UpdateNetworkConfigurationState(_runtime.Snapshot);
-        _applyingNetworkControl = true;
+        Task<PageCommandResult> pending = _commands.SetSystemProxyAsync(enabled);
         UpdateNetworkConfigurationState(_runtime.Snapshot);
-        try
-        {
-            await _runtime.SetSystemProxyAsync(enabled);
-            StatusText.Text = LocalizationService.Get("SystemProxyChangeApplied");
-        }
-        catch (Exception exception)
-        {
-            StatusText.Text = LocalizationService.Format(
-                "NetworkControlChangeFailedFormat",
-                ErrorSanitizer.Sanitize(exception));
-        }
-        finally
-        {
-            _applyingNetworkControl = false;
-            UpdateNetworkConfigurationState(_runtime.Snapshot);
-        }
+        PresentNetworkResult(await pending, "SystemProxyChangeApplied");
+        UpdateNetworkConfigurationState(_runtime.Snapshot);
     }
 
     private async void TunSwitch_Toggled(object sender, RoutedEventArgs e)
     {
-        if (_updatingNetworkControls || _applyingNetworkControl)
-        {
-            return;
-        }
-
+        if (_updatingNetworkControls || _applyingNetworkControl) { return; }
         bool enabled = TunSwitch.IsOn;
-        if (enabled == (_runtime.Snapshot.Tun == TunState.On))
-        {
-            return;
-        }
+        if (enabled == (_runtime.Snapshot.Tun == TunState.On)) { return; }
+        UpdateNetworkConfigurationState(_runtime.Snapshot);
+        Task<PageCommandResult> pending = _commands.SetTunAsync(enabled);
+        UpdateNetworkConfigurationState(_runtime.Snapshot);
+        PresentNetworkResult(await pending, "TunChangeApplied");
+        UpdateNetworkConfigurationState(_runtime.Snapshot);
+    }
 
-        UpdateNetworkConfigurationState(_runtime.Snapshot);
-        _applyingNetworkControl = true;
-        UpdateNetworkConfigurationState(_runtime.Snapshot);
-        try
-        {
-            await _runtime.SetTunAsync(enabled);
-            StatusText.Text = LocalizationService.Get("TunChangeApplied");
-        }
-        catch (Exception exception)
-        {
-            StatusText.Text = LocalizationService.Format(
-                "NetworkControlChangeFailedFormat",
-                ErrorSanitizer.Sanitize(exception));
-        }
-        finally
-        {
-            _applyingNetworkControl = false;
-            UpdateNetworkConfigurationState(_runtime.Snapshot);
-        }
+    private void PresentNetworkResult(PageCommandResult result, string successKey)
+    {
+        if (!result.CanPresent) { return; }
+        StatusText.Text = result.Succeeded
+            ? LocalizationService.Get(successKey)
+            : LocalizationService.Format("NetworkControlChangeFailedFormat", result.Error ?? string.Empty);
     }
 
     private async void ClearFakeIpButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!HasControllerCapability(EndpointCapability.ClearCache))
-        {
-            return;
-        }
-
-        try
-        {
-            await _runtime.ClearFakeIpCacheAsync(_expectedCommandTarget);
-            StatusText.Text = LocalizationService.Get("FakeIpCleared");
-        }
-        catch (Exception exception)
-        {
-            StatusText.Text = ErrorSanitizer.Sanitize(exception);
-        }
+        if (!HasControllerCapability(EndpointCapability.ClearCache)) { return; }
+        EndpointCommandTarget? target = _expectedCommandTarget;
+        await PresentMaintenanceAsync(() => _commands.ClearFakeIpAsync(target), LocalizationService.Get("FakeIpCleared"));
     }
 
     private async void ClearDnsButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!HasControllerCapability(EndpointCapability.ClearCache))
-        {
-            return;
-        }
-
-        try
-        {
-            await _runtime.ClearDnsCacheAsync(_expectedCommandTarget);
-            StatusText.Text = LocalizationService.Get("DnsCleared");
-        }
-        catch (Exception exception)
-        {
-            StatusText.Text = ErrorSanitizer.Sanitize(exception);
-        }
+        if (!HasControllerCapability(EndpointCapability.ClearCache)) { return; }
+        EndpointCommandTarget? target = _expectedCommandTarget;
+        await PresentMaintenanceAsync(() => _commands.ClearDnsAsync(target), LocalizationService.Get("DnsCleared"));
     }
 
     private async void UpdateGeoButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!HasControllerCapability(EndpointCapability.UpdateGeo))
-        {
-            return;
-        }
-
-        try
-        {
-            await _runtime.UpdateGeoAsync(_expectedCommandTarget);
-            StatusText.Text = LocalizationService.Get("GeoUpdateSent");
-        }
-        catch (Exception exception)
-        {
-            StatusText.Text = ErrorSanitizer.Sanitize(exception);
-        }
+        if (!HasControllerCapability(EndpointCapability.UpdateGeo)) { return; }
+        EndpointCommandTarget? target = _expectedCommandTarget;
+        await PresentMaintenanceAsync(() => _commands.UpdateGeoAsync(target), LocalizationService.Get("GeoUpdateSent"));
     }
 
     private async void RefreshProviderButton_Click(object sender, RoutedEventArgs e)
     {
-        if (!HasControllerCapability(EndpointCapability.RefreshProvider))
-        {
-            return;
-        }
-
+        if (!HasControllerCapability(EndpointCapability.RefreshProvider)) { return; }
         if (ProvidersListView.SelectedItem is not ListViewItem { Tag: ValueTuple<ProviderStatus, bool> selected })
         {
             StatusText.Text = LocalizationService.Get("SelectProviderFirst");
             return;
         }
-
-        try
-        {
-            await _runtime.RefreshProviderAsync(selected.Item1.Name, selected.Item2, _expectedCommandTarget);
-            StatusText.Text = LocalizationService.Format("ProviderRefreshRequestedFormat", selected.Item1.Name);
-        }
-        catch (Exception exception)
-        {
-            StatusText.Text = ErrorSanitizer.Sanitize(exception);
-        }
+        EndpointCommandTarget? target = _expectedCommandTarget;
+        await PresentMaintenanceAsync(
+            () => _commands.RefreshProviderAsync(selected.Item1.Name, selected.Item2, target),
+            LocalizationService.Format("ProviderRefreshRequestedFormat", selected.Item1.Name));
     }
 
+    private async Task PresentMaintenanceAsync(Func<Task<PageCommandResult>> command, string success)
+    {
+        Task<PageCommandResult> pending = command();
+        UpdateControllerActionButtons();
+        PageCommandResult result = await pending;
+        UpdateControllerActionButtons();
+        if (result.CanPresent) { StatusText.Text = result.Succeeded ? success : result.Error; }
+    }
     private void ProvidersListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         UpdateControllerActionButtons();
@@ -849,15 +735,15 @@ public sealed partial class SettingsPage : UserControl
 
         bool canClearCache = HasControllerCapability(EndpointCapability.ClearCache);
         bool canUpdateGeo = HasControllerCapability(EndpointCapability.UpdateGeo);
-        ClearDnsButton.IsEnabled = canClearCache;
-        ClearFakeIpButton.IsEnabled = canClearCache;
-        UpdateGeoButton.IsEnabled = canUpdateGeo;
+        ClearDnsButton.IsEnabled = canClearCache && !_commands.Maintenance.IsBusy;
+        ClearFakeIpButton.IsEnabled = canClearCache && !_commands.Maintenance.IsBusy;
+        UpdateGeoButton.IsEnabled = canUpdateGeo && !_commands.Maintenance.IsBusy;
         bool providerSelected = ProvidersListView.SelectedItem is ListViewItem
         {
             Tag: ValueTuple<ProviderStatus, bool>
         };
         bool canRefreshProvider = HasControllerCapability(EndpointCapability.RefreshProvider);
-        RefreshProviderButton.IsEnabled = canRefreshProvider && providerSelected;
+        RefreshProviderButton.IsEnabled = canRefreshProvider && providerSelected && !_commands.Maintenance.IsBusy;
         string? cacheTooltip = canClearCache
             ? null
             : !_controllerWritable
@@ -895,153 +781,113 @@ public sealed partial class SettingsPage : UserControl
             return;
         }
 
-        try
-        {
-            await _runtime.InstallCoreUpdateAsync(new CoreUpdateManifest(CoreVersionBox.Text.Trim(), uri, sha256));
-            StatusText.Text = LocalizationService.Get("CoreUpdateDone");
-        }
-        catch (Exception exception)
-        {
-            StatusText.Text = ErrorSanitizer.Sanitize(exception);
-        }
+        CoreUpdateManifest manifest = new(CoreVersionBox.Text.Trim(), uri, sha256);
+        await PresentMaintenanceAsync(() => _commands.InstallCoreAsync(manifest), LocalizationService.Get("CoreUpdateDone"));
     }
-
     private void LoadSettings(AppSettings settings)
     {
-        if (StartWithWindowsSwitch is null)
-        {
-            return;
-        }
-
+        if (StartWithWindowsSwitch is null) { return; }
         UpdateStartupStatus(settings);
-        if (settings == _loadedSettings)
+        if (_edit.IsLoaded)
         {
-            return;
+            CaptureDraft();
+            _edit.MergeExternal(settings);
         }
-
-        // Merge external settings changes only into fields the user has not edited.
-        // Do not reassign unchanged values: NumberBox may still contain uncommitted text.
-        bool ShouldRefresh<T>(T displayed, Func<AppSettings, T> select) =>
-            _loadedSettings is null ||
-            (!EqualityComparer<T>.Default.Equals(select(_loadedSettings), select(settings))
-                && EqualityComparer<T>.Default.Equals(displayed, select(_loadedSettings)));
-
-        if (ShouldRefresh(StartWithWindowsSwitch.IsOn, value => value.StartWithWindows))
-        {
-            StartWithWindowsSwitch.IsOn = settings.StartWithWindows;
-        }
-
-        if (ShouldRefresh(StartCoreSwitch.IsOn, value => value.StartCoreAutomatically))
-        {
-            StartCoreSwitch.IsOn = settings.StartCoreAutomatically;
-        }
-
-        if (ShouldRefresh(AllowLanSwitch.IsOn, value => value.AllowLan))
-        {
-            AllowLanSwitch.IsOn = settings.AllowLan;
-        }
-
-        if (ShouldRefresh(Ipv6Switch.IsOn, value => value.Ipv6))
-        {
-            Ipv6Switch.IsOn = settings.Ipv6;
-        }
-
-        if (ShouldRefresh(TcpConcurrentSwitch.IsOn, value => value.TcpConcurrent))
-        {
-            TcpConcurrentSwitch.IsOn = settings.TcpConcurrent;
-        }
-
-        if (ShouldRefresh(DisconnectAfterProxySwitch.IsOn, value => value.DisconnectConnectionsAfterProxySwitch))
-        {
-            DisconnectAfterProxySwitch.IsOn = settings.DisconnectConnectionsAfterProxySwitch;
-        }
-
-        if (ShouldRefresh(SubscriptionRefreshHoursBox.Value, value => (double)value.SubscriptionRefreshHours))
-        {
-            SubscriptionRefreshHoursBox.Value = settings.SubscriptionRefreshHours;
-        }
-
-        if (ShouldRefresh(HttpPortBox.Value, value => (double)value.HttpPort))
-        {
-            HttpPortBox.Value = settings.HttpPort;
-        }
-
-        if (ShouldRefresh(SocksPortBox.Value, value => (double)value.SocksPort))
-        {
-            SocksPortBox.Value = settings.SocksPort;
-        }
-
-        if (ShouldRefresh(MixedPortBox.Value, value => (double)value.MixedPort))
-        {
-            MixedPortBox.Value = settings.MixedPort;
-        }
-
-        if (ShouldRefresh(ControllerPortBox.Value, value => (double)value.ControllerPort))
-        {
-            ControllerPortBox.Value = settings.ControllerPort;
-        }
-
-        if (ShouldRefresh(
-            (ControllerPortPolicyBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(),
-            value => value.ControllerPortConflictPolicy == ControllerPortConflictPolicy.Fixed ? "fixed" : "automatic"))
-        {
-            string policyTag = settings.ControllerPortConflictPolicy == ControllerPortConflictPolicy.Fixed
-                ? "fixed"
-                : "automatic";
-            ControllerPortPolicyBox.SelectedItem = ControllerPortPolicyBox.Items
-                .OfType<ComboBoxItem>()
-                .FirstOrDefault(item => string.Equals(item.Tag?.ToString(), policyTag, StringComparison.Ordinal))
-                ?? ControllerPortPolicyBox.Items.FirstOrDefault();
-        }
-
-        if (ShouldRefresh(BypassListBox.Text, value => value.BypassList))
-        {
-            BypassListBox.Text = settings.BypassList;
-        }
-
-        if (ShouldRefresh((TunStackBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.TunStack))
-        {
-            TunStackBox.SelectedItem = TunStackBox.Items
-                .OfType<ComboBoxItem>()
-                .FirstOrDefault(item => string.Equals(
-                    item.Tag?.ToString(),
-                    settings.TunStack,
-                    StringComparison.OrdinalIgnoreCase))
-                ?? TunStackBox.Items.FirstOrDefault();
-        }
-
-        if (ShouldRefresh((LogLevelBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.LogLevel))
-        {
-            LogLevelBox.SelectedItem = LogLevelBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.LogLevel)
-                ?? LogLevelBox.Items.FirstOrDefault();
-        }
-
-        if (ShouldRefresh((LanguageBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.Language))
-        {
-            LanguageBox.SelectedItem = LanguageBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.Language)
-                ?? LanguageBox.Items.FirstOrDefault();
-        }
-
-        bool refreshTheme = ShouldRefresh((ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString(), value => value.Theme);
-        ComboBoxItem? hiddenTheme = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == "nakhimov");
-        if (settings.NakhimovUnlocked && hiddenTheme is null)
-        {
-            ThemeBox.Items.Add(new ComboBoxItem { Content = "Nakhimov", Tag = "nakhimov" });
-        }
-        else if (!settings.NakhimovUnlocked && hiddenTheme is not null)
-        {
-            ThemeBox.Items.Remove(hiddenTheme);
-        }
-
-        if (refreshTheme)
-        {
-            ThemeBox.SelectedItem = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == settings.Theme)
-                ?? ThemeBox.Items.FirstOrDefault();
-        }
-
-        _loadedSettings = settings;
+        else { _edit.Load(settings); }
+        PresentDraft();
     }
 
+    private void CaptureDraft()
+    {
+        if (!_edit.IsLoaded) { return; }
+        AppSettings values = _edit.Values with
+        {
+            StartWithWindows = StartWithWindowsSwitch.IsOn,
+            StartCoreAutomatically = StartCoreSwitch.IsOn,
+            AllowLan = AllowLanSwitch.IsOn,
+            Ipv6 = Ipv6Switch.IsOn,
+            TcpConcurrent = TcpConcurrentSwitch.IsOn,
+            DisconnectConnectionsAfterProxySwitch = DisconnectAfterProxySwitch.IsOn,
+            ControllerPortConflictPolicy = ParseControllerPortConflictPolicy((ControllerPortPolicyBox.SelectedItem as ComboBoxItem)?.Tag?.ToString()),
+            LogLevel = (LogLevelBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? _edit.Values.LogLevel,
+            Theme = (ThemeBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? _edit.Values.Theme,
+            Language = (LanguageBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? _edit.Values.Language,
+            TunStack = (TunStackBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? _edit.Values.TunStack,
+            BypassList = BypassListBox.Text.Trim()
+        };
+        _edit.Capture(values, NumberControls().ToDictionary(pair => pair.Field, pair => ReadNumberInput(pair.Control)));
+    }
+
+    private IEnumerable<(SettingsNumberField Field, NumberBox Control)> NumberControls()
+    {
+        yield return (SettingsNumberField.HttpPort, HttpPortBox);
+        yield return (SettingsNumberField.SocksPort, SocksPortBox);
+        yield return (SettingsNumberField.MixedPort, MixedPortBox);
+        yield return (SettingsNumberField.ControllerPort, ControllerPortBox);
+        yield return (SettingsNumberField.SubscriptionRefreshHours, SubscriptionRefreshHoursBox);
+    }
+
+    private static SettingsNumberInput ReadNumberInput(NumberBox control)
+    {
+        // NumberBox.Value may lag the focused input. Read the visible template
+        // TextBox before merging snapshots or saving; never force a focus change.
+        string text = FindNumberTextBox(control)?.Text ?? control.Text;
+        bool pending = !double.TryParse(text, NumberStyles.Number, CultureInfo.CurrentCulture, out double parsed)
+            || parsed != control.Value;
+        return new(control.Value, text, pending);
+    }
+
+    private static TextBox? FindNumberTextBox(DependencyObject parent, int depth = 0)
+    {
+        if (parent is TextBox textBox) { return textBox; }
+        if (depth >= 16) { return null; }
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            TextBox? found = FindNumberTextBox(VisualTreeHelper.GetChild(parent, index), depth + 1);
+            if (found is not null) { return found; }
+        }
+        return null;
+    }
+
+    private void PresentDraft()
+    {
+        AppSettings settings = _edit.Values;
+        SetSwitch(StartWithWindowsSwitch, settings.StartWithWindows);
+        SetSwitch(StartCoreSwitch, settings.StartCoreAutomatically);
+        SetSwitch(AllowLanSwitch, settings.AllowLan);
+        SetSwitch(Ipv6Switch, settings.Ipv6);
+        SetSwitch(TcpConcurrentSwitch, settings.TcpConcurrent);
+        SetSwitch(DisconnectAfterProxySwitch, settings.DisconnectConnectionsAfterProxySwitch);
+        foreach ((SettingsNumberField field, NumberBox control) in NumberControls())
+        {
+            SettingsNumberDraft number = _edit.Numbers[field];
+            // Reassigning Value can destroy pending/invalid text and selection.
+            if (!number.IsModified && control.Value != number.Input.Value) { control.Value = number.Input.Value; }
+        }
+        SetChoice(ControllerPortPolicyBox, settings.ControllerPortConflictPolicy == ControllerPortConflictPolicy.Fixed ? "fixed" : "automatic");
+        if (BypassListBox.Text.Trim() != settings.BypassList) { BypassListBox.Text = settings.BypassList; }
+        SetChoice(TunStackBox, settings.TunStack);
+        SetChoice(LogLevelBox, settings.LogLevel);
+        SetChoice(LanguageBox, settings.Language);
+        ComboBoxItem? hiddenTheme = ThemeBox.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == "nakhimov");
+        if (settings.NakhimovUnlocked && hiddenTheme is null) { ThemeBox.Items.Add(new ComboBoxItem { Content = "Nakhimov", Tag = "nakhimov" }); }
+        else if (!settings.NakhimovUnlocked && hiddenTheme is not null) { ThemeBox.Items.Remove(hiddenTheme); }
+        SetChoice(ThemeBox, settings.Theme);
+    }
+
+    private static void SetSwitch(ToggleSwitch control, bool value)
+    {
+        if (control.IsOn != value) { control.IsOn = value; }
+    }
+
+    private static void SetChoice(ComboBox control, string value)
+    {
+        if ((control.SelectedItem as ComboBoxItem)?.Tag?.ToString() != value)
+        {
+            control.SelectedItem = control.Items.OfType<ComboBoxItem>().FirstOrDefault(item => item.Tag?.ToString() == value)
+                ?? control.Items.FirstOrDefault();
+        }
+    }
     private void UpdateNetworkConfigurationState(RuntimeSnapshot snapshot)
     {
         if (SystemProxySwitch is null || TunSwitch is null)
@@ -1429,41 +1275,6 @@ public sealed partial class SettingsPage : UserControl
         StartupStatusText.Text = status.IsRegistered && !status.IsOwnedByClashTray
             ? LocalizationService.Get("StartupOffForeignItem")
             : LocalizationService.Get("StartupOff");
-    }
-
-    private bool TryReadSubscriptionRefreshHours(out int hours)
-    {
-        double value = SubscriptionRefreshHoursBox.Value;
-        if (double.IsNaN(value)
-            || double.IsInfinity(value)
-            || value < 1
-            || value > 168
-            || value != Math.Truncate(value))
-        {
-            hours = 0;
-            return false;
-        }
-
-        hours = (int)value;
-        return true;
-    }
-
-    private bool TryReadPort(NumberBox box, string name, out int port)
-    {
-        double value = box.Value;
-        if (double.IsNaN(value)
-            || double.IsInfinity(value)
-            || value < 1
-            || value > 65535
-            || value != Math.Truncate(value))
-        {
-            StatusText.Text = LocalizationService.Format("ErrorPortRangeFormat", name);
-            port = 0;
-            return false;
-        }
-
-        port = (int)value;
-        return true;
     }
 
     public void UpdateProviders(RuntimeSnapshot snapshot)

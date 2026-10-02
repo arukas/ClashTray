@@ -12,6 +12,7 @@ public sealed partial class ClashTrayRuntime
     {
         ArgumentNullException.ThrowIfNull(patch);
         using OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken);
+        await RecoverPendingSettingsAsync(cancellationToken);
         AppSettings previousSettings = _settings;
         AppSettings settings = patch.Apply(previousSettings);
         ValidateSettings(settings);
@@ -33,6 +34,7 @@ public sealed partial class ClashTrayRuntime
                     ResolveStartupExecutablePath(settings.StartWithWindows));
             }
 
+            await _settingsRecovery.PrepareAsync(previousSettings, settings, cancellationToken);
             await _settingsStore.SaveAsync(settings, cancellationToken);
             settingsSaved = true;
             _settings = settings;
@@ -87,12 +89,16 @@ public sealed partial class ClashTrayRuntime
                     cancellationToken);
             }
 
+            _settingsRecovery.Complete();
             Publish();
         }
         catch (Exception exception)
         {
             if (!settingsSaved)
             {
+                // No side effect was admitted. Retain a recovery record if an
+                // ambiguous storage failure needs to be reconciled next time.
+                SettingsRestorationResult initialRestoration = await RestoreSettingsAfterOperationFailureAsync(previousSettings);
                 Exception? startupRollbackException = null;
                 if (startupChange is { Changed: true })
                 {
@@ -110,9 +116,10 @@ public sealed partial class ClashTrayRuntime
                 {
                     throw new InvalidOperationException(
                         "设置保存失败，且 Windows 启动项回滚失败。",
-                        new AggregateException(exception, startupRollbackException));
+                        new AggregateException(new Exception?[] { exception, initialRestoration.Failure, startupRollbackException }.OfType<Exception>()));
                 }
 
+                ThrowIfSettingsRecoveryIncomplete(exception);
                 throw;
             }
 
@@ -361,7 +368,9 @@ public sealed partial class ClashTrayRuntime
         }
 
         TunState expectedConfirmedState = currentValue ? TunState.On : TunState.Off;
-        if (currentValue == _settings.TunEnabled
+        bool desiredTun = _settings.TunEnabled && !_networkDisableIntent.TunOff;
+        if (desiredTun && _settingsRecoveryFailure is not null) { return; }
+        if (currentValue == desiredTun
             && _confirmedTunState == expectedConfirmedState)
         {
             _confirmedTunState = currentValue ? TunState.On : TunState.Off;
@@ -377,7 +386,7 @@ public sealed partial class ClashTrayRuntime
         // TUN writes belong exclusively to the service. The desktop process
         // may observe /configs here, but it never PATCHes the controller.
         await RequestTunOperationAsync(
-                _settings.TunEnabled,
+                desiredTun,
                 persistPreference: false,
                 operationLease: operationLease,
                 cancellationToken: cancellationToken)
@@ -387,14 +396,15 @@ public sealed partial class ClashTrayRuntime
     private async Task ReconcileSystemProxyAsync(bool coreRunning, CancellationToken cancellationToken)
     {
         bool listenerConfirmed = TryGetConfirmedMixedPort(out int confirmedMixedPort);
-        string? listenerError = _settings.SystemProxyEnabled && coreRunning && !listenerConfirmed
+        bool desiredProxy = _settings.SystemProxyEnabled && !_networkDisableIntent.SystemProxyOff;
+        string? listenerError = desiredProxy && coreRunning && !listenerConfirmed
             ? SystemProxyListenerUnavailableMessage
             : null;
-        if (_settings.SystemProxyEnabled
+        if (desiredProxy
             && coreRunning
             && listenerConfirmed)
         {
-            if (_localDevice.SystemProxyState is (SystemProxyState.Off or SystemProxyState.Failed))
+            if (_settingsRecoveryFailure is null && _localDevice.SystemProxyState is (SystemProxyState.Off or SystemProxyState.Failed))
             {
                 await _localDevice.EnableSystemProxyAsync(confirmedMixedPort, _settings.BypassList, cancellationToken);
                 Interlocked.Increment(ref _proxyOwnershipRevision);
@@ -436,12 +446,14 @@ public sealed partial class ClashTrayRuntime
         bool restartStarted,
         OperationGate.Lease operationLease)
     {
-        _settings = previousSettings;
-        await _settingsStore.SaveAsync(previousSettings, CancellationToken.None);
+        SettingsRestorationResult restoration = await RestoreSettingsAfterOperationFailureAsync(previousSettings);
+        using CancellationTokenSource recoveryTimeout = new(TimeSpan.FromSeconds(30));
+        try
+        {
 
         if (restartStarted)
         {
-            await RestartCoreCoreAsync(operationLease, CancellationToken.None);
+            await RestartCoreCoreAsync(operationLease, recoveryTimeout.Token);
             if (coreWasRunning && !IsCoreHealthy())
             {
                 throw new InvalidOperationException("旧设置已恢复，但核心未能恢复健康。");
@@ -449,33 +461,119 @@ public sealed partial class ClashTrayRuntime
         }
         else if (networkSettingsChanged && _api is not null)
         {
-            await ApplyProgramNetworkPreferencesAsync(CancellationToken.None);
+            await ApplyProgramNetworkPreferencesAsync(recoveryTimeout.Token);
         }
 
         if (systemProxyBindingChanged)
         {
             await ReconcileSystemProxyAsync(
                 coreRunning: IsCoreHealthy(),
-                CancellationToken.None);
+                recoveryTimeout.Token);
         }
+        }
+        catch (Exception exception) when (restoration.Failure is not null)
+        {
+            throw new InvalidOperationException("设置和核心恢复均未完成。", new AggregateException(restoration.Failure, exception));
+        }
+        if (restoration.Failure is not null) { throw new InvalidOperationException("设置恢复未完成。", restoration.Failure); }
     }
 
     private async Task SaveSettingsForOperationAsync(AppSettings settings, CancellationToken cancellationToken)
     {
-        _settings = settings;
+        await _settingsRecovery.PrepareAsync(_settings, settings, cancellationToken);
         await _settingsStore.SaveAsync(settings, cancellationToken);
+        _settings = settings;
     }
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Failure rollback must run to completion regardless of which restore step fails.")]
-    private async Task RestoreSettingsAfterOperationFailureAsync(AppSettings settings)
+    private async Task<SettingsRestorationResult> RestoreSettingsAfterOperationFailureAsync(AppSettings settings)
     {
-        _settings = settings;
+        if (!_settingsRecovery.Exists && _settings == settings)
+        {
+            return new SettingsRestorationResult(true);
+        }
+        _settings = _networkDisableIntent.Apply(settings);
         try
         {
-            await _settingsStore.SaveAsync(settings, CancellationToken.None);
+            using CancellationTokenSource recoveryTimeout = new(TimeSpan.FromSeconds(3));
+            SettingsRecoveryRecord? record = await _settingsRecovery.ReadAsync(recoveryTimeout.Token);
+            if (record is not null)
+            {
+                SettingsLoadResult loaded = await _settingsStore.LoadWithStatusAsync(recoveryTimeout.Token);
+                EnsureSettingsStorageReadable(loaded);
+                _settings = _networkDisableIntent.Apply(record.RestoreOnto(loaded.Settings));
+            }
+            await _settingsStore.SaveAsync(_settings, recoveryTimeout.Token);
+            _settingsRecovery.Complete();
+            Volatile.Write(ref _settingsRecoveryFailure, null);
+            return new SettingsRestorationResult(true);
         }
-        catch
+        catch (Exception exception)
         {
+            RecordSettingsRecoveryFailure(exception);
+            return new SettingsRestorationResult(false, exception);
+        }
+    }
+
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Persisted recovery failures remain visible and pending; no network success is inferred.")]
+    private async Task RecoverPendingSettingsAsync(CancellationToken cancellationToken, bool initializing = false)
+    {
+        try
+        {
+            _networkDisableIntent = _networkDisableIntent.Merge(await _settingsRecovery.ReadNetworkDisableIntentAsync(cancellationToken));
+            _settings = _networkDisableIntent.Apply(_settings);
+            if (!_settingsRecovery.Exists && _networkDisableIntent.IsEmpty)
+            {
+                if (_settingsRecoveryFailure is not null)
+                {
+                    // A transient failure can leave no journal to replay. Only
+                    // clear the old failure after confirming storage is readable.
+                    EnsureSettingsStorageReadable(await _settingsStore.LoadWithStatusAsync(cancellationToken));
+                    Volatile.Write(ref _settingsRecoveryFailure, null);
+                }
+                return;
+            }
+            SettingsRecoveryRecord? record = await _settingsRecovery.ReadAsync(cancellationToken);
+            SettingsLoadResult loaded = await _settingsStore.LoadWithStatusAsync(cancellationToken);
+            EnsureSettingsStorageReadable(loaded);
+            AppSettings restored = _networkDisableIntent.Apply(record?.RestoreOnto(loaded.Settings) ?? loaded.Settings);
+            // Keep the off-only marker until a successful explicit enable. A
+            // late rollback may still contain the old enabled preference.
+            await _settingsRecovery.WriteNetworkDisableIntentAsync(_networkDisableIntent, cancellationToken);
+            _settings = restored;
+            await _settingsStore.SaveAsync(restored, cancellationToken);
+            _settingsRecovery.Complete();
+            Volatile.Write(ref _settingsRecoveryFailure, null);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception)
+        {
+            // An unreadable recovery record cannot be an admission for a
+            // background enable, including during a subsequent App restart.
+            RecordSettingsRecoveryFailure(exception);
+            if (!initializing) { throw new InvalidOperationException("设置恢复未完成，无法开始新的设置操作。", exception); }
+        }
+    }
+
+    private void RecordSettingsRecoveryFailure(Exception exception)
+    {
+        Volatile.Write(ref _settingsRecoveryFailure, exception);
+        _logs.AddApplicationLog(new LogEntry(DateTimeOffset.UtcNow, "ClashTray", "error", $"设置恢复未完成：{ErrorSanitizer.Sanitize(exception)}"));
+    }
+
+    private static void EnsureSettingsStorageReadable(SettingsLoadResult loaded)
+    {
+        if (loaded.Status is not (SettingsLoadStatus.Loaded or SettingsLoadStatus.FirstRun))
+        {
+            throw new InvalidOperationException("持久化设置无法可靠读取；保留恢复记录，请检查设置存储后重试。");
+        }
+    }
+
+    private void ThrowIfSettingsRecoveryIncomplete(Exception original)
+    {
+        if (_settingsRecoveryFailure is Exception failure)
+        {
+            throw new InvalidOperationException("操作失败，且设置恢复未完成。", new AggregateException(original, failure));
         }
     }
 

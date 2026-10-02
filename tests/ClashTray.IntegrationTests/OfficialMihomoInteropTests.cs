@@ -4,6 +4,8 @@ using System.Net.WebSockets;
 using System.Text.Json;
 using ClashTray.Contracts;
 using ClashTray.Core;
+using ClashTray.Testing;
+using System.Diagnostics.CodeAnalysis;
 
 namespace ClashTray.IntegrationTests;
 
@@ -13,10 +15,7 @@ public sealed class OfficialMihomoInteropTests
     [TestMethod]
     public async Task TemporaryDirectoryCleanupRetriesTransientFileLock()
     {
-        string root = Path.Combine(
-            Path.GetTempPath(),
-            "ClashTrayIntegrationTests",
-            Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         Directory.CreateDirectory(root);
         string lockedFilePath = Path.Combine(root, "cache.db");
         FileStream lockedFile = new(
@@ -25,7 +24,7 @@ public sealed class OfficialMihomoInteropTests
             FileAccess.ReadWrite,
             FileShare.None);
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             Task cleanup = DeleteTemporaryDirectoryWithRetryAsync(root);
             await Task.Delay(TimeSpan.FromMilliseconds(250));
@@ -33,15 +32,14 @@ public sealed class OfficialMihomoInteropTests
             await cleanup;
 
             Assert.IsFalse(Directory.Exists(root));
-        }
-        finally
+        }, async () =>
         {
             await lockedFile.DisposeAsync();
             if (Directory.Exists(root))
             {
-                Directory.Delete(root, recursive: true);
+                await TestFixtureDirectory.DeleteAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
@@ -57,10 +55,7 @@ public sealed class OfficialMihomoInteropTests
         }
 
         ManagedCoreVerifier.ValidateWindowsAmd64Executable(executablePath);
-        string root = Path.Combine(
-            Path.GetTempPath(),
-            "ClashTrayIntegrationTests",
-            Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         Directory.CreateDirectory(root);
         string sourcePath = Path.Combine(root, "source.yaml");
         string outputPath = Path.Combine(root, "managed.yaml");
@@ -92,7 +87,7 @@ public sealed class OfficialMihomoInteropTests
             MixedPort: selectedPorts[2],
             SocksPort: selectedPorts[3]);
         MihomoProcessManager manager = new();
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             string builtPath = await RuntimeConfigBuilder.BuildForCoreStartAsync(
                 sourcePath,
@@ -109,16 +104,16 @@ public sealed class OfficialMihomoInteropTests
             bool valid = await manager.ValidateAsync(executablePath, builtPath, root);
             Assert.IsTrue(valid, "Official Mihomo rejected the configuration produced by RuntimeConfigBuilder.");
             Assert.AreEqual(source, await File.ReadAllTextAsync(sourcePath), "The source YAML must remain unchanged.");
-        }
-        finally
+        }, async () =>
         {
             await manager.DisposeAsync();
             await DeleteTemporaryDirectoryWithRetryAsync(root);
-        }
+        });
     }
 
     [TestMethod]
     [TestCategory("RequiresOfficialMihomo")]
+    [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "TestFixtureDirectory.RunAsync always invokes the explicit cleanup delegate that disposes this process manager, preserving body and cleanup failures.")]
     public async Task OfficialMihomoUsesManagedValuesBeforeExplicitDocumentEnd()
     {
         string? executablePath = FindMihomoExecutable();
@@ -130,10 +125,7 @@ public sealed class OfficialMihomoInteropTests
         }
 
         ManagedCoreVerifier.ValidateWindowsAmd64Executable(executablePath);
-        string root = Path.Combine(
-            Path.GetTempPath(),
-            "ClashTrayIntegrationTests",
-            Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         Directory.CreateDirectory(root);
         string sourcePath = Path.Combine(root, "explicit-end.yaml");
         string outputPath = Path.Combine(root, "managed.yaml");
@@ -166,7 +158,7 @@ public sealed class OfficialMihomoInteropTests
             TunEnabled: true,
             TunStack: "system");
         MihomoProcessManager manager = new();
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await RuntimeConfigBuilder.BuildForCoreStartAsync(
                 sourcePath,
@@ -193,12 +185,11 @@ public sealed class OfficialMihomoInteropTests
             Assert.IsFalse(tun.GetProperty("enable").GetBoolean());
             Assert.IsTrue(string.Equals("system", tun.GetProperty("stack").GetString(), StringComparison.OrdinalIgnoreCase));
             Assert.AreEqual(source, await File.ReadAllTextAsync(sourcePath));
-        }
-        finally
+        }, async () =>
         {
             await manager.DisposeAsync();
             await DeleteTemporaryDirectoryWithRetryAsync(root);
-        }
+        });
     }
 
     [TestMethod]
@@ -214,10 +205,7 @@ public sealed class OfficialMihomoInteropTests
         }
 
         ManagedCoreVerifier.ValidateWindowsAmd64Executable(executablePath);
-        string root = Path.Combine(
-            Path.GetTempPath(),
-            "ClashTrayIntegrationTests",
-            Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         Directory.CreateDirectory(root);
         string configurationPath = Path.Combine(root, "controller-only.yaml");
         int controllerPort = GetAvailableLoopbackPort();
@@ -238,7 +226,7 @@ public sealed class OfficialMihomoInteropTests
             + $"  enable: false{Environment.NewLine}");
 
         MihomoProcessManager manager = new MihomoProcessManager();
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             bool valid = await manager.ValidateAsync(executablePath, configurationPath, root);
             Assert.IsTrue(valid, "The pinned Mihomo executable rejected the controller-only configuration.");
@@ -286,37 +274,14 @@ public sealed class OfficialMihomoInteropTests
                 "/logs?level=info&format=structured",
                 webSocketTimeout.Token);
             Assert.AreEqual(WebSocketState.Open, logsSocket.State);
-        }
-        finally
+        }, async () =>
         {
             await manager.DisposeAsync();
             await DeleteTemporaryDirectoryWithRetryAsync(root);
-        }
+        });
     }
 
-    private static async Task DeleteTemporaryDirectoryWithRetryAsync(string directoryPath)
-    {
-        const int maxAttempts = 8;
-        for (int attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            if (!Directory.Exists(directoryPath))
-            {
-                return;
-            }
-
-            try
-            {
-                Directory.Delete(directoryPath, recursive: true);
-                return;
-            }
-            catch (IOException exception) when (
-                attempt < maxAttempts - 1
-                && (exception.HResult & 0xFFFF) is 32 or 33)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(100 + attempt * 50));
-            }
-        }
-    }
+    private static Task DeleteTemporaryDirectoryWithRetryAsync(string directoryPath) => TestFixtureDirectory.DeleteAsync(directoryPath);
 
     private static async Task<string> WaitForVersionAsync(MihomoApiClient api)
     {

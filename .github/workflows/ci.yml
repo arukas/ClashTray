@@ -37,6 +37,10 @@ jobs:
         shell: pwsh
         run: .\packaging\Test-OfficialMihomo.ps1 -Configuration Release
 
+      - name: Windows security capability gate (no skips)
+        shell: pwsh
+        run: .\packaging\Test-SecurityCapabilities.ps1 -Configuration Release
+
       - name: Test (integration)
         run: dotnet test tests/ClashTray.IntegrationTests/ClashTray.IntegrationTests.csproj --configuration Release --property:Platform=x64 --no-build --logger "trx;LogFileName=integration-test-results.trx"
 
@@ -55,6 +59,7 @@ jobs:
           path: |
             **/TestResults/*.trx
             **/TestResults/**/coverage.cobertura.xml
+            artifacts/security-capabilities-*/security.trx
           if-no-files-found: ignore
 
       - name: Upload official Mihomo gate result

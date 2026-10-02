@@ -33,12 +33,16 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
     private readonly RuntimeConfigurationSwitchOperations _configurationSwitchOperations;
     private readonly MihomoControllerSessionRegistry _controllerSessions = new();
     private readonly ISettingsStore _settingsStore;
+    private readonly SettingsRecoveryJournal _settingsRecovery;
+    private Exception? _settingsRecoveryFailure;
+    private NetworkDisableIntent _networkDisableIntent = new();
     private readonly CoreDiscovery _coreDiscovery;
     private readonly LocalDeviceCoordinator _localDevice;
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "Disposed by the bounded shutdown sequence; an incomplete dispose retains the runtime.")]
     private readonly SubscriptionScheduler _subscriptionScheduler;
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "The process manager is released only after shutdown actions settle; an unresponsive shutdown intentionally retains it.")]
-    private readonly MihomoProcessManager _processManager = new();
+    private readonly CoreLifecycleCoordinator _coreLifecycle;
+    private MihomoProcessManager _processManager => _coreLifecycle.Process;
     private readonly IStartupRegistration _startupRegistration;
     private MihomoApiClient? _api => _controllerSessions.Current?.Api;
     private long ControllerGeneration => _controllerSessions.Generation;
@@ -54,14 +58,8 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
     private readonly ProxyOperationCoordinator _proxyOps;
     private readonly SubscriptionRefreshCoordinator _subscriptionRefresh;
     private readonly Func<MihomoApiClient>? _controllerApiFactory;
-    private int _controllerSessionInjectedForTesting;
-    private CoreRuntimeBinding? _runtimeBinding;
-    private bool _usingServiceCore;
-    private long _confirmedCoreLifecycleEpoch = long.MinValue;
-    private long _confirmedCoreProcessGeneration = long.MinValue;
-    private long _confirmedControllerGeneration = long.MinValue;
+    private bool _usingServiceCore { get => _coreLifecycle.UsingServiceCore; set => _coreLifecycle.UsingServiceCore = value; }
     private TunState _confirmedTunState = TunState.Unavailable;
-    private long _coreLifecycleEpoch;
     private long _proxyOwnershipRevision;
     private long _proxyIntentRevision;
     private readonly object _proxyRecoveryGate = new();
@@ -113,11 +111,32 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
         TimeSpan? coreStartupBudget = null,
         HttpMessageHandler? controllerHttpMessageHandler = null,
         TimeProvider? shutdownTimeProvider = null)
+        : this(RuntimeEnvironmentDependencies.Compatible(paths, startupRegistration, servicePipeClient, settingsStore, systemProxy,
+            controllerApiFactory is null ? null : new FixtureCoreOwnershipObservationSource()),
+            candidateValidator, networkContextSource, endpointSessionConnector, remoteRefreshDelayAsync, remoteLogStreamRunner,
+            controllerApiFactory, disposeCleanupTimeout, shutdownStepTestHook, localCoreProcessIdentityProvider, localCoreRecoveryAction,
+            coreStartupBudget, controllerHttpMessageHandler, shutdownTimeProvider)
+    {
+    }
+    internal ClashTrayRuntime(
+        RuntimeEnvironmentDependencies environment,
+        IConfigurationCandidateValidator? candidateValidator = null,
+        INetworkContextSource? networkContextSource = null,
+        IEndpointSessionConnector? endpointSessionConnector = null,
+        Func<TimeSpan, CancellationToken, Task>? remoteRefreshDelayAsync = null,
+        Func<EndpointSession, EndpointSessionStatusEventArgs, CancellationToken, Task>? remoteLogStreamRunner = null,
+        Func<MihomoApiClient>? controllerApiFactory = null,
+        TimeSpan? disposeCleanupTimeout = null,
+        Func<string, CancellationToken, Task>? shutdownStepTestHook = null,
+        Func<LocalCoreProcessIdentity?>? localCoreProcessIdentityProvider = null,
+        Func<LocalCoreProcessIdentity, CancellationToken, Task<LocalCoreShutdownJournalResult>>? localCoreRecoveryAction = null,
+        TimeSpan? coreStartupBudget = null,
+        HttpMessageHandler? controllerHttpMessageHandler = null,
+        TimeProvider? shutdownTimeProvider = null)
     {
         _httpClient = controllerHttpMessageHandler is null
             ? EndpointTransportPolicy.CreateControllerHttpClient()
             : new HttpClient(controllerHttpMessageHandler, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan };
-        bool useDefaultEnvironment = paths is null;
         _disposeCleanupTimeout = disposeCleanupTimeout ?? DisposeCleanupTimeout;
         _shutdownTimeProvider = shutdownTimeProvider ?? TimeProvider.System;
         _coreStartupBudget = coreStartupBudget ?? TimeSpan.FromSeconds(30);
@@ -126,7 +145,7 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
         _localCoreRecoveryAction = localCoreRecoveryAction;
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_disposeCleanupTimeout, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_coreStartupBudget, TimeSpan.Zero);
-        _paths = paths ?? new AppPaths();
+        _paths = environment.Paths;
         _paths.EnsureDirectories();
         _localCoreShutdownJournal = new LocalCoreShutdownJournal(_paths);
         EndpointStore endpointStore = new(_paths);
@@ -169,16 +188,16 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
             CreateNetworkSwitchPolicyInput,
             (request, cancellation) => ExecuteConfigurationSwitchWithLeaseAsync(request, cancellation));
         _networkSwitchRuntimeController.StatusChanged += OnNetworkSwitchStatusChanged;
-        _settingsStore = settingsStore ?? new SettingsStore(_paths);
-        _startupRegistration = startupRegistration
-            ?? (useDefaultEnvironment ? new StartupManager() : new StartupManager(new InMemoryStartupRegistry()));
-        IServicePipeClient resolvedServicePipeClient = servicePipeClient
-            ?? (useDefaultEnvironment ? new ServicePipeClient() : new IsolatedServicePipeClient());
-        ISystemProxyController resolvedSystemProxy = systemProxy ?? new SystemProxyManager(_paths);
+        _settingsStore = environment.Settings;
+        _settingsRecovery = new SettingsRecoveryJournal(_paths);
+        _startupRegistration = environment.Startup;
+        IServicePipeClient resolvedServicePipeClient = environment.Service;
+        ISystemProxyController resolvedSystemProxy = environment.SystemProxy;
         _localDevice = new LocalDeviceCoordinator(
             EndpointKind.Local,
             resolvedServicePipeClient,
             resolvedSystemProxy);
+        _coreLifecycle = new CoreLifecycleCoordinator(_localDevice, environment.Ownership);
         _subscriptionScheduler = new SubscriptionScheduler(
             cancellation => _configurationStore.ListAsync(cancellation),
             (profile, cancellation) => RefreshSubscriptionAsync(profile, cancellation),
@@ -250,11 +269,16 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
         get
         {
             _logs.FlushPendingLogs();
-            return _stateStore.Snapshot;
+            RuntimeSnapshot snapshot = _stateStore.Snapshot;
+            Exception? recoveryFailure = Volatile.Read(ref _settingsRecoveryFailure);
+            return recoveryFailure is null ? snapshot : snapshot with
+            {
+                ErrorMessage = $"{snapshot.ErrorMessage} 设置恢复未完成：{ErrorSanitizer.Sanitize(recoveryFailure)}".Trim()
+            };
         }
     }
 
-    public CoreRuntimeBinding? ActiveRuntimeBinding => Volatile.Read(ref _runtimeBinding);
+    public CoreRuntimeBinding? ActiveRuntimeBinding => _coreLifecycle.Binding;
 
     public long SnapshotRevision => _stateStore.Revision;
 
@@ -339,7 +363,7 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
 
     private void StoreRuntimeBinding(CoreRuntimeBinding? binding)
     {
-        Interlocked.Exchange(ref _runtimeBinding, binding);
+        _coreLifecycle.StoreBinding(binding);
         _endpointSessions.UpdateLocalEndpoint(
             ControllerEndpointFactory.CreateLocal(binding?.ControllerPort ?? _settings.ControllerPort));
         if (!string.IsNullOrWhiteSpace(binding?.ListenerPlanWarning))

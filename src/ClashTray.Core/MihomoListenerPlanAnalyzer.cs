@@ -84,7 +84,7 @@ internal static class MihomoListenerPlanAnalyzer
             throw new InvalidDataException("The effective Mihomo configuration is missing or exceeds its size limit.");
         }
 
-        string[] lines = await File.ReadAllLinesAsync(path, cancellationToken).ConfigureAwait(false);
+        string[] lines = await BoundedYamlReader.ReadFileAsync(path, cancellationToken).ConfigureAwait(false);
         if (lines.Length > RuntimeConfigBuilder.MaximumInputLines
             || lines.Any(line => line.Length > RuntimeConfigBuilder.MaximumLineCharacters))
         {
@@ -105,7 +105,7 @@ internal static class MihomoListenerPlanAnalyzer
             throw new InvalidDataException("The effective Mihomo configuration is missing or exceeds its size limit.");
         }
 
-        string[] lines = await File.ReadAllLinesAsync(path, cancellationToken).ConfigureAwait(false);
+        string[] lines = await BoundedYamlReader.ReadFileAsync(path, cancellationToken).ConfigureAwait(false);
         if (lines.Length > RuntimeConfigBuilder.MaximumInputLines
             || lines.Any(line => line.Length > RuntimeConfigBuilder.MaximumLineCharacters))
         {
@@ -122,19 +122,13 @@ internal static class MihomoListenerPlanAnalyzer
         ArgumentNullException.ThrowIfNull(lines);
         Dictionary<string, string> values = new(StringComparer.OrdinalIgnoreCase);
         List<string> limitations = [];
-        for (int index = 0; index < lines.Count; index++)
+        YamlStructureDocument structure = YamlStructureDocument.Read(lines, cancellationToken, allowListenerSequence: true);
+        if (structure.ScopeError is not null || structure.UnresolvedRoots.Count > 0) { limitations.Add("无法静态确认根级语法或文档边界对有效监听的影响"); }
+        foreach (YamlRootNode node in structure.Roots)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!TryReadRootEntry(lines[index], out string key, out string value))
-            {
-                if (IsUnresolvedRootMapping(lines[index]))
-                {
-                    limitations.Add("无法静态确认根级语法对有效监听的影响");
-                }
-
-                continue;
-            }
-
+            string key = node.Key;
+            string value = node.Value;
             if (key == "<<")
             {
                 limitations.Add("无法静态确认根级 merge/alias 对有效监听的影响");
@@ -240,19 +234,13 @@ internal static class MihomoListenerPlanAnalyzer
         List<LocalPortBinding> bindings = [];
         List<string> limitations = [];
         HashSet<string> seenSections = new(StringComparer.OrdinalIgnoreCase);
-        for (int index = 0; index < lines.Count; index++)
+        YamlStructureDocument structure = YamlStructureDocument.Read(lines, cancellationToken, allowListenerSequence: true);
+        if (structure.ScopeError is not null || structure.UnresolvedRoots.Count > 0) { limitations.Add("无法静态读取根级 mapping 语法或文档边界"); }
+        foreach (YamlRootNode node in structure.Roots)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!TryReadRootEntry(lines[index], out string key, out string value))
-            {
-                if (IsUnresolvedRootMapping(lines[index]))
-                {
-                    limitations.Add("无法静态读取根级 mapping 语法");
-                }
-
-                continue;
-            }
-
+            string key = node.Key;
+            string value = node.Value;
             if (key == "<<")
             {
                 limitations.Add("根级 merge/alias 形式");
@@ -272,15 +260,7 @@ internal static class MihomoListenerPlanAnalyzer
                 continue;
             }
 
-            int end = index + 1;
-            while (end < lines.Count
-                && (!IsUnresolvedRootMapping(lines[end])
-                    || key == "listeners" && (lines[end].StartsWith("- ", StringComparison.Ordinal) || lines[end].Trim() == "-")))
-            {
-                end++;
-            }
-
-            IReadOnlyList<string> section = lines.Skip(index + 1).Take(end - index - 1).ToArray();
+            IReadOnlyList<string> section = lines.Skip(node.Section.FirstLine + 1).Take(node.Section.LastLine - node.Section.FirstLine).ToArray();
             if (key == "dns")
             {
                 AnalyzeDnsSection(value, section, bindings, limitations);
@@ -290,7 +270,7 @@ internal static class MihomoListenerPlanAnalyzer
                 AnalyzeCustomListenersSection(value, section, bindings, limitations);
             }
 
-            index = end - 1;
+
         }
 
         bool complete = limitations.Count == 0;
@@ -558,29 +538,6 @@ internal static class MihomoListenerPlanAnalyzer
         }
     }
 
-    private static bool TryReadRootEntry(string line, out string key, out string value)
-    {
-        key = string.Empty;
-        value = string.Empty;
-        if (line.Length == 0 || char.IsWhiteSpace(line[0]) || line[0] == '#')
-        {
-            return false;
-        }
-
-        return TrySplitMapping(StripYamlComment(line), out key, out value);
-    }
-
-    private static bool IsUnresolvedRootMapping(string line)
-    {
-        if (line.Length == 0 || char.IsWhiteSpace(line[0]) || line[0] == '#')
-        {
-            return false;
-        }
-
-        string content = StripYamlComment(line).TrimStart();
-        return content.Length > 0 && content is not ("---" or "...");
-    }
-
     private static bool TrySplitMapping(string line, out string key, out string value)
     {
         key = string.Empty;
@@ -735,52 +692,6 @@ internal static class MihomoListenerPlanAnalyzer
     private static bool IsEmptyYamlValue(string value) =>
         value.Length == 0 || value is "null" or "~";
 
-    private static string StripYamlComment(string line)
-    {
-        bool singleQuoted = false;
-        bool doubleQuoted = false;
-        bool escaped = false;
-        for (int index = 0; index < line.Length; index++)
-        {
-            char current = line[index];
-            if (escaped)
-            {
-                escaped = false;
-                continue;
-            }
-
-            if (doubleQuoted && current == '\\')
-            {
-                escaped = true;
-                continue;
-            }
-
-            if (!doubleQuoted && current == '\'')
-            {
-                singleQuoted = !singleQuoted;
-            }
-            else if (!singleQuoted && current == '"')
-            {
-                doubleQuoted = !doubleQuoted;
-            }
-            else if (!singleQuoted && !doubleQuoted && current == '#'
-                && (index == 0 || char.IsWhiteSpace(line[index - 1])))
-            {
-                return line[..index].TrimEnd();
-            }
-        }
-
-        return line;
-    }
-
-    private static int GetIndent(string line)
-    {
-        int index = 0;
-        while (index < line.Length && line[index] == ' ')
-        {
-            index++;
-        }
-
-        return index;
-    }
+    private static string StripYamlComment(string line) => YamlStructure.StripComment(line);
+    private static int GetIndent(string line) => YamlStructure.GetIndent(line);
 }

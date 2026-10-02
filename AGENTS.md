@@ -34,7 +34,9 @@ The application must be functional. A static UI mock, design-only prototype, bro
 
 ## Agent and execution policy
 
-- Use `gpt-5.6-luna` with reasoning effort `max` for implementation and coding work in this repository.
+- Use `gpt-6.1-sol` with reasoning effort `max` for implementation and coding work in this repository, including execution of Agent Vibe guides. This replaces earlier `gpt-5.6-luna` / `max` execution requirements in historical plans and prompts; preserve historical reports as records of their time.
+- The model and reasoning effort must be selected in the execution session. Editing this file or sending a prompt does not itself switch the running model; do not claim a model switch without confirmation from the session configuration.
+- The current code-design optimization guide is [docs/design-optimization-vibe-2026-10-02.md](docs/design-optimization-vibe-2026-10-02.md), with its execution prompt in [docs/design-optimization-prompt-2026-10-02.md](docs/design-optimization-prompt-2026-10-02.md). Creating or editing these documents does not authorize their implementation; an explicit request to execute this guide authorizes its six optimization slices, without expanding into unrelated product work.
 - A user request to plan, explain, review, or edit documentation does not authorize implementation. A request to build, implement, start, continue, or develop according to this file does authorize the full P0+P1 implementation described here.
 - Once implementation is authorized, proceed from this brief without asking what product to build. Ask only when a missing decision would materially change scope, security, distribution, or user-visible behavior.
 - The latest explicit user instruction overrides this file.

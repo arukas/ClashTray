@@ -1,3 +1,4 @@
+using ClashTray.Testing;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -21,13 +22,13 @@ public sealed class OfficialMihomoUpdaterTests
             return;
         }
 
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayIntegrationTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureDirectories();
         string archiveUri = $"https://github.com/MetaCubeX/mihomo/releases/download/{BundledMihomo.Version}/mihomo-windows-amd64-{BundledMihomo.Version}.zip";
         CoreUpdateManifest manifest = new(BundledMihomo.Version, new Uri(archiveUri), OfficialMihomoTestSupport.PinnedArchiveSha256);
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             using OfficialArchiveHandler handler = new(archivePath);
             using HttpClient httpClient = new(handler, disposeHandler: false);
@@ -50,14 +51,7 @@ public sealed class OfficialMihomoUpdaterTests
             await using FileStream installed = File.OpenRead(paths.ManagedCoreExecutable);
             string installedSha256 = Convert.ToHexString(await SHA256.HashDataAsync(installed));
             Assert.IsTrue(metadata.ExecutableSha256.Equals(installedSha256, StringComparison.OrdinalIgnoreCase));
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
+        });
     }
 
     private sealed class OfficialArchiveHandler(string archivePath) : HttpMessageHandler

@@ -23,6 +23,11 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private static readonly TimeSpan CoreUpdateOperationTimeout = TimeSpan.FromMinutes(6);
     private static readonly TimeSpan RequestCacheTtl = TimeSpan.FromMinutes(2);
     private const int MaxCachedRequests = 128;
+    private const int MaxCachedCleanupRequests = 16;
+    private readonly TimeProvider _requestTimeProvider;
+    private readonly int _requestCacheCapacity;
+    private readonly Action<ServiceRequest>? _requestExecutionObserved;
+    public Guid ServiceInstanceId { get; } = Guid.NewGuid();
     private readonly AppPaths _paths;
     private readonly MihomoProcessManager _processManager = new();
     private readonly HttpClient _httpClient = EndpointTransportPolicy.CreateControllerHttpClient();
@@ -45,6 +50,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly object _requestCacheGate = new();
     private readonly Dictionary<Guid, CachedRequest> _requestCache = [];
+    private int _cleanupWaiters;
     private MihomoApiClient? _api;
     private CoreRuntimeBinding? _runtimeBinding;
     private LocalCoreProcessIdentity? _activeProcessIdentity;
@@ -58,12 +64,15 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private sealed class CachedRequest
     {
+        public required RequestRetentionKind Kind { get; init; }
         public required string Fingerprint { get; init; }
 
         public required TaskCompletionSource<ServiceResponse> Completion { get; init; }
 
         public DateTimeOffset ExpiresAt { get; set; }
     }
+
+    private enum RequestRetentionKind { Observation, Mutation, Cleanup }
 
     public ServiceRuntimeController(AppPaths? paths = null, string? managedUserSid = null, ILoggerFactory? loggerFactory = null)
         : this(paths, managedUserSid, null, loggerFactory)
@@ -80,9 +89,17 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         Func<int, CancellationToken, Task>? afterCoreStartForTest = null,
         TimeSpan? operationTimeoutForTest = null,
         Func<LocalPortBinding, LocalCoreProcessIdentity, ListenerOwnerObservation>? listenerInspectorForTest = null,
-        Func<CancellationToken, CancellationTokenSource>? operationDeadlineForTest = null)
+        Func<CancellationToken, CancellationTokenSource>? operationDeadlineForTest = null,
+        TimeProvider? requestTimeProvider = null,
+        int requestCacheCapacity = MaxCachedRequests,
+        Action<ServiceRequest>? requestExecutionObserved = null)
     {
         _paths = paths ?? new AppPaths();
+        ArgumentOutOfRangeException.ThrowIfLessThan(requestCacheCapacity, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(requestCacheCapacity, MaxCachedRequests);
+        _requestTimeProvider = requestTimeProvider ?? TimeProvider.System;
+        _requestCacheCapacity = requestCacheCapacity;
+        _requestExecutionObserved = requestExecutionObserved;
         _logger = loggerFactory?.CreateLogger<ServiceRuntimeController>() ?? NullLogger<ServiceRuntimeController>.Instance;
         _restoreOwnedProxyStates = restoreOwnedProxyStates ?? SystemProxyRecovery.RestoreOwnedStatesForLoadedUsers;
         _beforeCoreStartForTest = beforeCoreStartForTest;
@@ -128,8 +145,11 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
         if (request.RequestId == Guid.Empty)
         {
-            return await HandleCoreAsync(request, callerCancellationToken).ConfigureAwait(false);
+            return Failure(request, "服务请求必须提供非空操作 ID。", errorCode: ServiceErrorCode.RequestIdentityConflict);
         }
+
+        if (request.ExpectedServiceInstanceId != Guid.Empty && request.ExpectedServiceInstanceId != ServiceInstanceId)
+        { return UnknownResult(request, "服务实例已更换，原请求结果无法确认。"); }
 
         string fingerprint = ComputeRequestFingerprint(request);
         CachedRequest cached;
@@ -147,41 +167,32 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                     return Failure(
                         request,
                         "服务请求 ID 已用于不同的命令，拒绝重复执行。",
-                        _processManager.State);
+                        _processManager.State, ServiceErrorCode.RequestIdentityConflict);
                 }
 
                 cached = existing;
             }
             else
             {
-                if (_requestCache.Count >= MaxCachedRequests)
-                {
-                    Guid[] completedRequestIds = _requestCache
-                        .Where(pair => pair.Value.Completion.Task.IsCompleted)
-                        .OrderBy(pair => pair.Value.ExpiresAt)
-                        .Take((_requestCache.Count - MaxCachedRequests) + 1)
-                        .Select(pair => pair.Key)
-                        .ToArray();
-                    foreach (Guid completedRequestId in completedRequestIds)
-                    {
-                        _requestCache.Remove(completedRequestId);
-                    }
-                }
-
-                if (_requestCache.Count >= MaxCachedRequests)
+                if (request.RecoveryOnly) { return UnknownResult(request, "原请求结果不存在或已过期；不会重新执行命令。"); }
+                RequestRetentionKind kind = ClassifyRetention(request);
+                int capacity = kind == RequestRetentionKind.Cleanup
+                    ? Math.Min(_requestCacheCapacity, MaxCachedCleanupRequests) : _requestCacheCapacity;
+                if (_requestCache.Values.Count(entry => entry.Kind == kind) >= capacity)
                 {
                     _logger.LogWarning(
                         "Rejected service request {RequestId}: request cache is saturated.",
                         request.RequestId);
                     return Failure(
                         request,
-                        "服务请求缓存已被执行中的操作占满，请稍后重试。",
+                        "服务请求的有界结果保留配额已满，请稍后重试。",
                         _processManager.State,
                         ServiceErrorCode.OperationBusy);
                 }
 
                 cached = new CachedRequest
                 {
+                    Kind = kind,
                     Fingerprint = fingerprint,
                     Completion = new TaskCompletionSource<ServiceResponse>(
                         TaskCreationOptions.RunContinuationsAsynchronously),
@@ -204,6 +215,28 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
+    private RequestRetentionKind ClassifyRetention(ServiceRequest request)
+    {
+        if (request.Command == ServiceCommand.GetStatus) { return RequestRetentionKind.Observation; }
+        // Stop can only stop this process manager's own child, including a
+        // stopped child. Invalid TUN targets cannot consume the cleanup reserve.
+        if (request.Command == ServiceCommand.StopCore) { return RequestRetentionKind.Cleanup; }
+        if (request.Command == ServiceCommand.DisableTun)
+        {
+            try
+            {
+                ServiceTunPayload payload = Deserialize<ServiceTunPayload>(request.Payload);
+                if (!payload.Enabled && IsCurrentTunTarget(payload)) { return RequestRetentionKind.Cleanup; }
+            }
+            catch (Exception exception) when (exception is JsonException or InvalidDataException)
+            {
+                // Keep malformed requests in the ordinary quota. The original
+                // handler reports their validation error through its cache.
+            }
+        }
+        return RequestRetentionKind.Mutation;
+    }
+
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Cached command execution converts any failure into a failure ServiceResponse so concurrent joiners always observe a completed result.")]
     private async Task ExecuteCachedRequestAsync(ServiceRequest request, CachedRequest cached)
     {
@@ -212,8 +245,12 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         {
             using CancellationTokenSource operationTimeout = CreateOperationTimeout(request.Command);
             operationToken = operationTimeout.Token;
+            _requestExecutionObserved?.Invoke(request);
             ServiceResponse response = await HandleCoreAsync(request, operationTimeout.Token)
                 .ConfigureAwait(false);
+            response = response with { ServiceInstanceId = ServiceInstanceId };
+            if (JsonSerializer.Serialize(response, _jsonOptions).Length > ServiceProtocol.MaximumResponseCharacters)
+            { response = UnknownResult(request, "服务响应超过大小限制，必须核对已确认状态。"); }
             MarkCachedRequestCompleting(cached);
             cached.Completion.TrySetResult(response);
         }
@@ -259,7 +296,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             // prevents a concurrent capacity purge from observing a completed
             // entry with its in-flight sentinel and removing it before a retry
             // can join the cached result.
-            cached.ExpiresAt = DateTimeOffset.UtcNow.Add(RequestCacheTtl);
+            cached.ExpiresAt = _requestTimeProvider.GetUtcNow().Add(RequestCacheTtl);
         }
     }
 
@@ -328,13 +365,13 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
 
     private static string ComputeRequestFingerprint(ServiceRequest request)
     {
-        string content = $"{request.ProtocolVersion}:{request.Command}:{request.Payload}";
+        string content = $"{request.ProtocolVersion}:{request.Command}:{request.Payload}:{request.ExpectedServiceInstanceId}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
     }
 
     private void PurgeExpiredRequestsUnsafe()
     {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset now = _requestTimeProvider.GetUtcNow();
         foreach (Guid requestId in _requestCache
                      .Where(pair => pair.Value.Completion.Task.IsCompleted
                          && pair.Value.ExpiresAt <= now)
@@ -344,20 +381,6 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             _requestCache.Remove(requestId);
         }
 
-        if (_requestCache.Count <= MaxCachedRequests)
-        {
-            return;
-        }
-
-        foreach (Guid requestId in _requestCache
-                     .Where(pair => pair.Value.Completion.Task.IsCompleted)
-                     .OrderBy(pair => pair.Value.ExpiresAt)
-                     .Take(_requestCache.Count - MaxCachedRequests)
-                     .Select(pair => pair.Key)
-                     .ToArray())
-        {
-            _requestCache.Remove(requestId);
-        }
     }
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "A failed TUN status probe degrades to a bounded failure response; status queries must never throw across the IPC boundary.")]
@@ -546,10 +569,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(operation);
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_operationGate.Wait(0, CancellationToken.None))
-        {
-            throw new OperationBusyException("ClashTray 服务");
-        }
+        await EnterOperationAsync(request.Command == ServiceCommand.StopCore, cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -559,6 +579,24 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         {
             _operationGate.Release();
         }
+    }
+
+    private async Task EnterOperationAsync(bool cleanup, CancellationToken cancellationToken)
+    {
+        if (!cleanup)
+        {
+            // Once cleanup is waiting, subsequent ordinary mutations must not
+            // repeatedly win the semaphore. The accepted cleanup set is bounded
+            // by its retained-result quota; its original deadline includes wait.
+            if (Volatile.Read(ref _cleanupWaiters) != 0 || !_operationGate.Wait(0, cancellationToken))
+            {
+                throw new OperationBusyException("ClashTray 服务");
+            }
+            return;
+        }
+        Interlocked.Increment(ref _cleanupWaiters);
+        try { await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false); }
+        finally { Interlocked.Decrement(ref _cleanupWaiters); }
     }
 
     private static bool IsDesktopProcessRunning()
@@ -1322,12 +1360,26 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             return Failure(request, "TUN 请求参数无效。", _processManager.State);
         }
 
+        if (_processManager.State != CoreState.Running || _api is null || _activeCore is null)
+        {
+            SetTunState(TunState.Unavailable);
+            return Failure(request, "Mihomo 核心尚未运行。", _processManager.State);
+        }
+        if (!IsCurrentTunTarget(payload))
+        {
+            return Failure(request, "TUN 请求与当前受管 Mihomo 核心不匹配。", _processManager.State, ServiceErrorCode.ControllerOwnershipUnconfirmed);
+        }
+
         TunTransactionResult result = await _tunSingleFlight.RequestAsync(
                 enabled,
-                (target, token) =>
+                async (target, token) =>
                 {
                     Volatile.Write(ref _tunDesired, target ? 1 : 0);
-                    return ExecuteTunTransactionAsync(payload, target, token);
+                    // BooleanSingleFlight owns execution independently of its
+                    // waiters. Keep the original service operation deadline for
+                    // the underlying transaction and queued cleanup as well.
+                    using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(token, cancellationToken);
+                    return await ExecuteTunTransactionAsync(payload, target, linked.Token).ConfigureAwait(false);
                 },
                 cancellationToken)
             .ConfigureAwait(false);
@@ -1341,15 +1393,20 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 result.ErrorCode);
     }
 
+    private bool IsCurrentTunTarget(ServiceTunPayload payload) =>
+        _processManager.State == CoreState.Running
+        && _api is not null && _activeCore is not null && _runtimeBinding is not null
+        && _runtimeBinding.ControllerPort == payload.ControllerPort
+        && _runtimeBinding.InstanceId == payload.InstanceId
+        && _runtimeBinding.OwnerInstanceId == payload.OwnerInstanceId
+        && string.Equals(_activeCore.ControllerSecret, payload.ControllerSecret, StringComparison.Ordinal);
+
     private async Task<TunTransactionResult> ExecuteTunTransactionAsync(
         ServiceTunPayload payload,
         bool enabled,
         CancellationToken cancellationToken)
     {
-        if (!_operationGate.Wait(0, CancellationToken.None))
-        {
-            throw new OperationBusyException("ClashTray 服务");
-        }
+        await EnterOperationAsync(cleanup: !enabled, cancellationToken).ConfigureAwait(false);
 
         SetTunState(enabled ? TunState.Enabling : TunState.Disabling);
         try
@@ -1616,7 +1673,8 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             Error: error,
             Core: CoreState,
             ProtocolVersion: ServiceProtocol.CurrentVersion,
-            RuntimeBinding: _runtimeBinding);
+            RuntimeBinding: _runtimeBinding,
+            ServiceInstanceId: ServiceInstanceId);
 
     private ServiceResponse Failure(
         ServiceRequest request,
@@ -1631,7 +1689,12 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
             Core: core ?? CoreState,
             ErrorCode: errorCode,
             ProtocolVersion: ServiceProtocol.CurrentVersion,
-            RuntimeBinding: _runtimeBinding);
+            RuntimeBinding: _runtimeBinding,
+            ServiceInstanceId: ServiceInstanceId);
+
+    private ServiceResponse UnknownResult(ServiceRequest request, string error) =>
+        Failure(request, error, errorCode: ServiceErrorCode.RequestResultUnavailable) with
+        { DispatchState = ServiceDispatchState.DispatchedAwaitingResult };
 
     private T Deserialize<T>(string? payload) where T : class =>
         string.IsNullOrWhiteSpace(payload)

@@ -37,13 +37,17 @@ public partial class App : Application, IAsyncDisposable
             : new AppPaths(
                 Path.Combine(smokeDirectory, "user"),
                 Path.Combine(smokeDirectory, "service"));
-#else
-        AppPaths? runtimePaths = null;
 #endif
         // Wi-Fi/SSID switching is intentionally outside the 0.3.0 Beta scope.
         // Keep the runtime seam available for a later release, but do not create
         // a production network context source that could read or monitor SSIDs.
-        _runtime = new ClashTrayRuntime(runtimePaths, networkContextSource: null);
+#if DEBUG
+        _runtime = runtimePaths is null
+            ? ClashTrayRuntimeFactory.CreateProduction()
+            : ClashTrayRuntimeFactory.CreateIsolated(runtimePaths);
+#else
+        _runtime = ClashTrayRuntimeFactory.CreateProduction();
+#endif
         _shutdownCoordinator = new ShutdownCoordinator(
             DispatchUiActionAsync,
             () => _mainWindow?.AllowClose(),

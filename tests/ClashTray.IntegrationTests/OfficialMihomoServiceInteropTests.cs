@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using ClashTray.Contracts;
 using ClashTray.Core;
+using ClashTray.Testing;
 using ClashTray.Service;
 
 namespace ClashTray.IntegrationTests;
@@ -13,6 +14,160 @@ namespace ClashTray.IntegrationTests;
 [TestClass]
 public sealed class OfficialMihomoServiceInteropTests
 {
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
+    public async Task SaturatedObservationAndMutationQuotasStillConfirmTunOffAndStopTheOwnedOfficialProcess()
+    {
+        string? executable = FindMihomoExecutable();
+        if (executable is null) { Assert.Inconclusive("Official pinned Mihomo is required for real cleanup admission."); return; }
+        (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executable);
+        await TestFixtureDirectory.RunAsync(root, async () =>
+        {
+            (string configuration, ServiceCorePayload payload) = await WriteCleanupConfigurationAsync(runtimeDirectory);
+            DisabledTunNetworkHealthProbe probe = new();
+            await using ServiceRuntimeController controller = new(paths, null, probe, restoreOwnedProxyStates: static () => { });
+            ServiceRequest startRequest = new(Guid.NewGuid(), ServiceCommand.StartCore, JsonSerializer.Serialize(payload), ProtocolVersion: ServiceProtocol.CurrentVersion);
+            ServiceResponse start = await controller.HandleAsync(startRequest, CancellationToken.None);
+            Assert.IsTrue(start.Succeeded, start.Error);
+            Assert.IsNotNull(start.RuntimeBinding);
+            CoreRuntimeBinding binding = start.RuntimeBinding;
+            using System.Diagnostics.Process ownedProcess = System.Diagnostics.Process.GetProcessById(binding.ProcessId);
+            ServiceTunPayload tun = new(binding.ControllerPort, string.Empty, false, binding.InstanceId, binding.OwnerInstanceId);
+            int probesBeforeStale = probe.DisabledProbeCalls;
+            ServiceResponse stale = await controller.HandleAsync(new(Guid.NewGuid(), ServiceCommand.DisableTun,
+                JsonSerializer.Serialize(tun with { InstanceId = Guid.NewGuid() }), ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None);
+            Assert.IsFalse(stale.Succeeded);
+            Assert.AreEqual(ServiceErrorCode.ControllerOwnershipUnconfirmed, stale.ErrorCode);
+            Assert.AreEqual(probesBeforeStale, probe.DisabledProbeCalls, "A stale binding never reaches the TUN transaction.");
+            for (int index = 0; index < 128; index++)
+            {
+                Assert.IsTrue((await controller.HandleAsync(new(Guid.NewGuid(), ServiceCommand.GetStatus, ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None)).Succeeded);
+            }
+            // The start and stale request occupy two ordinary result slots.
+            for (int index = 0; index < 126; index++)
+            {
+                ServiceResponse invalid = await controller.HandleAsync(new(Guid.NewGuid(), ServiceCommand.StartCore, ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None);
+                Assert.IsFalse(invalid.Succeeded);
+                Assert.AreNotEqual(ServiceErrorCode.OperationBusy, invalid.ErrorCode);
+            }
+            Assert.AreEqual(ServiceErrorCode.OperationBusy, (await controller.HandleAsync(new(Guid.NewGuid(), ServiceCommand.StartCore, ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None)).ErrorCode);
+            int probesBeforeDisable = probe.DisabledProbeCalls;
+            ServiceRequest disableRequest = new(Guid.NewGuid(), ServiceCommand.DisableTun, JsonSerializer.Serialize(tun), ProtocolVersion: ServiceProtocol.CurrentVersion);
+            ServiceResponse disabled = await controller.HandleAsync(disableRequest, CancellationToken.None);
+            Assert.IsTrue(disabled.Succeeded, disabled.Error);
+            Assert.AreEqual(TunState.Off, disabled.Tun);
+            Assert.IsGreaterThan(probesBeforeDisable, probe.DisabledProbeCalls, "The service must execute the real controller/probe confirmation, not merely accept the request.");
+            ServiceRequest stopRequest = new(Guid.NewGuid(), ServiceCommand.StopCore, ProtocolVersion: ServiceProtocol.CurrentVersion);
+            ServiceResponse stopped = await controller.HandleAsync(stopRequest, CancellationToken.None);
+            Assert.IsTrue(stopped.Succeeded, stopped.Error);
+            Assert.AreEqual(CoreState.Stopped, stopped.Core);
+            using CancellationTokenSource exitDeadline = new(TimeSpan.FromSeconds(5));
+            await ownedProcess.WaitForExitAsync(exitDeadline.Token);
+            Assert.IsTrue(ownedProcess.HasExited);
+            Assert.AreEqual(start, await controller.HandleAsync(startRequest with { RecoveryOnly = true }, CancellationToken.None));
+            Assert.AreEqual(disabled, await controller.HandleAsync(disableRequest with { RecoveryOnly = true }, CancellationToken.None));
+            Assert.AreEqual(stopped, await controller.HandleAsync(stopRequest with { RecoveryOnly = true }, CancellationToken.None));
+            Console.WriteLine($"R2 actual official process: PID={binding.ProcessId}, HasExited={ownedProcess.HasExited}, disabledProbes={probe.DisabledProbeCalls}, preserved start/disable/stop results=True; config={Path.GetFileName(configuration)}");
+        });
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
+    public async Task WaitingCleanupGetsExecutionAfterHeldStartDespiteContinuedOrdinaryRequests()
+    {
+        string? executable = FindMihomoExecutable();
+        if (executable is null) { Assert.Inconclusive("Official pinned Mihomo is required for cleanup scheduling."); return; }
+        (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executable);
+        await TestFixtureDirectory.RunAsync(root, async () =>
+        {
+            (_, ServiceCorePayload payload) = await WriteCleanupConfigurationAsync(runtimeDirectory);
+            TaskCompletionSource started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using ServiceRuntimeController controller = new(paths, null, new DisabledTunNetworkHealthProbe(), restoreOwnedProxyStates: static () => { },
+                afterCoreStartForTest: async (_, token) => { started.TrySetResult(); await release.Task.WaitAsync(token); });
+            Task<ServiceResponse> start = StartServiceCoreAsync(controller, payload);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            System.Diagnostics.Stopwatch elapsed = System.Diagnostics.Stopwatch.StartNew();
+            Task<ServiceResponse> cleanup = controller.HandleAsync(new(Guid.NewGuid(), ServiceCommand.StopCore, ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None);
+            try
+            {
+                Assert.IsFalse(cleanup.IsCompleted, "Accepted cleanup waits for the conflicting start rather than caching OperationBusy.");
+                for (int index = 0; index < 256; index++)
+                {
+                    await controller.HandleAsync(new(Guid.NewGuid(), ServiceCommand.GetStatus, ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None);
+                }
+                for (int index = 0; index < 16; index++)
+                {
+                    ServiceResponse ordinary = await controller.HandleAsync(new(Guid.NewGuid(), ServiceCommand.RollbackCore, ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None);
+                    Assert.AreEqual(ServiceErrorCode.OperationBusy, ordinary.ErrorCode);
+                }
+                Assert.IsFalse(cleanup.IsCompleted);
+            }
+            finally { release.TrySetResult(); }
+            Assert.IsTrue((await start).Succeeded);
+            ServiceResponse stop = await cleanup.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.IsTrue(stop.Succeeded, stop.Error);
+            Assert.AreEqual(CoreState.Stopped, controller.CoreState);
+            Assert.IsLessThan(TimeSpan.FromSeconds(30), elapsed.Elapsed);
+            Console.WriteLine($"R2 cleanup completed under continued pressure within original 30s deadline: {elapsed.Elapsed}; state={controller.CoreState}");
+        });
+    }
+
+    private static async Task<(string Configuration, ServiceCorePayload Payload)> WriteCleanupConfigurationAsync(string runtimeDirectory)
+    {
+        int controllerPort = GetAvailableLoopbackPort();
+        int mixedPort = GetAvailableLoopbackPort();
+        string configuration = Path.Combine(runtimeDirectory, "cleanup-admission.yaml");
+        await File.WriteAllTextAsync(configuration,
+            $"mixed-port: {mixedPort}\nexternal-controller: 127.0.0.1:{controllerPort}\nsecret: \"\"\nallow-lan: false\nipv6: false\nmode: rule\nlog-level: info\nproxies: []\nproxy-groups: []\nrules: []\ntun:\n  enable: false\n");
+        return (configuration, new(configuration, runtimeDirectory, controllerPort, string.Empty, MixedPort: mixedPort));
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
+    public async Task QueuedCleanupDeadlineReturnsRecoverableTimeoutWithoutClaimingProcessStopped()
+    {
+        string? executable = FindMihomoExecutable();
+        if (executable is null) { Assert.Inconclusive("Official pinned Mihomo is required for queued cleanup expiry."); return; }
+        (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executable);
+        await TestFixtureDirectory.RunAsync(root, async () =>
+        {
+            (_, ServiceCorePayload payload) = await WriteCleanupConfigurationAsync(runtimeDirectory);
+            TaskCompletionSource entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            TaskCompletionSource<CancellationTokenSource> cleanupDeadline = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            int deadlines = 0;
+            await using ServiceRuntimeController controller = new(paths, null, new DisabledTunNetworkHealthProbe(), restoreOwnedProxyStates: static () => { },
+                afterCoreStartForTest: async (_, token) => { entered.TrySetResult(); await release.Task.WaitAsync(token); },
+                operationDeadlineForTest: lifetime =>
+                {
+                    CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
+                    deadline.CancelAfter(TimeSpan.FromSeconds(30));
+                    if (Interlocked.Increment(ref deadlines) == 2) { cleanupDeadline.TrySetResult(deadline); }
+                    return deadline;
+                });
+            Task<ServiceResponse> start = StartServiceCoreAsync(controller, payload);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            ServiceRequest request = new(Guid.NewGuid(), ServiceCommand.StopCore, ProtocolVersion: ServiceProtocol.CurrentVersion);
+            Task<ServiceResponse> cleanup = controller.HandleAsync(request, CancellationToken.None);
+            try
+            {
+                Assert.IsFalse(cleanup.IsCompleted);
+                CancellationTokenSource deadline = await cleanupDeadline.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await deadline.CancelAsync();
+                ServiceResponse timedOut = await cleanup;
+                Assert.IsFalse(timedOut.Succeeded);
+                Assert.AreEqual(ServiceErrorCode.OperationTimedOut, timedOut.ErrorCode);
+                Assert.AreNotEqual(CoreState.Stopped, controller.CoreState);
+                Assert.AreEqual(timedOut, await controller.HandleAsync(request with { RecoveryOnly = true }, CancellationToken.None));
+            }
+            finally { release.TrySetResult(); }
+            Assert.IsTrue((await start).Succeeded);
+            ServiceResponse stopped = await controller.HandleAsync(new(Guid.NewGuid(), ServiceCommand.StopCore, ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None);
+            Assert.IsTrue(stopped.Succeeded, stopped.Error);
+            Assert.AreEqual(CoreState.Stopped, stopped.Core);
+        });
+    }
 
     [TestMethod]
     [TestCategory("RequiresOfficialMihomo")]
@@ -25,7 +180,7 @@ public sealed class OfficialMihomoServiceInteropTests
             return;
         }
 
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayIntegrationTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureProgramDataDirectories();
         string runtimeDirectory = Path.Combine(paths.RuntimeRoot, "mihomo");
@@ -71,7 +226,7 @@ public sealed class OfficialMihomoServiceInteropTests
             JsonSerializer.Serialize(payload),
             ProtocolVersion: ServiceProtocol.CurrentVersion);
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await using ServiceRuntimeController controller = new(
                 paths,
@@ -93,11 +248,10 @@ public sealed class OfficialMihomoServiceInteropTests
                 new ServiceRequest(Guid.NewGuid(), ServiceCommand.StopCore, ProtocolVersion: ServiceProtocol.CurrentVersion),
                 CancellationToken.None);
             Assert.IsTrue(stop.Succeeded, stop.Error);
-        }
-        finally
+        }, async () =>
         {
             await DeleteTemporaryDirectoryAsync(root);
-        }
+        });
     }
 
     [TestMethod]
@@ -112,7 +266,7 @@ public sealed class OfficialMihomoServiceInteropTests
         }
 
         (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             int controllerPort = GetAvailableLoopbackPort();
             int mixedPort = GetAvailableLoopbackPort();
@@ -170,14 +324,13 @@ public sealed class OfficialMihomoServiceInteropTests
                 new ServiceRequest(Guid.NewGuid(), ServiceCommand.StopCore, ProtocolVersion: ServiceProtocol.CurrentVersion),
                 CancellationToken.None);
             Assert.IsTrue(stop.Succeeded, stop.Error);
-        }
-        finally
+        }, async () =>
         {
             if (Directory.Exists(root))
             {
                 await DeleteTemporaryDirectoryAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
@@ -192,7 +345,7 @@ public sealed class OfficialMihomoServiceInteropTests
         }
 
         (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             int controllerPort = GetAvailableLoopbackPort();
             int mixedPort = GetAvailableLoopbackPort();
@@ -251,14 +404,13 @@ public sealed class OfficialMihomoServiceInteropTests
                 new ServiceRequest(Guid.NewGuid(), ServiceCommand.StopCore, ProtocolVersion: ServiceProtocol.CurrentVersion),
                 CancellationToken.None);
             Assert.IsTrue(stop.Succeeded, stop.Error);
-        }
-        finally
+        }, async () =>
         {
             if (Directory.Exists(root))
             {
                 await DeleteTemporaryDirectoryAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
@@ -274,7 +426,7 @@ public sealed class OfficialMihomoServiceInteropTests
 
         (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
         ForeignCompatibleController? competingController = null;
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             int preferredControllerPort = GetAvailableLoopbackPort();
             int mixedPort = GetAvailableLoopbackPort();
@@ -313,8 +465,7 @@ public sealed class OfficialMihomoServiceInteropTests
                 new Uri($"http://127.0.0.1:{competingController.Port}/version"));
             Assert.AreEqual(HttpStatusCode.OK, foreignResponse.StatusCode, "Stopping the managed core must leave the other controller alive.");
             Assert.IsFalse(competingController.Requests.Any(IsControllerWriteMethod));
-        }
-        finally
+        }, async () =>
         {
             if (competingController is not null)
             {
@@ -325,7 +476,7 @@ public sealed class OfficialMihomoServiceInteropTests
             {
                 await DeleteTemporaryDirectoryAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
@@ -343,7 +494,7 @@ public sealed class OfficialMihomoServiceInteropTests
         TaskCompletionSource<int> coreStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         ServiceRuntimeController? controller = null;
         bool disposed = false;
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             int controllerPort = GetAvailableLoopbackPort();
             int mixedPort = GetAvailableLoopbackPort();
@@ -384,8 +535,7 @@ public sealed class OfficialMihomoServiceInteropTests
             Assert.AreEqual(CoreState.Stopped, controller.CoreState);
             Assert.IsFalse(WindowsListenerOwnerTable.HasListener(controllerPort, PortTransport.Tcp));
             Assert.IsFalse(WindowsListenerOwnerTable.HasListener(mixedPort, PortTransport.Tcp));
-        }
-        finally
+        }, async () =>
         {
             if (controller is not null && !disposed)
             {
@@ -396,7 +546,7 @@ public sealed class OfficialMihomoServiceInteropTests
             {
                 await DeleteTemporaryDirectoryAsync(root);
             }
-        }
+        });
     }
 
     private static bool IsControllerWriteMethod(string requestLine)
@@ -495,10 +645,7 @@ public sealed class OfficialMihomoServiceInteropTests
         }
 
         ManagedCoreVerifier.ValidateWindowsAmd64Executable(executablePath);
-        string root = Path.Combine(
-            Path.GetTempPath(),
-            "ClashTrayIntegrationTests",
-            Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new(
             Path.Combine(root, "local"),
             Path.Combine(root, "program"));
@@ -547,7 +694,7 @@ public sealed class OfficialMihomoServiceInteropTests
             ProtocolVersion: ServiceProtocol.CurrentVersion);
         DisabledTunNetworkHealthProbe healthProbe = new();
 
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await using ServiceRuntimeController controller = new(
                 paths,
@@ -607,14 +754,13 @@ public sealed class OfficialMihomoServiceInteropTests
             Assert.AreEqual(TunState.Off, stopResponse.Tun);
             Assert.AreEqual(0, healthProbe.EnabledProbeCalls);
             Assert.IsGreaterThan(0, healthProbe.DisabledProbeCalls);
-        }
-        finally
+        }, async () =>
         {
             if (Directory.Exists(root))
             {
                 await DeleteTemporaryDirectoryAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
@@ -629,7 +775,7 @@ public sealed class OfficialMihomoServiceInteropTests
         }
 
         (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             await using ServiceRuntimeController controller = new(
                 paths,
@@ -751,14 +897,13 @@ public sealed class OfficialMihomoServiceInteropTests
             Assert.IsTrue(status.Succeeded, status.Error);
             Assert.AreEqual(CoreState.Stopped, status.Core);
             Assert.IsNull(status.RuntimeBinding);
-        }
-        finally
+        }, async () =>
         {
             if (Directory.Exists(root))
             {
                 await DeleteTemporaryDirectoryAsync(root);
             }
-        }
+        });
     }
 
     [TestMethod]
@@ -773,7 +918,7 @@ public sealed class OfficialMihomoServiceInteropTests
         }
 
         (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             int controllerPort = GetAvailableLoopbackPort();
             int mixedPort = GetAvailableLoopbackPort();
@@ -800,11 +945,10 @@ public sealed class OfficialMihomoServiceInteropTests
                 ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None);
             Assert.AreEqual(CoreState.Stopped, status.Core);
             Assert.IsNull(status.RuntimeBinding);
-        }
-        finally
+        }, async () =>
         {
             await DeleteTemporaryDirectoryAsync(root);
-        }
+        });
     }
 
     [TestMethod]
@@ -819,7 +963,7 @@ public sealed class OfficialMihomoServiceInteropTests
         }
 
         (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             int controllerPort = GetAvailableLoopbackPort();
             int mixedPort = GetAvailableLoopbackPort();
@@ -849,11 +993,10 @@ public sealed class OfficialMihomoServiceInteropTests
             ServiceResponse repeated = await controller.HandleAsync(firstRequest, CancellationToken.None);
             Assert.AreEqual(timeout, repeated, "A retry must observe the same typed cached result.");
             Assert.IsNull(repeated.RuntimeBinding);
-        }
-        finally
+        }, async () =>
         {
             await DeleteTemporaryDirectoryAsync(root);
-        }
+        });
     }
 
     [TestMethod]
@@ -876,7 +1019,7 @@ public sealed class OfficialMihomoServiceInteropTests
         }
 
         (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executablePath);
-        try
+        await TestFixtureDirectory.RunAsync(root, async () =>
         {
             int controllerPort = GetAvailableLoopbackPort();
             int mixedPort = GetAvailableLoopbackPort();
@@ -914,11 +1057,10 @@ public sealed class OfficialMihomoServiceInteropTests
             StringAssert.Contains(response.Error, ownerState.ToString(), StringComparison.Ordinal);
             StringAssert.Contains(response.Error, "deterministic UDP observation", StringComparison.Ordinal);
             Assert.AreEqual(CoreState.Stopped, controller.CoreState);
-        }
-        finally
+        }, async () =>
         {
             await DeleteTemporaryDirectoryAsync(root);
-        }
+        });
     }
 
     private static async Task<ServiceResponse> StartServiceCoreAsync(
@@ -948,7 +1090,7 @@ public sealed class OfficialMihomoServiceInteropTests
     private static async Task<(string Root, AppPaths Paths, string RuntimeDirectory)> CreateOfficialCoreFixtureAsync(
         string executablePath)
     {
-        string root = Path.Combine(Path.GetTempPath(), "ClashTrayIntegrationTests", Guid.NewGuid().ToString("N"));
+        string root = TestFixtureDirectory.Create();
         AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
         paths.EnsureProgramDataDirectories();
         string runtimeDirectory = Path.Combine(paths.RuntimeRoot, "mihomo");
@@ -965,47 +1107,7 @@ public sealed class OfficialMihomoServiceInteropTests
         return (root, paths, runtimeDirectory);
     }
 
-    private static async Task DeleteTemporaryDirectoryAsync(string directoryPath)
-    {
-        const int maximumAttempts = 12;
-        const int retryDelayMilliseconds = 250;
-        Exception? lastException = null;
-
-        // Windows may briefly hold a just-exited executable during file-system scanning.
-        // Normalize read-only attributes and retry for a bounded period; persistent locks still fail the test.
-        for (int attempt = 0; attempt < maximumAttempts; attempt++)
-        {
-            try
-            {
-                foreach (string entry in Directory.EnumerateFileSystemEntries(
-                    directoryPath,
-                    "*",
-                    SearchOption.AllDirectories))
-                {
-                    FileAttributes attributes = File.GetAttributes(entry);
-                    if ((attributes & FileAttributes.ReadOnly) != 0)
-                    {
-                        File.SetAttributes(entry, attributes & ~FileAttributes.ReadOnly);
-                    }
-                }
-
-                Directory.Delete(directoryPath, recursive: true);
-                return;
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                lastException = exception;
-                if (attempt + 1 < maximumAttempts)
-                {
-                    await Task.Delay(retryDelayMilliseconds).ConfigureAwait(false);
-                }
-            }
-        }
-
-        throw new IOException(
-            $"Could not delete the isolated Mihomo integration directory after {maximumAttempts} attempts.",
-            lastException);
-    }
+    private static Task DeleteTemporaryDirectoryAsync(string directoryPath) => TestFixtureDirectory.DeleteAsync(directoryPath);
 
     private static async Task<ServiceResponse> WaitForSafeStatusAsync(
         ServiceRuntimeController controller)

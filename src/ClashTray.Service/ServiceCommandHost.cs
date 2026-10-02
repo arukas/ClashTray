@@ -14,7 +14,7 @@ namespace ClashTray.Service;
 
 internal sealed class ServiceCommandHost : IAsyncDisposable
 {
-    private const int MaxRequestCharacters = 64 * 1024;
+    private const int MaxRequestCharacters = ServiceProtocol.MaximumRequestCharacters;
     private const int MaxServerInstances = 32;
     private static readonly TimeSpan RequestIdleTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan ResponseWriteTimeout = TimeSpan.FromSeconds(5);
@@ -230,7 +230,9 @@ internal sealed class ServiceCommandHost : IAsyncDisposable
         ServiceResponse response,
         CancellationToken cancellationToken)
     {
-        await writer.WriteLineAsync(JsonSerializer.Serialize(response, _jsonOptions))
+        string serialized = JsonSerializer.Serialize(response with { ServiceInstanceId = _controller.ServiceInstanceId }, _jsonOptions);
+        if (serialized.Length > ServiceProtocol.MaximumResponseCharacters) { throw new InvalidDataException("Service response exceeded the size limit."); }
+        await writer.WriteLineAsync(serialized)
             .WaitAsync(ResponseWriteTimeout, cancellationToken);
     }
 

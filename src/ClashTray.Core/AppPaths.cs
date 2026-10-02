@@ -38,6 +38,10 @@ public sealed class AppPaths
 
     public string SettingsFile => Path.Combine(LocalRoot, "settings.json");
 
+    public string SettingsRecoveryFile => Path.Combine(LocalRoot, "settings-recovery.json");
+
+    public string SettingsNetworkOffFile => Path.Combine(LocalRoot, "settings-network-off.json");
+
     public string ConfigurationSwitchJournalFile =>
         Path.Combine(LocalRoot, "configuration-switch-journal.json");
 

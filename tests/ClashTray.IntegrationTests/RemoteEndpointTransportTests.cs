@@ -16,6 +16,7 @@ namespace ClashTray.IntegrationTests;
 public sealed class RemoteEndpointTransportTests
 {
     [TestMethod]
+    [TestCategory("RequiresTls")]
     public async Task CustomCaTransportUsesTheSameAuthorizationForRestAndWss()
     {
         await using LocalControllerFixture fixture = await LocalControllerFixture.StartAsync();
@@ -53,9 +54,18 @@ public sealed class RemoteEndpointTransportTests
     }
 
     [TestMethod]
+    [TestCategory("RequiresTls")]
     public async Task WrongCustomCaIsRejectedByTheLiveRestConnection()
     {
         await using LocalControllerFixture fixture = await LocalControllerFixture.StartAsync();
+        // A missing SSPI capability must not pass the negative TLS test.
+        EndpointDescriptor validEndpoint = EndpointUriNormalizer.CreateRemoteDescriptor(new EndpointId("valid-control"), "TLS control", fixture.BaseUri) with
+        { Security = EndpointTransportSecurity.HttpsCustomCertificate };
+        using (EndpointTransport valid = EndpointTransportFactory.Create(validEndpoint, new EndpointTransportOptions("loopback-secret", fixture.CertificateAuthority)))
+        {
+            using HttpResponseMessage response = await valid.HttpClient.GetAsync(new Uri(fixture.BaseUri, "version"));
+            response.EnsureSuccessStatusCode();
+        }
         using X509Certificate2 wrongCa = LocalControllerFixture.CreateCertificateAuthority("Wrong ClashTray Test CA");
         EndpointDescriptor endpoint = EndpointUriNormalizer.CreateRemoteDescriptor(
             new EndpointId("loopback"),
@@ -79,6 +89,7 @@ public sealed class RemoteEndpointTransportTests
     }
 
     [TestMethod]
+    [TestCategory("RequiresTls")]
     public async Task LiveLoopbackControllerCompletesConnectorAndSessionManagerHandshake()
     {
         await using LocalControllerFixture fixture = await LocalControllerFixture.StartAsync();

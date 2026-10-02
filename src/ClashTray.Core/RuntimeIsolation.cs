@@ -2,6 +2,24 @@ using ClashTray.Contracts;
 
 namespace ClashTray.Core;
 
+internal sealed class IsolatedSystemProxyController : ISystemProxyController
+{
+    public SystemProxyState State { get; private set; }
+    public SystemProxyState DetectState() => State;
+    public Task EnableAsync(int port, string bypassList, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        State = SystemProxyState.On;
+        return Task.CompletedTask;
+    }
+    public Task DisableAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        State = SystemProxyState.Off;
+        return Task.CompletedTask;
+    }
+}
+
 internal sealed class IsolatedServicePipeClient : IServicePipeClient
 {
     public Task<ServiceResponse> SendAsync(

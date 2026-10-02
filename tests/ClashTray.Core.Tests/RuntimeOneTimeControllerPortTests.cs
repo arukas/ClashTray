@@ -1,3 +1,4 @@
+using ClashTray.Testing;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
@@ -307,7 +308,7 @@ public sealed class RuntimeOneTimeControllerPortTests
             OneTimeControllerHandler? controllerHandler = null,
             bool enableSystemProxy = false)
         {
-            string root = Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+            string root = TestFixtureDirectory.Create();
             AppPaths paths = new(Path.Combine(root, "local"), Path.Combine(root, "program"));
             TestSettingsStore settings = new(RuntimeTestHelpers.CreatePortSafeSettings() with { SystemProxyEnabled = enableSystemProxy });
             OneTimeStartService service = new(settings.Settings);

@@ -111,6 +111,7 @@ public sealed partial class ClashTrayRuntime
         OperationGate.Lease operationLease,
         CancellationToken cancellationToken)
     {
+        await RecoverPendingSettingsAsync(cancellationToken);
         _configurationSwitchOperations.ActiveLease = operationLease;
         try
         {
@@ -213,7 +214,7 @@ public sealed partial class ClashTrayRuntime
         ConfigurationProfile candidate,
         CancellationToken cancellationToken)
     {
-        await _settingsStore.SaveAsync(_settings, cancellationToken);
+        await SaveConfigurationSelectionAsync(candidate.Id, cancellationToken);
         await RefreshConfigurationSnapshotAsync(cancellationToken);
     }
 
@@ -221,9 +222,7 @@ public sealed partial class ClashTrayRuntime
         ConfigurationSwitchRuntimeState previousState,
         CancellationToken cancellationToken)
     {
-        _settings = previousState.PreviousSettings
-            ?? _settings with { ActiveConfigurationId = previousState.ActiveConfigurationId };
-        await _settingsStore.SaveAsync(_settings, cancellationToken);
+        await SaveConfigurationSelectionAsync(previousState.ActiveConfigurationId, cancellationToken);
         await RefreshConfigurationSnapshotAsync(cancellationToken, publish: false);
     }
 
@@ -242,9 +241,18 @@ public sealed partial class ClashTrayRuntime
             message = "配置切换恢复记录指向的旧配置已不存在，已恢复为未选择配置。";
         }
 
-        _settings = _settings with { ActiveConfigurationId = previousConfigurationId };
-        await _settingsStore.SaveAsync(_settings, cancellationToken);
+        await SaveConfigurationSelectionAsync(previousConfigurationId, cancellationToken);
         return message;
+    }
+
+    private async Task SaveConfigurationSelectionAsync(string? id, CancellationToken cancellationToken)
+    {
+        // Same recovery coordinator as settings/network operations. Only the
+        // configuration selection is replaced, never a stale whole snapshot.
+        await RecoverPendingSettingsAsync(cancellationToken);
+        AppSettings settings = _networkDisableIntent.Apply(_settings with { ActiveConfigurationId = id });
+        await _settingsStore.SaveAsync(settings, cancellationToken);
+        _settings = settings;
     }
 
     private async Task ClearRecoveredConfigurationSwitchArtifactsAsync(
@@ -310,6 +318,7 @@ public sealed partial class ClashTrayRuntime
         ArgumentNullException.ThrowIfNull(profile);
         using (OperationGate.Lease operationLease = await _operationLock.AcquireAsync(cancellationToken))
         {
+            await RecoverPendingSettingsAsync(cancellationToken);
             bool wasActive = profile.IsActive
                 || string.Equals(profile.Id, _settings.ActiveConfigurationId, StringComparison.OrdinalIgnoreCase);
             if (wasActive && Snapshot.Core.State == CoreState.Running)
@@ -321,8 +330,7 @@ public sealed partial class ClashTrayRuntime
             IReadOnlyList<ConfigurationProfile> configurations = await _configurationStore.ListAsync(cancellationToken);
             if (wasActive)
             {
-                _settings = _settings with { ActiveConfigurationId = null };
-                await _settingsStore.SaveAsync(_settings, cancellationToken);
+                await SaveConfigurationSelectionAsync(null, cancellationToken);
             }
 
             _stateStore.Update(snapshot => snapshot with

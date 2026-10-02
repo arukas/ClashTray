@@ -18,6 +18,7 @@ public sealed class QueryLimitedProcessIdentityTests
     private const uint DisableMaximumPrivileges = 0x1;
 
     [TestMethod]
+    [TestCategory("RequiresRestrictedToken")]
     public async Task QueryOnlyProcessDaclStillConfirmsImageCreationTimeAndListenerOwner()
     {
         if (!OperatingSystem.IsWindows())
@@ -87,7 +88,8 @@ public sealed class QueryLimitedProcessIdentityTests
             sidsToRestrict: IntPtr.Zero,
             out SafeAccessTokenHandle restrictedToken))
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not create the query-only caller token.");
+            int error = Marshal.GetLastWin32Error();
+            throw new Win32Exception(error, $"EnvironmentCapabilityUnavailable: CreateRestrictedToken failed with Win32 error {error}. Run the required token gate with a Windows token that supports restricted-token creation.");
         }
 
         return restrictedToken;

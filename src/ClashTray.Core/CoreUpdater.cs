@@ -20,16 +20,23 @@ public sealed class CoreUpdater : IDisposable
     private readonly bool _ownsHttpClient;
     private readonly AppPaths _paths;
     private readonly string? _managedUserSid;
+    private readonly ICoreUpdatePermissionPolicy _permissions;
 
     public CoreUpdater(
         AppPaths paths,
         HttpClient? httpClient = null,
         string? managedUserSid = null)
+        : this(paths, httpClient, managedUserSid, new WindowsCoreUpdatePermissionPolicy())
+    {
+    }
+
+    internal CoreUpdater(AppPaths paths, HttpClient? httpClient, string? managedUserSid, ICoreUpdatePermissionPolicy permissions)
     {
         _paths = paths;
         _ownsHttpClient = httpClient is null;
         _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
         _managedUserSid = managedUserSid;
+        _permissions = permissions;
     }
 
     public void Dispose()
@@ -46,7 +53,7 @@ public sealed class CoreUpdater : IDisposable
     {
         ArgumentNullException.ThrowIfNull(manifest);
         ValidateManifest(manifest);
-        _paths.EnsureProgramDataDirectories(_managedUserSid);
+        _permissions.PrepareDirectories(_paths, _managedUserSid);
 
         string stagingRoot = Path.Combine(_paths.ProgramRoot, "core-update", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stagingRoot);
@@ -128,12 +135,7 @@ public sealed class CoreUpdater : IDisposable
             ReplaceWithBackup(candidateMetadataPath, metadataPath, backupMetadataPath);
             metadataReplaced = true;
 
-            if (!string.IsNullOrWhiteSpace(_managedUserSid))
-            {
-                WindowsPathSecurity.ProtectManagedCoreDirectory(coreDirectory, _managedUserSid);
-                WindowsPathSecurity.ProtectManagedCoreFile(targetPath, _managedUserSid);
-                WindowsPathSecurity.ProtectManagedCoreFile(metadataPath, _managedUserSid);
-            }
+            _permissions.ProtectInstalledFiles(_paths, _managedUserSid, protectDirectory: true);
 
             await ManagedCoreVerifier.ValidateAsync(_paths, cancellationToken);
             return targetPath;
@@ -163,7 +165,7 @@ public sealed class CoreUpdater : IDisposable
 
     public async Task<string> RollbackLastInstallAsync(CancellationToken cancellationToken = default)
     {
-        _paths.EnsureProgramDataDirectories(_managedUserSid);
+        _permissions.PrepareDirectories(_paths, _managedUserSid);
 
         string targetPath = _paths.ManagedCoreExecutable;
         string metadataPath = _paths.ManagedCoreMetadata;
@@ -195,11 +197,7 @@ public sealed class CoreUpdater : IDisposable
             metadataSwapped = true;
             await ManagedCoreVerifier.ValidateAsync(_paths, cancellationToken);
 
-            if (!string.IsNullOrWhiteSpace(_managedUserSid))
-            {
-                WindowsPathSecurity.ProtectManagedCoreFile(targetPath, _managedUserSid);
-                WindowsPathSecurity.ProtectManagedCoreFile(metadataPath, _managedUserSid);
-            }
+            _permissions.ProtectInstalledFiles(_paths, _managedUserSid, protectDirectory: false);
 
             TryDelete(displacedPath);
             TryDelete(displacedMetadataPath);
