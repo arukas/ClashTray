@@ -47,6 +47,7 @@ public sealed partial class MainWindow
         }
 
         ShowPanel();
+        await VerifyMinimizedPanelRestoreAsync(directory);
         _isPinned = true; // Keep the diagnostic render stable if another app takes focus.
         await VerifyThemeUnlockAsync(directory);
         RuntimeSnapshot empty = _runtime!.Snapshot;
@@ -1070,6 +1071,68 @@ public sealed partial class MainWindow
         }, DiagnosticJsonOptions));
         DashboardScrollViewer.ChangeView(null, 0, null, true);
     }
+    private async Task VerifyMinimizedPanelRestoreAsync(string directory)
+    {
+        PinButton_Click(PinButton, new RoutedEventArgs());
+        if (!_isPinned || !NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect initial))
+        {
+            throw new InvalidOperationException("Could not prepare the pinned-window restore regression.");
+        }
+
+        if (!NativeMethods.SetWindowPos(
+            _windowHandle, IntPtr.Zero, initial.Left, initial.Top, initial.Width + 32, initial.Height,
+            NativeMethods.SWP_NOACTIVATE)
+            || !NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect resized))
+        {
+            throw new InvalidOperationException("Could not resize the pinned window before minimizing it.");
+        }
+
+        foreach (Action restore in new Action[] { TogglePanel, ShowPanel })
+        {
+            NativeMethods.ShowWindow(_windowHandle, NativeMethods.SW_MINIMIZE);
+            if (!NativeMethods.IsIconic(_windowHandle) || CanRenderPanel)
+            {
+                throw new InvalidOperationException("The pinned panel did not enter the minimized state.");
+            }
+
+            restore();
+            if (!CanRenderPanel)
+            {
+                throw new InvalidOperationException($"{restore.Method.Name} did not restore the minimized pinned panel.");
+            }
+
+            if (!NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect restored)
+                || restored.Left != resized.Left || restored.Top != resized.Top
+                || restored.Width != resized.Width || restored.Height != resized.Height)
+            {
+                throw new InvalidOperationException($"{restore.Method.Name} changed the pinned window's restored bounds.");
+            }
+        }
+
+        TogglePanel();
+        if (NativeMethods.IsWindowVisible(_windowHandle))
+        {
+            throw new InvalidOperationException("Tray selection did not hide the restored pinned panel.");
+        }
+
+        TogglePanel();
+        if (!CanRenderPanel)
+        {
+            throw new InvalidOperationException("Tray selection did not reopen the hidden pinned panel.");
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(directory, "minimized-panel-restore.json"),
+            JsonSerializer.Serialize(new
+            {
+                TrayToggleRestores = true,
+                OpenPanelRestores = true,
+                MinimizedPanelCannotRender = true,
+                RestoredBoundsPreserved = true,
+                NormalTogglePreserved = true
+            }, DiagnosticJsonOptions));
+        PinButton_Click(PinButton, new RoutedEventArgs());
+    }
+
     private async Task VerifyThemeUnlockAsync(string directory)
     {
         if (NakhimovThemeOption.Visibility != Visibility.Collapsed)

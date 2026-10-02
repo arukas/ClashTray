@@ -101,7 +101,7 @@ public sealed partial class MainWindow : Window
 
     public void TogglePanel()
     {
-        if (_isVisible)
+        if (CanRenderPanel)
         {
             HidePanel();
         }
@@ -118,27 +118,38 @@ public sealed partial class MainWindow : Window
             _windowHandle = WindowNative.GetWindowHandle(this);
         }
 
-        NativeMethods.Rect trayRect = GetTrayRect();
-        nint monitor = NativeMethods.MonitorFromRect(ref trayRect, NativeMethods.MONITOR_DEFAULTTONEAREST);
-        NativeMethods.MonitorInfo info = new NativeMethods.MonitorInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfo>() };
-        if (!NativeMethods.GetMonitorInfo(monitor, ref info))
+        bool wasMinimized = NativeMethods.IsIconic(_windowHandle);
+        if (wasMinimized)
         {
-            throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+            NativeMethods.ShowWindow(_windowHandle, NativeMethods.SW_RESTORE);
         }
 
-        uint dpi = NativeMethods.GetDpiForMonitor(monitor, 0, out uint monitorDpi, out _) == 0
-            ? monitorDpi : NativeMethods.GetDpiForWindow(_windowHandle);
-        ScreenBounds bounds = FlyoutPlacement.Calculate(
-            new(info.Monitor.Left, info.Monitor.Top, info.Monitor.Width, info.Monitor.Height),
-            new(info.Work.Left, info.Work.Top, info.Work.Width, info.Work.Height), dpi == 0 ? 1 : dpi / 96d);
-        NativeMethods.SetWindowPos(
-            _windowHandle,
-            _isPinned ? IntPtr.Zero : new IntPtr(-1),
-            bounds.X,
-            bounds.Y,
-            bounds.Width,
-            bounds.Height,
-            NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+        // A minimized pinned window already has user-selected restore bounds.
+        if (!_isPinned || !wasMinimized)
+        {
+            NativeMethods.Rect trayRect = GetTrayRect();
+            nint monitor = NativeMethods.MonitorFromRect(ref trayRect, NativeMethods.MONITOR_DEFAULTTONEAREST);
+            NativeMethods.MonitorInfo info = new NativeMethods.MonitorInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfo>() };
+            if (!NativeMethods.GetMonitorInfo(monitor, ref info))
+            {
+                throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error());
+            }
+
+            uint dpi = NativeMethods.GetDpiForMonitor(monitor, 0, out uint monitorDpi, out _) == 0
+                ? monitorDpi : NativeMethods.GetDpiForWindow(_windowHandle);
+            ScreenBounds bounds = FlyoutPlacement.Calculate(
+                new(info.Monitor.Left, info.Monitor.Top, info.Monitor.Width, info.Monitor.Height),
+                new(info.Work.Left, info.Work.Top, info.Work.Width, info.Work.Height), dpi == 0 ? 1 : dpi / 96d);
+            NativeMethods.SetWindowPos(
+                _windowHandle,
+                _isPinned ? IntPtr.Zero : new IntPtr(-1),
+                bounds.X,
+                bounds.Y,
+                bounds.Width,
+                bounds.Height,
+                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+        }
+
         NativeMethods.ShowWindow(_windowHandle, NativeMethods.SW_SHOW);
         _isVisible = true;
         NativeMethods.SetForegroundWindow(_windowHandle);

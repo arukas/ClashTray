@@ -25,6 +25,8 @@ internal static class NativeMethods
     public const uint SW_HIDE = 0;
     public const uint SW_SHOWNOACTIVATE = 4;
     public const uint SW_SHOW = 5;
+    public const uint SW_MINIMIZE = 6;
+    public const uint SW_RESTORE = 9;
 
     public const uint SWP_NOSIZE = 0x0001;
     public const uint SWP_NOMOVE = 0x0002;
