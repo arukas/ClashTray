@@ -874,6 +874,15 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+#if DEBUG
+        // Synthetic smoke snapshots are supplied by the diagnostic flow; do not
+        // replace them with the uninitialized runtime or request live API data.
+        if (_capturingSyntheticSmoke)
+        {
+            return;
+        }
+#endif
+
         UpdateAppSnapshot(_runtime.AppSnapshot);
         _pageRefreshRequested = true;
         _pageRefreshRevision++;

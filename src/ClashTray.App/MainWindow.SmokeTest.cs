@@ -17,11 +17,13 @@ namespace ClashTray.App;
 public sealed partial class MainWindow
 {
     private static readonly JsonSerializerOptions DiagnosticJsonOptions = new() { WriteIndented = true };
+    private bool _capturingSyntheticSmoke;
     // Explicit developer-only smoke mode. Uses synthetic data, isolated storage,
     // no core initialization, no tray registration, and no network changes.
     internal async Task CaptureSmokeTestAsync(string directory)
     {
         Directory.CreateDirectory(directory);
+        _capturingSyntheticSmoke = true;
         if (NativeMethods.IsWindowVisible(_windowHandle))
         {
             throw new InvalidOperationException("Startup window was not hidden.");
@@ -272,7 +274,7 @@ public sealed partial class MainWindow
 
         // A metrics-only snapshot must preserve the current node controls.
         UIElement firstCard = groups.Children[0];
-        _proxyPage.UpdateSnapshot(crowded with { Core = crowded.Core with { ConnectionCount = 999 } });
+        UpdateSnapshot(crowded with { Core = crowded.Core with { ConnectionCount = 999 } });
         if (!ReferenceEquals(firstCard, groups.Children[0]))
         {
             throw new InvalidOperationException("Metrics update rebuilt node controls.");
@@ -361,7 +363,7 @@ public sealed partial class MainWindow
         }
 
         connectionSearch.Text = "needle-connection";
-        await Task.Delay(50);
+        await WaitForSmokeConditionAsync(() => connectionList.Items.Count == 1, "connection search");
         if (connectionList.Items.Count != 1
             || (connectionList.Items[0] as ConnectionRowViewModel)?.Id != "conn-042"
             || !ReferenceEquals(connectionList.SelectedItem, selectedConnection))
@@ -370,7 +372,7 @@ public sealed partial class MainWindow
         }
 
         connectionSearch.Text = string.Empty;
-        await Task.Delay(50);
+        await WaitForSmokeConditionAsync(() => connectionList.Items.Count == connectionCount, "clearing connection search");
         connectionSortFilter.Stop();
         if (connectionList.Items.Count != connectionCount
             || !ReferenceEquals(connectionList.SelectedItem, selectedConnection))
@@ -463,7 +465,7 @@ public sealed partial class MainWindow
 
         logSource.SelectedIndex = 0;
         logSearch.Text = "needle-log-078";
-        await Task.Delay(50);
+        await WaitForSmokeConditionAsync(() => logList.Items.Count == 1, "log search");
         if (logList.Items.Count != 1
             || (logList.Items[0] as LogRowViewModel)?.Sequence != 78)
         {
@@ -471,7 +473,7 @@ public sealed partial class MainWindow
         }
 
         logSearch.Text = string.Empty;
-        await Task.Delay(50);
+        await WaitForSmokeConditionAsync(() => logList.Items.Count == logCapacity, "clearing log search");
         logFiltering.Stop();
         if (logList.Items.Count != logCapacity)
         {
@@ -1071,6 +1073,20 @@ public sealed partial class MainWindow
         }, DiagnosticJsonOptions));
         DashboardScrollViewer.ChangeView(null, 0, null, true);
     }
+    private static async Task WaitForSmokeConditionAsync(Func<bool> condition, string operation)
+    {
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (!condition())
+        {
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(started) >= TimeSpan.FromSeconds(5))
+            {
+                throw new TimeoutException($"UI smoke did not observe completion of {operation}.");
+            }
+
+            await Task.Delay(20);
+        }
+    }
+
     private async Task VerifyMinimizedPanelRestoreAsync(string directory)
     {
         PinButton_Click(PinButton, new RoutedEventArgs());
