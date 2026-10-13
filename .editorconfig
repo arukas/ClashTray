@@ -1,0 +1,78 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = crlf
+insert_final_newline = true
+
+[*.cs]
+# Keep declarations and control flow explicit so type and lifetime boundaries are reviewable.
+csharp_style_var_for_built_in_types = false:error
+csharp_style_var_when_type_is_apparent = false:error
+csharp_style_var_elsewhere = false:error
+csharp_prefer_braces = true:error
+dotnet_style_require_accessibility_modifiers = always:error
+
+# Treat correctness-oriented IDE diagnostics as build-breaking issues.
+dotnet_diagnostic.IDE0005.severity = error
+dotnet_diagnostic.IDE0059.severity = error
+dotnet_diagnostic.CA1068.severity = error
+
+# CA2007 cannot be applied consistently to await-using declarations without changing
+# resource types; continuation policy is kept explicit at each UI/library boundary.
+dotnet_diagnostic.CA2007.severity = none
+
+# These event payloads are immutable domain state/telemetry values; wrapping them in
+# EventArgs would change the existing application contract without improving safety.
+[src/ClashTray.Core/Runtime/ClashTrayRuntime.cs]
+dotnet_diagnostic.CA1003.severity = none
+
+[src/ClashTray.Core/CoreManagement/MihomoProcessManager.cs]
+dotnet_diagnostic.CA1003.severity = none
+
+# The proxy snapshot intentionally stores the raw registry string so restoration can
+# round-trip the user's original WinINet state exactly.
+[src/ClashTray.Core/Networking/SystemProxyManager.cs]
+dotnet_diagnostic.CA1054.severity = none
+dotnet_diagnostic.CA1056.severity = none
+
+# Lowercase is part of the Mihomo protocol, stable configuration IDs, file extensions,
+# and persisted log/theme values; uppercasing would change observable behavior.
+[src/ClashTray.Core/Controller/MihomoApiClient.cs]
+dotnet_diagnostic.CA1308.severity = none
+
+[src/ClashTray.Core/Controller/MihomoDataParser.cs]
+dotnet_diagnostic.CA1308.severity = none
+
+[src/ClashTray.Core/Configurations/RuntimeConfigBuilder.cs]
+dotnet_diagnostic.CA1308.severity = none
+
+[src/ClashTray.Core/Configurations/ConfigurationStore.cs]
+dotnet_diagnostic.CA1308.severity = none
+
+# Service logging volume is a handful of entries per lifecycle/TUN operation; the
+# LoggerMessage source-generator ceremony costs more review surface than it saves here.
+[src/ClashTray.Service/*.cs]
+dotnet_diagnostic.CA1848.severity = none
+dotnet_diagnostic.CA1873.severity = none
+
+[src/ClashTray.Service/**/*.cs]
+dotnet_diagnostic.CA1848.severity = none
+dotnet_diagnostic.CA1873.severity = none
+
+# Test classes must remain public for MSTest discovery. Logger perf rules add no value in tests.
+[tests/**/*.cs]
+dotnet_diagnostic.CA1515.severity = none
+dotnet_diagnostic.CA1848.severity = none
+dotnet_diagnostic.CA1873.severity = none
+
+[src/ClashTray.Presentation/Interop/NativeMethods.cs]
+dotnet_diagnostic.CA1515.severity = none
+
+# The App type name is required by the WinUI application model and XAML contract.
+[src/ClashTray.App/App.xaml.cs]
+dotnet_diagnostic.CA1724.severity = none
+
+# Theme names are persisted and consumed as lowercase values by the UI contract.
+[src/ClashTray.App/Shell/MainWindow.Themes.cs]
+dotnet_diagnostic.CA1308.severity = none

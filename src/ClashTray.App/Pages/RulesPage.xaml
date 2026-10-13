@@ -1,0 +1,54 @@
+<UserControl
+    x:Class="ClashTray.App.RulesPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <Style TargetType="ListViewItem">
+            <Setter Property="Padding" Value="8,7" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid RowSpacing="10" Padding="0,2,0,12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <FontIcon Glyph="&#xE8FD;" FontSize="20" Foreground="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Margin="10,0,0,0" Spacing="1">
+                <TextBlock x:Uid="RulesTitle" FontSize="20" FontWeight="SemiBold" />
+                <TextBlock x:Uid="RulesSubtitle" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
+            </StackPanel>
+        </Grid>
+
+        <Border Grid.Row="1" Style="{StaticResource ClashTrayCardStyle}">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="SearchBox" x:Uid="RulesSearchBox" TextChanged="SearchBox_TextChanged" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <ComboBox x:Name="FilterBox" SelectedIndex="0" SelectionChanged="FilterBox_SelectionChanged" MinWidth="84">
+                        <ComboBoxItem x:Uid="RulesFilterAllItem" Tag="all" />
+                        <ComboBoxItem x:Uid="RulesFilterDomainItem" Tag="domain" />
+                        <ComboBoxItem x:Uid="RulesFilterIpItem" Tag="ip" />
+                    </ComboBox>
+                    <Button x:Name="RefreshRulesButton" x:Uid="RefreshRulesButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="RefreshRulesButton_Click" />
+                </StackPanel>
+            </Grid>
+        </Border>
+        <TextBlock Grid.Row="2" x:Name="ListSummaryText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
+        <TextBlock Grid.Row="3" x:Name="StatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+
+        <Border Grid.Row="4" Style="{StaticResource ClashTrayCardStyle}" Padding="8"><Grid MinHeight="80"><ListView x:Name="RulesListView" x:Uid="RulesListView" ScrollViewer.VerticalScrollMode="Enabled" ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled"><ListView.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" /></DataTemplate></ListView.ItemTemplate></ListView><TextBlock x:Name="EmptyListText" x:Uid="RulesEmptyListText" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></Grid></Border>
+    </Grid>
+</UserControl>

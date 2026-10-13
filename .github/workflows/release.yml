@@ -1,0 +1,386 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version without the v prefix, for example 1.0.0'
+        required: true
+        type: string
+      notify_telegram:
+        description: 'Explicitly send a Telegram release notification'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: true
+  INNO_SETUP_VERSION: 7.1.0
+  INNO_SETUP_INSTALLER_SHA256: 0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F
+
+jobs:
+  release:
+    name: Build and publish x64 installers
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Set up Inno Setup 7
+        shell: pwsh
+        run: |
+          $version = $env:INNO_SETUP_VERSION
+          $iscc = 'C:\Program Files\Inno Setup 7\ISCC.exe'
+          $installerName = "innosetup-$version-x64.exe"
+          $installerPath = Join-Path $env:RUNNER_TEMP $installerName
+          $installerUri = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/$installerName"
+          $installedVersion = if (Test-Path -LiteralPath $iscc) { (& $iscc --version 2>$null | Select-Object -First 1).ToString().Trim() } else { $null }
+          if ($installedVersion -ne $version) {
+            Invoke-WebRequest -Uri $installerUri -OutFile $installerPath
+            $signature = Get-AuthenticodeSignature -FilePath $installerPath
+            if ($signature.Status -ne 'Valid') {
+              throw "Inno Setup installer signature is not valid: $($signature.Status)"
+            }
+            $actualHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash
+            if ($actualHash -ine $env:INNO_SETUP_INSTALLER_SHA256) {
+              throw "Inno Setup installer SHA-256 mismatch. Expected $env:INNO_SETUP_INSTALLER_SHA256, received $actualHash."
+            }
+            if ($signature.SignerCertificate.Subject -ne 'CN=Pyrsys B.V., O=Pyrsys B.V., S=Noord-Holland, C=NL') {
+              throw "Unexpected Inno Setup signer: $($signature.SignerCertificate.Subject)"
+            }
+            $process = Start-Process -FilePath $installerPath -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') -Wait -PassThru
+            if ($process.ExitCode -ne 0) {
+              throw "Inno Setup installation failed with exit code $($process.ExitCode)."
+            }
+          }
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            throw "Inno Setup 7 compiler was not installed: $iscc"
+          }
+          $actualVersion = (& $iscc --version 2>$null | Select-Object -First 1).ToString().Trim()
+          if ($actualVersion -ne $version) {
+            throw "Expected Inno Setup $version but found $actualVersion."
+          }
+          Split-Path -Parent $iscc | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Resolve pinned release manifest
+        shell: pwsh
+        env:
+          RELEASE_VERSION_INPUT: ${{ inputs.version }}
+          RELEASE_REF: ${{ github.ref_name }}
+        run: |
+          $version = $env:RELEASE_VERSION_INPUT
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = $env:RELEASE_REF -replace '^v', ''
+          }
+
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw "Release version must look like 1.2.3 or 1.2.3-alpha.1; received '$version'."
+          }
+
+          $baseVersion = ($version -split '-', 2)[0]
+
+          # The tag is the requested release, but Directory.Build.props owns the
+          # product version in the tree; refusing drift here keeps assemblies,
+          # installer names and the release manifest identical.
+          $productVersion = (& .\packaging\Get-ProductVersion.ps1)
+          if ($baseVersion -ne $productVersion.VersionPrefix) {
+            throw "Release version '$version' does not match VersionPrefix '$($productVersion.VersionPrefix)' in Directory.Build.props. Bump the props file and commit it before tagging."
+          }
+
+          $releaseNotesPath = Join-Path $env:GITHUB_WORKSPACE "docs\releases\$baseVersion.md"
+          if (-not (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf)) {
+            throw "Versioned release notes were not found: $releaseNotesPath"
+          }
+
+          $mihomoRelease = Get-Content -LiteralPath '.\packaging\mihomo-release.json' -Raw | ConvertFrom-Json
+          if ($mihomoRelease.version -notmatch '^v\d+\.\d+\.\d+$' -or $mihomoRelease.windowsAmd64Sha256 -notmatch '^[a-fA-F0-9]{64}$') {
+            throw 'The pinned Mihomo release manifest is invalid.'
+          }
+
+          $dashboardRelease = Get-Content -LiteralPath '.\packaging\metacubexd-release.json' -Raw | ConvertFrom-Json
+          if ($dashboardRelease.version -notmatch '^v\d+\.\d+\.\d+$' -or $dashboardRelease.archiveSha256 -notmatch '^[a-fA-F0-9]{64}$') {
+            throw 'The pinned MetaCubeXD release manifest is invalid.'
+          }
+
+          $outputRoot = Join-Path $env:GITHUB_WORKSPACE 'release-output'
+          New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
+          $releaseManifest = [ordered]@{
+            clashTrayVersion = $version
+            sourceCommit = $env:GITHUB_SHA
+            mihomo = $mihomoRelease
+            metacubexd = $dashboardRelease
+          }
+          $releaseManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outputRoot 'release-manifest.json') -Encoding utf8
+
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_BASE_VERSION=$baseVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_NOTES_PATH=$releaseNotesPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Restore
+        run: dotnet restore ClashTray.sln --locked-mode
+
+      - name: Build
+        run: dotnet build ClashTray.sln --configuration Release --property:Platform=x64 --property:Version=$env:RELEASE_VERSION --no-restore
+
+      - name: Official Mihomo interoperability gate
+        shell: pwsh
+        run: .\packaging\Test-OfficialMihomo.ps1 -Configuration Release
+
+      - name: Windows security capability gate (no skips)
+        shell: pwsh
+        run: .\packaging\Test-SecurityCapabilities.ps1 -Configuration Release
+
+      - name: Test solution
+        shell: pwsh
+        run: .\packaging\Test-ReleaseSuite.ps1 -Configuration Release
+
+      - name: Upload release suite results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-suite-test-results
+          path: artifacts/release-tests-*/*.trx
+          if-no-files-found: ignore
+
+      - name: Upload official Mihomo gate result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: official-mihomo-test-results
+          path: ${{ runner.temp }}/official-mihomo-results/*.trx
+          if-no-files-found: ignore
+
+      - name: Build compressed variants
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_VERSION
+
+          $outputRoot = Join-Path $env:GITHUB_WORKSPACE 'release-output'
+          New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
+
+          foreach ($variant in @('Full', 'NoCET')) {
+            & .\packaging\Build-EXE.ps1 `
+              -Configuration Release `
+              -PackageVersion $version `
+              -Variant $variant `
+              -OutputDirectory (Join-Path $outputRoot $variant)
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Build-EXE.ps1 failed for $variant."
+            }
+          }
+
+          $mihomoRelease = Get-Content -LiteralPath '.\packaging\mihomo-release.json' -Raw | ConvertFrom-Json
+
+          if ($mihomoRelease.version -notmatch '^v\d+\.\d+\.\d+$') {
+            throw "Invalid pinned Mihomo version: $($mihomoRelease.version)"
+          }
+
+          $mihomoVersion = $mihomoRelease.version
+          $mihomoSourceArchiveName = "mihomo-$mihomoVersion-source.tar.gz"
+          $mihomoSourceArchiveUri = "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/$mihomoVersion"
+          $mihomoSourceArchivePath = Join-Path $outputRoot $mihomoSourceArchiveName
+
+          Invoke-WebRequest -Uri $mihomoSourceArchiveUri -OutFile $mihomoSourceArchivePath
+
+          if (
+            -not (Test-Path -LiteralPath $mihomoSourceArchivePath -PathType Leaf) -or
+            (Get-Item -LiteralPath $mihomoSourceArchivePath).Length -eq 0
+          ) {
+            throw "Mihomo source archive was not downloaded: $mihomoSourceArchiveUri"
+          }
+
+          $files = Get-ChildItem -LiteralPath $outputRoot -Recurse -File -Include '*.exe', '*.sha256'
+
+          if ($files.Count -ne 4) {
+            throw "Expected two installers and two checksum files, found $($files.Count)."
+          }
+
+          $checksumFiles = Get-ChildItem -LiteralPath $outputRoot -Recurse -File |
+            Where-Object {
+              $_.Extension -eq '.exe' -or
+              $_.Name -eq $mihomoSourceArchiveName
+            } |
+            Sort-Object FullName
+
+          $checksumLines = foreach ($file in $checksumFiles) {
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+
+          Set-Content -LiteralPath (Join-Path $outputRoot 'SHA256SUMS.txt') -Value $checksumLines -Encoding ascii
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ClashTray-${{ env.RELEASE_VERSION }}-win-x64
+          path: release-output/**
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REF: ${{ github.ref_name }}
+        run: |
+          $tag = if (
+            $env:RELEASE_REF -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
+          ) {
+            $env:RELEASE_REF
+          } else {
+            "v$env:RELEASE_VERSION"
+          }
+
+          $assets = Get-ChildItem `
+            -LiteralPath 'release-output' `
+            -Recurse `
+            -File `
+            -Include '*.exe', '*.sha256', '*.tar.gz', 'SHA256SUMS.txt', 'release-manifest.json' |
+            Select-Object -ExpandProperty FullName
+
+          $downloadBase = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag"
+
+          $releaseManifest = Get-Content -LiteralPath 'release-output\release-manifest.json' -Raw | ConvertFrom-Json
+          $mihomoRelease = $releaseManifest.mihomo
+          $dashboardRelease = $releaseManifest.metacubexd
+          $mihomoVersion = $mihomoRelease.version
+          $mihomoSourceUri = "https://github.com/MetaCubeX/mihomo/tree/$mihomoVersion"
+          $mihomoSourceArchiveName = "mihomo-$mihomoVersion-source.tar.gz"
+          $dashboardVersion = $dashboardRelease.version
+          $releaseNotes = (Get-Content -LiteralPath $env:RELEASE_NOTES_PATH -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($releaseNotes)) {
+            throw "Versioned release notes are empty: $env:RELEASE_NOTES_PATH"
+          }
+
+          $fullArtifact = "ClashTray-$env:RELEASE_VERSION-win-x64-Full.exe"
+          $fullChecksum = [System.IO.Path]::ChangeExtension($fullArtifact, '.sha256')
+          $noCetArtifact = "ClashTray-$env:RELEASE_VERSION-win-x64-NoCET.exe"
+          $noCetChecksum = [System.IO.Path]::ChangeExtension($noCetArtifact, '.sha256')
+
+          $notesLines = @(
+            '## 下载',
+            '',
+            '请选择适合你的 Windows x64 版本：',
+            '',
+            '| 版本 | 适用场景 | 下载 |',
+            '| --- | --- | --- |',
+            "| **Full** | 内置 Mihomo，开箱即用（推荐） | [下载 EXE]($downloadBase/$fullArtifact) · [SHA-256]($downloadBase/$fullChecksum) |",
+            "| **NoCET** | 为补丁较旧的 Windows 10 22H2 提供的兼容包（关闭 CET，内置 Mihomo） | [下载 EXE]($downloadBase/$noCetArtifact) · [SHA-256]($downloadBase/$noCetChecksum) |",
+            '',
+            "[下载完整校验清单]($downloadBase/SHA256SUMS.txt)",
+            "[下载发布清单]($downloadBase/release-manifest.json)",
+            '',
+            '## 本版更新',
+            '',
+            $releaseNotes,
+            '',
+            '## Third-party component',
+            '',
+            'The Full and NoCET installers include an unmodified official Mihomo binary.',
+            "- Mihomo version: $mihomoVersion",
+            '- License: GNU General Public License v3.0',
+            "- Corresponding Source: $mihomoSourceUri",
+            "- Source archive: [$mihomoSourceArchiveName]($downloadBase/$mihomoSourceArchiveName)",
+            "- MetaCubeXD version: $dashboardVersion",
+            '- MetaCubeXD license: MIT',
+            "- Release manifest: [$($releaseManifest.clashTrayVersion)]($downloadBase/release-manifest.json)",
+            '',
+            '> 安装器适用于 Windows 10/11 x64。'
+          )
+
+          $releaseArgs = @(
+            $tag,
+            '--target',
+            $env:GITHUB_SHA,
+            '--title',
+            "ClashTray $env:RELEASE_VERSION",
+            '--notes-file',
+            (Join-Path $env:RUNNER_TEMP 'clashtray-release-notes.md')
+          )
+
+          [IO.File]::WriteAllText(
+            (Join-Path $env:RUNNER_TEMP 'clashtray-release-notes.md'),
+            ($notesLines -join [Environment]::NewLine),
+            [Text.UTF8Encoding]::new($false))
+
+          if ($env:RELEASE_VERSION -match '-') {
+            $releaseArgs += '--prerelease'
+          }
+
+          $releaseArgs += $assets
+
+          gh release create @releaseArgs
+
+      - name: Notify Telegram
+        if: success() && inputs.notify_telegram
+        continue-on-error: true
+        shell: pwsh
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RELEASE_REF: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:TELEGRAM_BOT_TOKEN)) {
+            throw 'TELEGRAM_BOT_TOKEN secret is not configured.'
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:TELEGRAM_CHAT_ID)) {
+            throw 'TELEGRAM_CHAT_ID secret is not configured.'
+          }
+
+          $tag = if (
+            $env:RELEASE_REF -match '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$'
+          ) {
+            $env:RELEASE_REF
+          } else {
+            "v$env:RELEASE_VERSION"
+          }
+
+          $releaseUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$tag"
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+
+          $message = @"
+          ✅ ClashTray $env:RELEASE_VERSION 发布成功
+
+          Version: $tag
+          Commit: $shortSha
+
+          下载地址：
+          $releaseUrl
+          "@
+
+          $body = @{
+            chat_id                  = $env:TELEGRAM_CHAT_ID
+            text                     = $message
+            disable_web_page_preview = 'true'
+          }
+
+          $response = Invoke-RestMethod `
+            -Uri "https://api.telegram.org/bot$env:TELEGRAM_BOT_TOKEN/sendMessage" `
+            -Method Post `
+            -Body $body
+
+          if (-not $response.ok) {
+            throw 'Telegram notification failed.'
+          }
+
+          Write-Host "Telegram notification sent successfully."

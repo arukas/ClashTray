@@ -1,0 +1,321 @@
+using System.IO.Pipes;
+using System.Text.Json;
+using ClashTray.Contracts;
+
+namespace ClashTray.Core;
+
+internal interface IServicePipeClient
+{
+    public Task<ServiceResponse> SendAsync(ServiceCommand command, string? payload = null, CancellationToken cancellationToken = default);
+}
+
+internal interface IServiceRequestTransport
+{
+    public Task<ServiceResponse> SendAsync(ServiceRequest request, CancellationToken cancellationToken);
+}
+
+public sealed class ServicePipeClient : IServicePipeClient
+{
+    public const string PipeName = "ClashTray.Service";
+
+    private static readonly TimeSpan DefaultCommandTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan StatusCommandTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan LifecycleCommandTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan CoreUpdateCommandTimeout = TimeSpan.FromMinutes(6);
+    private const int ConnectTimeoutMilliseconds = 2000;
+    private readonly JsonSerializerOptions _options = new(JsonSerializerDefaults.Web);
+    private readonly IServiceRequestTransport? _transport;
+
+    public ServicePipeClient() { }
+
+    internal ServicePipeClient(IServiceRequestTransport transport) => _transport = transport;
+
+    public Task<ServiceResponse> SendAsync(ServiceCommand command, string? payload = null, CancellationToken cancellationToken = default) =>
+        SendOperationAsync(new ServiceRequest(Guid.NewGuid(), command, payload, ServiceProtocol.CurrentVersion), cancellationToken);
+
+    internal async Task<ServiceResponse> SendOperationAsync(ServiceRequest request, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.RequestId == Guid.Empty || request.ProtocolVersion != ServiceProtocol.CurrentVersion)
+        { throw new ArgumentException("Service operations require an identity and the current protocol.", nameof(request)); }
+        using CancellationTokenSource deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(GetCommandTimeout(request.Command));
+        ServiceRequestUnknownException firstFailure;
+        try
+        {
+            return await SendValidatedAttemptAsync(request, deadline.Token).ConfigureAwait(false);
+        }
+        catch (ServiceRequestUnknownException exception) when (!request.RecoveryOnly && !deadline.IsCancellationRequested)
+        { firstFailure = exception; }
+        try
+        {
+            // A recovery miss never executes a command after expiry/restart.
+            return await SendValidatedAttemptAsync(request with { RecoveryOnly = true }, deadline.Token).ConfigureAwait(false);
+        }
+        catch (IOException exception)
+        { throw Unknown(request, "服务原请求结果无法取回；需要核对已确认状态。", new AggregateException(firstFailure, exception)); }
+        catch (OperationCanceledException exception)
+        { throw Unknown(request, "等待原请求结果已取消；服务副作用可能已经发生。", new AggregateException(firstFailure, exception)); }
+    }
+
+    private async Task<ServiceResponse> SendValidatedAttemptAsync(ServiceRequest request, CancellationToken cancellationToken)
+    {
+        ServiceResponse response = await (_transport?.SendAsync(request, cancellationToken) ?? SendAttemptAsync(request, cancellationToken)).ConfigureAwait(false);
+        ValidateResponse(request, response);
+        return response;
+    }
+
+    private static void ValidateResponse(ServiceRequest request, ServiceResponse response)
+    {
+        if (response.RequestId != request.RequestId) { throw Unknown(request, "ClashTray service returned a mismatched response."); }
+        if (response.ProtocolVersion != ServiceProtocol.CurrentVersion)
+        {
+            throw new ServiceProtocolVersionMismatchException($"ClashTray 服务协议版本不兼容：期望 {ServiceProtocol.CurrentVersion}，实际 {response.ProtocolVersion}。请同步升级桌面程序与服务。", request.RequestId, response.ProtocolVersion);
+        }
+        if (response.DispatchState != ServiceDispatchState.Completed || response.ErrorCode == ServiceErrorCode.RequestResultUnavailable)
+        { throw Unknown(request, response.Error ?? "原请求结果已过期或服务实例已更换。"); }
+    }
+
+    private async Task<ServiceResponse> SendAttemptAsync(ServiceRequest request, CancellationToken cancellationToken)
+    {
+        ServiceCommand command = request.Command;
+        await using NamedPipeClientStream pipe = new(
+            ".",
+            PipeName,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous);
+        using CancellationTokenSource commandTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        TimeSpan timeout = GetCommandTimeout(command);
+        commandTimeout.CancelAfter(timeout);
+        try
+        {
+            await pipe.ConnectAsync(ConnectTimeoutMilliseconds, commandTimeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new ServiceUnavailableException(
+                $"服务命令 {command} 连接超时。",
+                null,
+                request.RequestId,
+                ServiceDispatchState.NotDispatched);
+        }
+        catch (TimeoutException exception)
+        {
+            throw new ServiceUnavailableException(
+                "ClashTray service is unavailable.",
+                exception,
+                request.RequestId,
+                ServiceDispatchState.NotDispatched);
+        }
+        catch (IOException exception)
+        {
+            throw new ServiceUnavailableException(
+                "ClashTray service is unavailable.",
+                exception,
+                request.RequestId,
+                ServiceDispatchState.NotDispatched);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            throw new ServiceUnavailableException(
+                "ClashTray service is unavailable.",
+                exception,
+                request.RequestId,
+                ServiceDispatchState.NotDispatched);
+        }
+
+        await using StreamWriter writer = new(pipe, leaveOpen: true) { AutoFlush = true };
+        using StreamReader reader = new(pipe, leaveOpen: true);
+        bool writeStarted = false;
+        bool dispatched = false;
+        try
+        {
+            string requestJson = JsonSerializer.Serialize(request, _options);
+            if (requestJson.Length > ServiceProtocol.MaximumRequestCharacters) { throw new InvalidDataException("Service request exceeded the size limit."); }
+            writeStarted = true;
+            await writer.WriteLineAsync(requestJson)
+                .WaitAsync(commandTimeout.Token)
+                .ConfigureAwait(false);
+            dispatched = true;
+
+            string? line = await ServiceMessageReader.ReadLineAsync(reader, ServiceProtocol.MaximumResponseCharacters, commandTimeout.Token).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                throw Unknown(request, "ClashTray service returned no response.");
+            }
+
+            ServiceResponse response = JsonSerializer.Deserialize<ServiceResponse>(line, _options)
+                ?? throw Unknown(request, "ClashTray service returned an invalid response.");
+            if (response.RequestId != request.RequestId)
+            {
+                throw Unknown(request, "ClashTray service returned a mismatched response.");
+            }
+
+            if (response.ProtocolVersion != ServiceProtocol.CurrentVersion)
+            {
+                throw new ServiceProtocolVersionMismatchException(
+                    $"ClashTray 服务协议版本不兼容：期望 {ServiceProtocol.CurrentVersion}，实际 {response.ProtocolVersion}。请同步升级或重装 ClashTray 服务。",
+                    request.RequestId,
+                    response.ProtocolVersion);
+            }
+
+            if (response.DispatchState != ServiceDispatchState.Completed)
+            {
+                throw Unknown(request, "ClashTray service returned an incomplete dispatch state.");
+            }
+
+            return response;
+        }
+        catch (OperationCanceledException) when (dispatched || writeStarted)
+        {
+            throw Unknown(request, $"服务命令 {command} 已发送，但结果无法确认。");
+        }
+        catch (ServiceProtocolVersionMismatchException) { throw; }
+        catch (JsonException exception)
+        {
+            throw Unknown(request, "ClashTray service returned invalid data.", exception);
+        }
+        catch (IOException exception)
+        {
+            if (writeStarted)
+            {
+                throw Unknown(request, "ClashTray service request result is unknown.", exception);
+            }
+
+            throw new ServiceUnavailableException(
+                "ClashTray service is unavailable.",
+                exception,
+                request.RequestId,
+                ServiceDispatchState.NotDispatched);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            if (writeStarted)
+            {
+                throw Unknown(request, "ClashTray service request access was lost after dispatch.", exception);
+            }
+
+            throw new ServiceUnavailableException(
+                "ClashTray service is unavailable.",
+                exception,
+                request.RequestId,
+                ServiceDispatchState.NotDispatched);
+        }
+    }
+
+    internal static TimeSpan GetCommandTimeout(ServiceCommand command) => command switch
+    {
+        ServiceCommand.GetStatus => StatusCommandTimeout,
+        ServiceCommand.StartCore
+            or ServiceCommand.StopCore
+            or ServiceCommand.RestartCore => LifecycleCommandTimeout,
+        ServiceCommand.InstallCore
+            or ServiceCommand.RollbackCore => CoreUpdateCommandTimeout,
+        _ => DefaultCommandTimeout
+    };
+
+    private static ServiceRequestUnknownException Unknown(
+        ServiceRequest request,
+        string message,
+        Exception? innerException = null) =>
+        new(
+            message,
+            innerException,
+            request.RequestId,
+            ServiceDispatchState.DispatchedAwaitingResult);
+}
+
+internal sealed class ServiceUnavailableException : IOException
+{
+    public ServiceUnavailableException()
+        : this("ClashTray service is unavailable.", null, Guid.Empty, ServiceDispatchState.NotDispatched)
+    {
+    }
+
+    public ServiceUnavailableException(string message)
+        : this(message, null, Guid.Empty, ServiceDispatchState.NotDispatched)
+    {
+    }
+
+    public ServiceUnavailableException(string message, Exception innerException)
+        : this(message, innerException, Guid.Empty, ServiceDispatchState.NotDispatched)
+    {
+    }
+
+    public ServiceUnavailableException(
+        string message,
+        Exception? innerException,
+        Guid requestId,
+        ServiceDispatchState dispatchState)
+        : base(message, innerException)
+    {
+        RequestId = requestId;
+        DispatchState = dispatchState;
+    }
+
+    public Guid RequestId { get; }
+
+    public ServiceDispatchState DispatchState { get; }
+}
+
+internal sealed class ServiceProtocolVersionMismatchException : IOException
+{
+    public ServiceProtocolVersionMismatchException()
+        : this("ClashTray 服务协议版本不兼容。", Guid.Empty, 0)
+    {
+    }
+
+    public ServiceProtocolVersionMismatchException(string message)
+        : this(message, Guid.Empty, 0)
+    {
+    }
+
+    public ServiceProtocolVersionMismatchException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+
+    public ServiceProtocolVersionMismatchException(string message, Guid requestId, int actualVersion)
+        : base(message)
+    {
+        RequestId = requestId;
+        ActualVersion = actualVersion;
+    }
+
+    public Guid RequestId { get; }
+
+    public int ActualVersion { get; }
+}
+
+internal sealed class ServiceRequestUnknownException : IOException
+{
+    public ServiceRequestUnknownException()
+        : this("ClashTray service request result is unknown.", null, Guid.Empty, ServiceDispatchState.DispatchedAwaitingResult)
+    {
+    }
+
+    public ServiceRequestUnknownException(string message)
+        : this(message, null, Guid.Empty, ServiceDispatchState.DispatchedAwaitingResult)
+    {
+    }
+
+    public ServiceRequestUnknownException(string message, Exception innerException)
+        : this(message, innerException, Guid.Empty, ServiceDispatchState.DispatchedAwaitingResult)
+    {
+    }
+
+    public ServiceRequestUnknownException(
+        string message,
+        Exception? innerException,
+        Guid requestId,
+        ServiceDispatchState dispatchState)
+        : base(message, innerException)
+    {
+        RequestId = requestId;
+        DispatchState = dispatchState;
+    }
+
+    public Guid RequestId { get; }
+
+    public ServiceDispatchState DispatchState { get; }
+}

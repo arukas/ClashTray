@@ -1,0 +1,459 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <resheader name="resmimetype"><value>text/microsoft-resx</value></resheader>
+  <resheader name="version"><value>2.0</value></resheader>
+  <resheader name="reader"><value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+  <resheader name="writer"><value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value></resheader>
+
+  <!-- MainWindow chrome -->
+  <data name="LogoButton.AutomationProperties.Name" xml:space="preserve"><value>ClashTray Logo</value></data>
+  <data name="CoreStateText.Text" xml:space="preserve"><value>已停止</value></data>
+  <data name="ControllerStateConnected" xml:space="preserve"><value>已连接</value></data>
+  <data name="ControllerStateConnecting" xml:space="preserve"><value>连接中</value></data>
+  <data name="ControllerStateReconnecting" xml:space="preserve"><value>正在重连</value></data>
+  <data name="ControllerStateAuthenticationFailed" xml:space="preserve"><value>认证失败</value></data>
+  <data name="ControllerStateCertificateFailed" xml:space="preserve"><value>证书验证失败</value></data>
+  <data name="ControllerStateIncompatible" xml:space="preserve"><value>端点不兼容</value></data>
+  <data name="ControllerStateFailed" xml:space="preserve"><value>连接失败</value></data>
+  <data name="ControllerStateDisconnected" xml:space="preserve"><value>未连接</value></data>
+  <data name="ControllerErrorWithDetailFormat" xml:space="preserve"><value>{0}：{1}</value></data>
+  <data name="ControllerErrorAuthentication" xml:space="preserve"><value>远程控制器认证失败</value></data>
+  <data name="ControllerErrorCertificate" xml:space="preserve"><value>远程控制器证书验证失败</value></data>
+  <data name="ControllerErrorIncompatible" xml:space="preserve"><value>远程控制器不兼容</value></data>
+  <data name="ControllerErrorStale" xml:space="preserve"><value>远程控制器数据已过期，当前视图为只读</value></data>
+  <data name="ControllerErrorTransport" xml:space="preserve"><value>远程控制器连接失败</value></data>
+  <data name="ControllerLastConfirmedFormat" xml:space="preserve"><value>上次确认：{0}</value></data>
+  <data name="ControllerNoConfirmedData" xml:space="preserve"><value>尚无已确认数据</value></data>
+  <data name="ControllerEndpointButton.Content" xml:space="preserve"><value>核心未运行</value></data>
+  <data name="ControllerEndpointButton.AutomationProperties.Name" xml:space="preserve"><value>打开本机控制器</value></data>
+  <data name="ThemeButton.ToolTipService.ToolTip" xml:space="preserve"><value>切换主题</value></data>
+  <data name="ThemeButton.AutomationProperties.Name" xml:space="preserve"><value>切换主题</value></data>
+  <data name="ThemeFlyoutTitle.Text" xml:space="preserve"><value>界面主题</value></data>
+  <data name="SystemThemeOption.Content" xml:space="preserve"><value>自动（跟随系统）</value></data>
+  <data name="LightThemeOption.Content" xml:space="preserve"><value>浅色</value></data>
+  <data name="DarkThemeOption.Content" xml:space="preserve"><value>深色</value></data>
+  <data name="PinButton.ToolTipService.ToolTip" xml:space="preserve"><value>固定窗口</value></data>
+  <data name="PinButton.AutomationProperties.Name" xml:space="preserve"><value>固定窗口</value></data>
+  <data name="ReloadConfigurationButton.ToolTipService.ToolTip" xml:space="preserve"><value>重新加载配置</value></data>
+  <data name="ReloadConfigurationButton.AutomationProperties.Name" xml:space="preserve"><value>重新加载配置</value></data>
+  <data name="CoreActionButton.ToolTipService.ToolTip" xml:space="preserve"><value>启动核心</value></data>
+  <data name="CoreActionButton.AutomationProperties.Name" xml:space="preserve"><value>启动或重启核心</value></data>
+  <data name="RuleModeText.Text" xml:space="preserve"><value>规则</value></data>
+  <data name="GlobalModeText.Text" xml:space="preserve"><value>全局</value></data>
+  <data name="DirectModeText.Text" xml:space="preserve"><value>直连</value></data>
+  <data name="ProxyPageButton.Content" xml:space="preserve"><value>节点</value></data>
+  <data name="RulesPageButton.Content" xml:space="preserve"><value>规则</value></data>
+  <data name="ConnectionsPageButton.Content" xml:space="preserve"><value>连接</value></data>
+  <data name="LogsPageButton.Content" xml:space="preserve"><value>日志</value></data>
+  <data name="SettingsPageButton.Content" xml:space="preserve"><value>设置</value></data>
+  <data name="ConnectionsUnitText.Text" xml:space="preserve"><value>连接</value></data>
+  <data name="TrafficGraph.AutomationProperties.Name" xml:space="preserve"><value>最近一分钟上传和下载速度</value></data>
+  <data name="TotalTrafficText.Text" xml:space="preserve"><value>累计 ↑ 0 KB  ↓ 0 KB</value></data>
+  <data name="ConfigButton.AutomationProperties.Name" xml:space="preserve"><value>切换和管理配置</value></data>
+  <data name="ConfigManagementTitle.Text" xml:space="preserve"><value>配置管理</value></data>
+  <data name="ConfigurationsComboBox.PlaceholderText" xml:space="preserve"><value>选择配置</value></data>
+  <data name="ImportLocalButton.Content" xml:space="preserve"><value>导入 YAML</value></data>
+  <data name="ImportSubscriptionButton.Content" xml:space="preserve"><value>添加订阅</value></data>
+  <data name="ReloadConfigButton.Content" xml:space="preserve"><value>重新加载</value></data>
+  <data name="DeleteConfigButton.Content" xml:space="preserve"><value>删除配置</value></data>
+  <data name="ConfigRowLabel.Text" xml:space="preserve"><value>配置</value></data>
+  <data name="ConfigurationText.Text" xml:space="preserve"><value>导入配置</value></data>
+  <data name="SystemProxyLabel.Text" xml:space="preserve"><value>系统代理</value></data>
+  <data name="SystemProxyStateText.Text" xml:space="preserve"><value>已关闭</value></data>
+  <data name="SystemProxySwitch.AutomationProperties.Name" xml:space="preserve"><value>系统代理</value></data>
+  <data name="TunLabel.Text" xml:space="preserve"><value>TUN 模式</value></data>
+  <data name="TunStateText.Text" xml:space="preserve"><value>已关闭</value></data>
+  <data name="TunSwitch.AutomationProperties.Name" xml:space="preserve"><value>TUN 模式</value></data>
+  <data name="ProxyPortsLabel.Text" xml:space="preserve"><value>代理端口</value></data>
+  <data name="HttpEndpointButton.ToolTipService.ToolTip" xml:space="preserve"><value>复制 HTTP 代理地址</value></data>
+  <data name="MixedEndpointButton.ToolTipService.ToolTip" xml:space="preserve"><value>复制 Mixed 代理地址</value></data>
+  <data name="QuitButton.Content" xml:space="preserve"><value>退出</value></data>
+
+  <!-- ProxyPage -->
+  <data name="ProxyGroupsTitle.Text" xml:space="preserve"><value>代理组</value></data>
+  <data name="NodeCountText.Text" xml:space="preserve"><value>0 组</value></data>
+  <data name="NodeSearchBox.PlaceholderText" xml:space="preserve"><value>搜索组或节点</value></data>
+  <data name="NodeSearchBox.AutomationProperties.Name" xml:space="preserve"><value>搜索代理组或节点</value></data>
+  <data name="ProviderTitle.Text" xml:space="preserve"><value>代理提供者</value></data>
+  <data name="NoResultsText.Text" xml:space="preserve"><value>没有匹配的节点，试试其他关键词。</value></data>
+  <data name="EmptyTitle.Text" xml:space="preserve"><value>还没有代理组</value></data>
+  <data name="EmptyHint.Text" xml:space="preserve"><value>点击上方“配置”导入 YAML 或订阅，
+启动核心后，代理组与节点会显示在这里。</value></data>
+
+  <!-- RulesPage -->
+  <data name="RulesTitle.Text" xml:space="preserve"><value>规则</value></data>
+  <data name="RulesSubtitle.Text" xml:space="preserve"><value>查看当前连接匹配到的 Mihomo 规则</value></data>
+  <data name="RulesSearchBox.PlaceholderText" xml:space="preserve"><value>搜索规则、域名或策略</value></data>
+  <data name="RulesFilterAllItem.Content" xml:space="preserve"><value>全部</value></data>
+  <data name="RulesFilterDomainItem.Content" xml:space="preserve"><value>域名</value></data>
+  <data name="RulesFilterIpItem.Content" xml:space="preserve"><value>IP</value></data>
+  <data name="RefreshRulesButton.Content" xml:space="preserve"><value>刷新</value></data>
+  <data name="RulesListView.AutomationProperties.Name" xml:space="preserve"><value>规则列表</value></data>
+  <data name="RulesEmptyListText.Text" xml:space="preserve"><value>没有可显示的规则</value></data>
+
+  <!-- ConnectionsPage -->
+  <data name="ConnectionsTitle.Text" xml:space="preserve"><value>连接</value></data>
+  <data name="ConnectionsSubtitle.Text" xml:space="preserve"><value>查看并管理当前活动连接</value></data>
+  <data name="CloseAllButton.Content" xml:space="preserve"><value>关闭全部</value></data>
+  <data name="ConnectionsSearchBox.PlaceholderText" xml:space="preserve"><value>搜索地址、规则或策略</value></data>
+  <data name="SortNewestItem.Content" xml:space="preserve"><value>最新</value></data>
+  <data name="SortUploadItem.Content" xml:space="preserve"><value>上传</value></data>
+  <data name="SortDownloadItem.Content" xml:space="preserve"><value>下载</value></data>
+  <data name="ConnectionsEmptyListText.Text" xml:space="preserve"><value>当前没有匹配的连接</value></data>
+  <data name="ConnectionDetailsTitle.Text" xml:space="preserve"><value>连接详情</value></data>
+  <data name="CloseSelectedButton.Content" xml:space="preserve"><value>关闭选中</value></data>
+  <data name="ConnectionDetailsText.Text" xml:space="preserve"><value>选择连接查看详情</value></data>
+
+  <!-- LogsPage -->
+  <data name="LogsTitle.Text" xml:space="preserve"><value>日志</value></data>
+  <data name="LogsSubtitle.Text" xml:space="preserve"><value>实时查看 ClashTray 与 Mihomo 运行记录</value></data>
+  <data name="CopyLogsButton.Content" xml:space="preserve"><value>复制</value></data>
+  <data name="ClearLogsButton.Content" xml:space="preserve"><value>清空</value></data>
+  <data name="LogsSearchBox.PlaceholderText" xml:space="preserve"><value>搜索日志内容</value></data>
+  <data name="LevelAllItem.Content" xml:space="preserve"><value>全部</value></data>
+  <data name="LogLevelInfoItem.Content" xml:space="preserve"><value>信息</value></data>
+  <data name="LogLevelWarningItem.Content" xml:space="preserve"><value>警告</value></data>
+  <data name="LogLevelErrorItem.Content" xml:space="preserve"><value>错误</value></data>
+  <data name="LogLevelDebugItem.Content" xml:space="preserve"><value>调试</value></data>
+  <data name="SourceAllItem.Content" xml:space="preserve"><value>全部来源</value></data>
+  <data name="SourceClashTrayItem.Content" xml:space="preserve"><value>ClashTray</value></data>
+  <data name="SourceMihomoItem.Content" xml:space="preserve"><value>Mihomo</value></data>
+  <data name="LogsListView.AutomationProperties.Name" xml:space="preserve"><value>日志列表</value></data>
+  <data name="LogsEmptyListText.Text" xml:space="preserve"><value>暂无匹配的日志</value></data>
+
+  <!-- SettingsPage -->
+  <data name="SettingsTitle.Text" xml:space="preserve"><value>设置</value></data>
+  <data name="SettingsSubtitle.Text" xml:space="preserve"><value>调整启动、代理端口和 Mihomo 运行参数</value></data>
+  <data name="SettingsSaveHint.Text" xml:space="preserve"><value>修改后请点击下方“保存设置”生效。</value></data>
+  <data name="RunModeHeader.Text" xml:space="preserve"><value>运行方式</value></data>
+  <data name="NetworkConfigurationHeader.Text" xml:space="preserve"><value>网络配置</value></data>
+  <data name="StartWithWindowsSwitch.Header" xml:space="preserve"><value>随 Windows 启动</value></data>
+  <data name="StartCoreSwitch.Header" xml:space="preserve"><value>启动后自动启动核心</value></data>
+  <data name="AllowLanSwitch.Header" xml:space="preserve"><value>允许局域网连接</value></data>
+  <data name="Ipv6Switch.Header" xml:space="preserve"><value>启用 IPv6</value></data>
+  <data name="TcpConcurrentSwitch.Header" xml:space="preserve"><value>启用 TCP 并发</value></data>
+  <data name="DisconnectAfterProxySwitch.Header" xml:space="preserve"><value>切换节点后断开现有连接</value></data>
+  <data name="DisconnectAfterProxySwitchHint.Text" xml:space="preserve"><value>开启后，节点切换成功会中断现有连接，让新连接立即使用所选节点。</value></data>
+  <data name="RestartOnChangeHint.Text" xml:space="preserve"><value>核心运行时修改端口、控制器端口、TUN 协议栈、TCP 并发或日志级别会自动受控重启；修改 Mixed 端口会先恢复再重新应用系统代理。</value></data>
+  <data name="NetworkConfigurationRestartHint.Text" xml:space="preserve"><value>核心运行时修改 TUN 协议栈、HTTP、SOCKS5、Mixed、控制器端口或 TCP 并发会自动受控重启；核心未运行时将在下次启动生效。</value></data>
+  <data name="NetworkConfigurationImmediateHint.Text" xml:space="preserve"><value>系统代理和 TUN 开关是即时操作，需要本机 Mihomo 核心已运行；界面只显示 Windows、服务和核心确认后的实际状态。</value></data>
+  <data name="ProgramOverridesHint.Text" xml:space="preserve"><value>此处的 TUN 协议栈、允许局域网连接和 IPv6 设置由 ClashTray 保存并优先控制；“跟随配置文件”不会覆盖配置文件中的 stack。</value></data>
+  <data name="SaveSettingsButton.Content" xml:space="preserve"><value>保存设置</value></data>
+  <data name="SaveNetworkSettingsButton.Content" xml:space="preserve"><value>保存网络配置</value></data>
+  <data name="NetworkSwitchHeader.Text" xml:space="preserve"><value>按网络自动切换配置</value></data>
+  <data name="NetworkSwitchRulesHeader.Text" xml:space="preserve"><value>SSID 规则</value></data>
+  <data name="NetworkSwitchRulesHint.Text" xml:space="preserve"><value>匹配精确的 Wi-Fi 名称。关闭的规则会保留但不会参与选择；不可用的目标会保留并提示，不会被自动应用。</value></data>
+  <data name="NetworkSwitchRulesListView.AutomationProperties.Name" xml:space="preserve"><value>SSID 网络切换规则</value></data>
+  <data name="AddNetworkRuleButton.Content" xml:space="preserve"><value>添加 SSID 规则</value></data>
+  <data name="NetworkSwitchEnabledSwitch.Header" xml:space="preserve"><value>网络变化后自动切换配置</value></data>
+  <data name="NetworkSwitchDefaultConfigurationBox.Header" xml:space="preserve"><value>默认配置</value></data>
+  <data name="NetworkSwitchHint.Text" xml:space="preserve"><value>SSID 规则将在单独的区域编辑。自动切换会等待网络稳定；手动选择配置后会暂时覆盖自动切换。</value></data>
+  <data name="SaveNetworkSwitchButton.Content" xml:space="preserve"><value>保存网络切换</value></data>
+  <data name="ResumeNetworkSwitchButton.Content" xml:space="preserve"><value>恢复自动切换</value></data>
+  <data name="PortsHeader.Text" xml:space="preserve"><value>端口与代理</value></data>
+  <data name="TunStackBox.Header" xml:space="preserve"><value>TUN 协议栈</value></data>
+  <data name="TunStackConfigurationItem.Content" xml:space="preserve"><value>跟随配置文件</value></data>
+  <data name="TunStackSystemItem.Content" xml:space="preserve"><value>System（系统协议栈）</value></data>
+  <data name="TunStackGvisorItem.Content" xml:space="preserve"><value>gVisor（用户态协议栈）</value></data>
+  <data name="TunStackMixedItem.Content" xml:space="preserve"><value>Mixed（推荐）</value></data>
+  <data name="TunStackMipsItem.Content" xml:space="preserve"><value>MIPS（Mihomo 协议栈）</value></data>
+  <data name="HttpPortBox.Header" xml:space="preserve"><value>HTTP</value></data>
+  <data name="SocksPortBox.Header" xml:space="preserve"><value>SOCKS</value></data>
+  <data name="MixedPortBox.Header" xml:space="preserve"><value>Mixed</value></data>
+  <data name="HttpPortLabel" xml:space="preserve"><value>HTTP</value></data>
+  <data name="SocksPortLabel" xml:space="preserve"><value>SOCKS</value></data>
+  <data name="MixedPortLabel" xml:space="preserve"><value>Mixed</value></data>
+  <data name="ControllerPortBox.Header" xml:space="preserve"><value>控制器</value></data>
+  <data name="ControllerPortLabel" xml:space="preserve"><value>控制器</value></data>
+  <data name="ControllerPortPolicyBox.Header" xml:space="preserve"><value>控制器端口冲突策略</value></data>
+  <data name="ControllerPortAutomaticItem.Content" xml:space="preserve"><value>自动避让（首选端口冲突时选择可用高位端口）</value></data>
+  <data name="ControllerPortFixedItem.Content" xml:space="preserve"><value>固定端口（冲突时停止并提示）</value></data>
+  <data name="ControllerPortPolicyHint.Text" xml:space="preserve"><value>启动前会探测控制器及 HTTP、SOCKS、Mixed 监听。固定 IP 的 DNS listen 和 HTTP、SOCKS、Mixed、redir、tproxy listener 会按 TCP/UDP 预检；无法静态识别的语法会保留配置，并在核心日志中提示检查限制。</value></data>
+  <data name="ActiveControllerAddressText.Text" xml:space="preserve"><value>当前实际管理地址尚未确认。</value></data>
+  <data name="ControllerActualAddressFormat" xml:space="preserve"><value>当前实际管理地址：127.0.0.1:{0}</value></data>
+  <data name="ControllerActualAddressNotConfirmed" xml:space="preserve"><value>当前实际管理地址尚未确认。</value></data>
+  <data name="StartWithAvailableControllerPortButton.Content" xml:space="preserve"><value>本次使用可用控制器端口并启动</value></data>
+  <data name="ControllerPortOneTimeStartSucceeded" xml:space="preserve"><value>已在控制器端口 {0} 确认核心运行；保存的首选端口未更改。</value></data>
+  <data name="ControllerPortOneTimeStartFailedFormat" xml:space="preserve"><value>使用可用端口启动失败：{0}</value></data>
+  <data name="ControllerPortOneTimeStartAlreadyRunning" xml:space="preserve"><value>核心已在运行；本次操作没有更改控制器端口。</value></data>
+  <data name="ControllerPortOneTimeStartBusy" xml:space="preserve"><value>另一个核心操作正在进行，请稍后重试。</value></data>
+  <data name="ControllerPortOneTimeStartCoreMissing" xml:space="preserve"><value>未找到 Mihomo 核心，请先在设置中安装或选择 mihomo.exe。</value></data>
+  <data name="ControllerPortOneTimeStartConfigurationMissing" xml:space="preserve"><value>请先导入一个 Mihomo 配置，然后再启动核心。</value></data>
+  <data name="ControllerPortOneTimeStartInvalidConfiguration" xml:space="preserve"><value>Mihomo 配置验证失败；请检查 YAML 和核心验证结果。</value></data>
+  <data name="ControllerPortOneTimeStartPortConflict" xml:space="preserve"><value>代理或控制器监听端口冲突；核心未确认启动。</value></data>
+  <data name="ControllerPortOneTimeStartCandidatesExhausted" xml:space="preserve"><value>未找到可用的控制器端口；候选端口数量已达到上限。</value></data>
+  <data name="ControllerPortOneTimeStartTimedOut" xml:space="preserve"><value>启动超时，未确认核心运行；系统代理不会按本次操作启用。</value></data>
+  <data name="ControllerPortOneTimeStartCancelled" xml:space="preserve"><value>核心启动已取消，未将其报告为成功。</value></data>
+  <data name="ControllerPortOneTimeStartFailed" xml:space="preserve"><value>未能确认核心运行；请检查核心状态和诊断日志。</value></data>
+  <data name="BypassListBox.Header" xml:space="preserve"><value>系统代理绕过列表</value></data>
+  <data name="BypassListBox.PlaceholderText" xml:space="preserve"><value>使用分号分隔，例如 localhost;127.*</value></data>
+  <data name="SubscriptionRefreshHeader.Text" xml:space="preserve"><value>订阅刷新间隔</value></data>
+  <data name="SubscriptionRefreshHoursBox.Header" xml:space="preserve"><value>小时</value></data>
+  <data name="LogLevelBox.Header" xml:space="preserve"><value>日志级别</value></data>
+  <data name="ThemeBox.Header" xml:space="preserve"><value>主题</value></data>
+  <data name="ThemeSystemItem.Content" xml:space="preserve"><value>跟随系统</value></data>
+  <data name="ThemeLightItem.Content" xml:space="preserve"><value>浅色</value></data>
+  <data name="ThemeDarkItem.Content" xml:space="preserve"><value>深色</value></data>
+  <data name="LanguageBox.Header" xml:space="preserve"><value>语言</value></data>
+  <data name="LanguageSystemItem.Content" xml:space="preserve"><value>跟随系统</value></data>
+  <data name="LanguageZhCNItem.Content" xml:space="preserve"><value>简体中文</value></data>
+  <data name="LanguageEnUSItem.Content" xml:space="preserve"><value>English</value></data>
+  <data name="ClearDnsButton.Content" xml:space="preserve"><value>清理 DNS</value></data>
+  <data name="ClearFakeIpButton.Content" xml:space="preserve"><value>清理 FakeIP</value></data>
+  <data name="UpdateGeoButton.Content" xml:space="preserve"><value>更新 Geo</value></data>
+  <data name="ProvidersHeader.Text" xml:space="preserve"><value>Provider</value></data>
+  <data name="ProvidersListView.AutomationProperties.Name" xml:space="preserve"><value>Provider 状态列表</value></data>
+  <data name="RefreshProviderButton.Content" xml:space="preserve"><value>刷新选中的 Provider</value></data>
+  <data name="CoreUpdateExpander.Header" xml:space="preserve"><value>核心更新</value></data>
+  <data name="CoreVersionBox.Header" xml:space="preserve"><value>版本</value></data>
+  <data name="CoreVersionBox.PlaceholderText" xml:space="preserve"><value>例如 v1.19.31</value></data>
+  <data name="CoreDownloadUriBox.Header" xml:space="preserve"><value>官方 GitHub 下载地址</value></data>
+  <data name="CoreSha256Box.Header" xml:space="preserve"><value>ZIP SHA-256（可选）</value></data>
+  <data name="CoreSha256Box.PlaceholderText" xml:space="preserve"><value>64 位十六进制校验值；留空则不校验</value></data>
+  <data name="InstallCoreButton.Content" xml:space="preserve"><value>下载并安装核心</value></data>
+  <data name="NetworkSwitchNoDefault" xml:space="preserve"><value>不设置默认配置</value></data>
+  <data name="NetworkSwitchSsidHeader" xml:space="preserve"><value>Wi-Fi 名称</value></data>
+  <data name="NetworkSwitchSsidPlaceholder" xml:space="preserve"><value>精确 SSID</value></data>
+  <data name="NetworkSwitchTargetHeader" xml:space="preserve"><value>目标配置</value></data>
+  <data name="NetworkSwitchRuleEnabled" xml:space="preserve"><value>启用规则</value></data>
+  <data name="NetworkSwitchRemoveRule" xml:space="preserve"><value>删除</value></data>
+  <data name="NetworkSwitchNoTarget" xml:space="preserve"><value>选择一个配置</value></data>
+  <data name="NetworkSwitchRuleLimit" xml:space="preserve"><value>最多支持 128 条网络规则。</value></data>
+  <data name="NetworkSwitchSsidRequired" xml:space="preserve"><value>请为每条网络规则填写 SSID。</value></data>
+  <data name="NetworkSwitchTargetRequired" xml:space="preserve"><value>请为每条网络规则选择目标配置。</value></data>
+  <data name="NetworkSwitchDuplicateSsid" xml:space="preserve"><value>启用的 SSID 规则不能重复。</value></data>
+  <data name="NetworkSwitchMissingConfigurationFormat" xml:space="preserve"><value>不可用：{0}</value></data>
+  <data name="NetworkSwitchUnavailable" xml:space="preserve"><value>网络上下文不可用</value></data>
+  <data name="NetworkSwitchStateDisabled" xml:space="preserve"><value>自动切换已暂停</value></data>
+  <data name="NetworkSwitchStateWaiting" xml:space="preserve"><value>等待网络稳定</value></data>
+  <data name="NetworkSwitchStatePermission" xml:space="preserve"><value>需要 Windows 权限才能读取网络</value></data>
+  <data name="OpenNetworkPermissionButton.Content" xml:space="preserve"><value>打开 Windows 网络权限</value></data>
+  <data name="NetworkPermissionSettingsOpened" xml:space="preserve"><value>已打开 Windows 网络权限设置。请允许位置访问，然后返回 ClashTray。</value></data>
+  <data name="NetworkPermissionSettingsUnavailable" xml:space="preserve"><value>无法打开 Windows 网络权限设置。</value></data>
+  <data name="NetworkSwitchStateAmbiguous" xml:space="preserve"><value>有多个活动网络，需要进一步处理</value></data>
+  <data name="NetworkSwitchStateEvaluating" xml:space="preserve"><value>正在评估网络规则</value></data>
+  <data name="NetworkSwitchStateSwitching" xml:space="preserve"><value>正在切换配置</value></data>
+  <data name="NetworkSwitchStateManual" xml:space="preserve"><value>手动配置覆盖已生效</value></data>
+  <data name="NetworkSwitchStateCooling" xml:space="preserve"><value>自动切换后正在冷却</value></data>
+  <data name="NetworkSwitchStateFailed" xml:space="preserve"><value>自动切换失败</value></data>
+  <data name="NetworkSwitchNoNetwork" xml:space="preserve"><value>未识别到 SSID</value></data>
+  <data name="NetworkSwitchStatusFormat" xml:space="preserve"><value>{0} · 网络：{1}</value></data>
+  <data name="NetworkSwitchStatusErrorFormat" xml:space="preserve"><value>{0} · {1}</value></data>
+  <data name="NetworkSwitchErrorTargetMissing" xml:space="preserve"><value>匹配规则的目标配置不可用，已保持当前配置</value></data>
+  <data name="NetworkSwitchErrorExecution" xml:space="preserve"><value>自动切换执行失败，已保持当前配置</value></data>
+  <data name="NetworkSwitchEnableConfirmTitle" xml:space="preserve"><value>启用按网络自动切换？</value></data>
+  <data name="NetworkSwitchEnableConfirmContent" xml:space="preserve"><value>网络稳定后，ClashTray 可能会切换当前 Mihomo 配置。此选项不会修改系统代理或 TUN 设置。</value></data>
+  <data name="NetworkSwitchEnableConfirmPrimary" xml:space="preserve"><value>启用</value></data>
+  <data name="NetworkSwitchSaved" xml:space="preserve"><value>网络切换设置已保存。</value></data>
+  <data name="NetworkSwitchResumeRequested" xml:space="preserve"><value>下一次网络评估时会恢复自动切换。</value></data>
+
+  <!-- Runtime text: core states and header -->
+  <data name="CoreStateRunning" xml:space="preserve"><value>运行中</value></data>
+  <data name="CoreStateValidating" xml:space="preserve"><value>验证中</value></data>
+  <data name="CoreStateStarting" xml:space="preserve"><value>启动中</value></data>
+  <data name="CoreStateStopping" xml:space="preserve"><value>停止中</value></data>
+  <data name="CoreStateRestarting" xml:space="preserve"><value>重启中</value></data>
+  <data name="CoreStateFailed" xml:space="preserve"><value>异常</value></data>
+  <data name="CoreStateMissing" xml:space="preserve"><value>未安装</value></data>
+  <data name="CoreStateStopped" xml:space="preserve"><value>已停止</value></data>
+  <data name="ToolTipStartCore" xml:space="preserve"><value>启动核心</value></data>
+  <data name="ToolTipRestartCore" xml:space="preserve"><value>重启核心</value></data>
+  <data name="CoreVersionIdleFormat" xml:space="preserve"><value>ClashTray {0} · Mihomo 未启动</value></data>
+  <data name="CoreVersionRunningFormat" xml:space="preserve"><value>Mihomo {0} · ClashTray {1}</value></data>
+  <data name="ControllerCoreNotRunning" xml:space="preserve"><value>核心未运行</value></data>
+  <data name="ControllerRemoteNotAvailable" xml:space="preserve"><value>远程端点不提供本机控制器</value></data>
+  <data name="ControllerRemoteFormat" xml:space="preserve"><value>远程 · {0}</value></data>
+  <data name="RemoteCoreActionUnavailable" xml:space="preserve"><value>远程端点不能控制本机核心</value></data>
+  <data name="RemoteLocalNetworkActionUnavailable" xml:space="preserve"><value>远程端点不能控制本机网络状态</value></data>
+  <data name="RemoteControllerReadOnly" xml:space="preserve"><value>远程控制器数据已过期，重新连接后才能修改</value></data>
+  <data name="RemoteControllerCapabilityUnavailable" xml:space="preserve"><value>此远程控制器未声明所需能力</value></data>
+  <data name="ToolTipControllerNeedsCore" xml:space="preserve"><value>核心运行后可打开本机控制器</value></data>
+  <data name="ToolTipControllerOpenDashboard" xml:space="preserve"><value>在默认浏览器打开 MetaCubeXD</value></data>
+  <data name="ToolTipControllerMissingDashboard" xml:space="preserve"><value>MetaCubeXD 资源缺失；点击复制本机控制器地址</value></data>
+  <data name="AutomationOpenDashboard" xml:space="preserve"><value>打开 MetaCubeXD</value></data>
+  <data name="AutomationOpenOrCopyController" xml:space="preserve"><value>打开或复制本机控制器地址</value></data>
+  <data name="TrafficUnavailable" xml:space="preserve"><value>↑ 暂不可用  ↓ 暂不可用</value></data>
+  <data name="MemoryUnavailable" xml:space="preserve"><value>暂不可用</value></data>
+  <data name="TotalTrafficFormat" xml:space="preserve"><value>累计 ↑ {0}  ↓ {1}</value></data>
+  <data name="TotalTrafficUnavailable" xml:space="preserve"><value>累计流量暂不可用</value></data>
+  <data name="SwitchStateOn" xml:space="preserve"><value>已开启</value></data>
+  <data name="SwitchStateEnabling" xml:space="preserve"><value>开启中</value></data>
+  <data name="SwitchStateDisabling" xml:space="preserve"><value>关闭中</value></data>
+  <data name="SwitchStateRestoreRequired" xml:space="preserve"><value>需要恢复</value></data>
+  <data name="SwitchStateFailed" xml:space="preserve"><value>操作失败</value></data>
+  <data name="SwitchStateOff" xml:space="preserve"><value>已关闭</value></data>
+  <data name="TunStateUnavailable" xml:space="preserve"><value>服务未安装</value></data>
+  <data name="TunStateUnknown" xml:space="preserve"><value>无法确认</value></data>
+  <data name="TunStateRecovering" xml:space="preserve"><value>正在恢复</value></data>
+  <data name="TunRecoveryMissingAddress" xml:space="preserve"><value>TUN 启动失败，Mihomo 已自动恢复，当前 TUN 已关闭。
+原因：缺少可用的接口地址。</value></data>
+  <data name="TunConfigurationMissingAddress" xml:space="preserve"><value>TUN 无法开启，当前 TUN 保持关闭。
+原因：配置没有可用的接口地址。</value></data>
+  <data name="TunRecoveryUnknown" xml:space="preserve"><value>TUN 状态无法确认。为避免影响网络，未继续重试；请检查服务和诊断日志。</value></data>
+  <data name="OperationBusy" xml:space="preserve"><value>操作正在进行，请稍后重试。</value></data>
+  <data name="ConfigImportPrompt" xml:space="preserve"><value>导入配置</value></data>
+  <data name="ToolTipPinWindow" xml:space="preserve"><value>固定窗口</value></data>
+  <data name="ToolTipUnpinWindow" xml:space="preserve"><value>取消固定</value></data>
+
+  <!-- Dialogs -->
+  <data name="DialogAddSubscriptionTitle" xml:space="preserve"><value>添加订阅</value></data>
+  <data name="DialogSubscriptionUrlLabel" xml:space="preserve"><value>订阅地址</value></data>
+  <data name="DialogOptionalNamePlaceholder" xml:space="preserve"><value>可选名称</value></data>
+  <data name="DialogAdd" xml:space="preserve"><value>添加</value></data>
+  <data name="DialogCancel" xml:space="preserve"><value>取消</value></data>
+  <data name="DialogDelete" xml:space="preserve"><value>删除</value></data>
+  <data name="DialogDeleteConfigTitle" xml:space="preserve"><value>删除配置</value></data>
+  <data name="DialogDeleteConfigActiveFormat" xml:space="preserve"><value>确定删除“{0}”吗？活动配置删除后，正在运行的核心也会停止。</value></data>
+  <data name="DialogDeleteConfigFormat" xml:space="preserve"><value>确定删除“{0}”吗？此操作会删除本地配置文件。</value></data>
+  <data name="MessageDashboardMissingCopied" xml:space="preserve"><value>MetaCubeXD 资源缺失，已复制本机控制器地址。</value></data>
+  <data name="ErrorOpenDashboard" xml:space="preserve"><value>无法打开默认浏览器中的本机控制器入口。</value></data>
+
+  <!-- Proxy page runtime text -->
+  <data name="ProxyEmptyTitleRunning" xml:space="preserve"><value>配置中没有代理组</value></data>
+  <data name="ProxyEmptyTitleStopped" xml:space="preserve"><value>还没有代理组</value></data>
+  <data name="GroupNotSelected" xml:space="preserve"><value>尚未选择</value></data>
+  <data name="ToolTipTestGroup" xml:space="preserve"><value>测试整组节点延迟</value></data>
+  <data name="AutomationTestGroupFormat" xml:space="preserve"><value>测试 {0} 整组节点延迟</value></data>
+  <data name="TestingGroupFormat" xml:space="preserve"><value>{0} · 正在测试整组节点…</value></data>
+  <data name="TestCompleteFormat" xml:space="preserve"><value>{0} · 测速完成，{1} 个可用，{2} 个未连通</value></data>
+  <data name="TestFailedFormat" xml:space="preserve"><value>{0} · 测速失败：{1}</value></data>
+  <data name="AutomationNodeListFormat" xml:space="preserve"><value>{0} 节点</value></data>
+  <data name="AutomationNodeItemFormat" xml:space="preserve"><value>{0}，{1}{2}</value></data>
+  <data name="NodeCountFormat" xml:space="preserve"><value>{0} 个节点</value></data>
+  <data name="NodeCountSearchFormat" xml:space="preserve"><value>{0} / {1} 个节点</value></data>
+  <data name="CurrentLabel" xml:space="preserve"><value>当前</value></data>
+  <data name="CurrentNodeSuffix" xml:space="preserve"><value>，当前节点</value></data>
+  <data name="ExpandVerb" xml:space="preserve"><value>展开</value></data>
+  <data name="CollapseVerb" xml:space="preserve"><value>收起</value></data>
+  <data name="AutomationGroupHeaderFormat" xml:space="preserve"><value>{0} {1}，当前 {2}</value></data>
+  <data name="ToolTipGroupHeaderFormat" xml:space="preserve"><value>{0} · {1}</value></data>
+  <data name="GroupCountFormat" xml:space="preserve"><value>{0} 组</value></data>
+  <data name="GroupCountSearchFormat" xml:space="preserve"><value>{0} / {1} 组</value></data>
+  <data name="ProviderSectionTitleFormat" xml:space="preserve"><value>代理提供者 · {0}</value></data>
+  <data name="ProviderItemFormat" xml:space="preserve"><value>{0} 项 · {1}</value></data>
+  <data name="ToolTipRefreshProviderFormat" xml:space="preserve"><value>刷新 {0}</value></data>
+  <data name="AutomationRefreshProviderFormat" xml:space="preserve"><value>刷新代理提供者 {0}</value></data>
+  <data name="DelayNotTested" xml:space="preserve"><value>未测速</value></data>
+  <data name="DelayTimeout" xml:space="preserve"><value>超时</value></data>
+
+  <!-- Rules page runtime text -->
+  <data name="RulesRefreshed" xml:space="preserve"><value>规则和 Provider 状态已刷新。</value></data>
+  <data name="RefreshFailedFormat" xml:space="preserve"><value>刷新失败：{0}</value></data>
+
+  <!-- Connections page runtime text -->
+  <data name="SelectConnectionHint" xml:space="preserve"><value>选择连接查看详情</value></data>
+  <data name="ConnectionDetailsFormat" xml:space="preserve"><value>{0} · {1}
+规则：{2} {3}
+上传 {4} B · 下载 {5} B</value></data>
+  <data name="CloseConnectionFailedFormat" xml:space="preserve"><value>关闭连接失败：{0}</value></data>
+
+  <!-- Settings page runtime text -->
+  <data name="ErrorInvalidRefreshHours" xml:space="preserve"><value>订阅刷新间隔必须是 1 到 168 之间的整数小时。</value></data>
+  <data name="SettingsSaved" xml:space="preserve"><value>设置已保存；需要重启的核心参数会自动受控重启，系统代理会在核心健康后使用新端口。</value></data>
+  <data name="SystemProxyChangeApplied" xml:space="preserve"><value>系统代理状态已更新。</value></data>
+  <data name="TunChangeApplied" xml:space="preserve"><value>TUN 状态已更新。</value></data>
+  <data name="NetworkControlChangeFailedFormat" xml:space="preserve"><value>网络开关操作失败：{0}</value></data>
+  <data name="NetworkControlNeedsCore" xml:space="preserve"><value>请先启动本机 Mihomo 核心。</value></data>
+  <data name="SettingsSaveFailedFormat" xml:space="preserve"><value>设置保存失败：{0}</value></data>
+  <data name="FakeIpCleared" xml:space="preserve"><value>FakeIP 缓存已清理。</value></data>
+  <data name="DnsCleared" xml:space="preserve"><value>DNS 缓存已清理。</value></data>
+  <data name="GeoUpdateSent" xml:space="preserve"><value>Geo 数据库更新请求已发送。</value></data>
+  <data name="SelectProviderFirst" xml:space="preserve"><value>先选择一个 Provider。</value></data>
+  <data name="ProviderRefreshRequestedFormat" xml:space="preserve"><value>已请求刷新 {0}。</value></data>
+  <data name="ProviderStatusSummaryFormat" xml:space="preserve"><value>{0} · {1} 项</value></data>
+  <data name="CoreUpdateFieldsRequired" xml:space="preserve"><value>请填写官方 HTTPS 下载地址、版本和 64 位 SHA-256。</value></data>
+  <data name="CoreUpdateDone" xml:space="preserve"><value>核心已完成校验并原子替换。</value></data>
+  <data name="ErrorPortRangeFormat" xml:space="preserve"><value>{0} 端口必须是 1 到 65535 之间的整数。</value></data>
+  <data name="NetworkPermissionDenied" xml:space="preserve"><value>Windows 当前不允许读取网络状态。</value></data>
+  <data name="NetworkApiUnavailable" xml:space="preserve"><value>Windows 网络状态 API 当前不可用。</value></data>
+  <data name="NetworkStateReadFailed" xml:space="preserve"><value>无法读取 Windows 网络状态。</value></data>
+  <data name="StartupStatusReadFailedFormat" xml:space="preserve"><value>无法读取 Windows 启动状态：{0}</value></data>
+  <data name="StartupRegisteredButDisabled" xml:space="preserve"><value>开机启动已注册，但 Windows 已禁用；请在任务管理器的“启动应用”中启用。</value></data>
+  <data name="StartupNeedsRepair" xml:space="preserve"><value>开机启动已打开，但启动项命令已变化；点击“保存设置”修复。</value></data>
+  <data name="StartupRegistered" xml:space="preserve"><value>开机启动已注册。</value></data>
+  <data name="StartupMissing" xml:space="preserve"><value>开机启动已打开，但启动项缺失；点击“保存设置”修复。</value></data>
+  <data name="StartupOffForeignItem" xml:space="preserve"><value>开机启动已关闭；检测到同名启动项，保存时会保留其他程序的命令。</value></data>
+  <data name="StartupOff" xml:space="preserve"><value>开机启动已关闭。</value></data>
+  <data name="ProviderItemKindRule" xml:space="preserve"><value>规则</value></data>
+  <data name="ProviderItemKindProxy" xml:space="preserve"><value>代理</value></data>
+  <data name="ProviderListItemFormat" xml:space="preserve"><value>{0} · {1} · {2} 项 · {3}</value></data>
+  <data name="LanguageRestartPrompt" xml:space="preserve"><value>语言将在下次启动 ClashTray 时生效。</value></data>
+
+  <!-- Tray icon tooltips -->
+  <data name="TrayTooltipConnecting" xml:space="preserve"><value>ClashTray · 连接中</value></data>
+  <data name="TrayTooltipRunning" xml:space="preserve"><value>ClashTray · 运行中</value></data>
+  <data name="TrayTooltipSystemProxy" xml:space="preserve"><value>ClashTray · 系统代理已开启</value></data>
+  <data name="TrayTooltipTun" xml:space="preserve"><value>ClashTray · TUN 已开启</value></data>
+  <data name="TrayTooltipPaused" xml:space="preserve"><value>ClashTray · 已暂停</value></data>
+  <data name="TrayTooltipError" xml:space="preserve"><value>ClashTray · 需要注意</value></data>
+  <data name="TrayTooltipStopped" xml:space="preserve"><value>ClashTray · 已断开</value></data>
+
+  <!-- Tray context menu -->
+  <data name="MenuOpenPanel" xml:space="preserve"><value>打开控制面板</value></data>
+  <data name="MenuStartCore" xml:space="preserve"><value>启动核心</value></data>
+  <data name="MenuRestartCore" xml:space="preserve"><value>重启核心</value></data>
+  <data name="MenuStopCore" xml:space="preserve"><value>停止核心</value></data>
+  <data name="MenuEnableSystemProxy" xml:space="preserve"><value>开启系统代理</value></data>
+  <data name="MenuDisableSystemProxy" xml:space="preserve"><value>关闭系统代理</value></data>
+  <data name="MenuRestoreSystemProxy" xml:space="preserve"><value>恢复系统代理</value></data>
+  <data name="MenuEnableTun" xml:space="preserve"><value>开启 TUN</value></data>
+  <data name="MenuDisableTun" xml:space="preserve"><value>关闭 TUN</value></data>
+  <data name="MenuModeRule" xml:space="preserve"><value>规则模式</value></data>
+  <data name="MenuModeGlobal" xml:space="preserve"><value>全局模式</value></data>
+  <data name="MenuModeDirect" xml:space="preserve"><value>直连模式</value></data>
+  <data name="MenuQuit" xml:space="preserve"><value>退出 ClashTray</value></data>
+
+  <!-- Theme flyout and easter egg -->
+  <data name="ThemeTooltipAuto" xml:space="preserve"><value>主题：自动</value></data>
+  <data name="ThemeTooltipLight" xml:space="preserve"><value>主题：浅色</value></data>
+  <data name="ThemeTooltipDark" xml:space="preserve"><value>主题：深色</value></data>
+  <data name="ThemeTooltipNakhimov" xml:space="preserve"><value>主题：Nakhimov</value></data>
+  <data name="EasterEggMoreFormat" xml:space="preserve"><value>再点击 {0} 次…</value></data>
+  <data name="EasterEggVisitor" xml:space="preserve"><value>有一位特别的访客。</value></data>
+  <data name="EasterEggWelcomeBack" xml:space="preserve"><value>欢迎回来，Nakhimov</value></data>
+  <data name="EasterEggUnlocked" xml:space="preserve"><value>Nakhimov 已解锁</value></data>
+  <data name="EasterEggEnabledHint" xml:space="preserve"><value>彩蛋主题已启用，可在主题菜单中自由切换。</value></data>
+  <data name="EasterEggSaveFailedFormat" xml:space="preserve"><value>彩蛋主题保存失败：{0}</value></data>
+  <data name="ThemeSwitchFailedFormat" xml:space="preserve"><value>主题切换失败：{0}</value></data>
+
+  <!-- Remote endpoint metadata -->
+  <data name="EndpointManagementHeader.Text" xml:space="preserve"><value>远程 Mihomo 端点</value></data>
+  <data name="EndpointManagementHint.Text" xml:space="preserve"><value>这里仅管理端点元数据。远程端点不会接管本机核心、系统代理或 TUN；HTTPS 默认使用 Windows 系统信任。</value></data>
+  <data name="EndpointListView.AutomationProperties.Name" xml:space="preserve"><value>Mihomo 端点列表</value></data>
+  <data name="EndpointNameBox.Header" xml:space="preserve"><value>显示名称</value></data>
+  <data name="EndpointUriBox.Header" xml:space="preserve"><value>Controller 根地址</value></data>
+  <data name="EndpointTransportBox.Header" xml:space="preserve"><value>传输安全</value></data>
+  <data name="EndpointHttpsSystemTrustItem.Content" xml:space="preserve"><value>HTTPS（Windows 系统信任）</value></data>
+  <data name="EndpointHttpExplicitItem.Content" xml:space="preserve"><value>HTTP（仅限已确认风险的端点）</value></data>
+  <data name="EndpointHttpRiskCheckBox.Content" xml:space="preserve"><value>我确认此端点使用明文 HTTP，且风险由我承担</value></data>
+  <data name="EndpointSecretBox.Header" xml:space="preserve"><value>Controller secret（可选）</value></data>
+  <data name="EndpointCustomCaBox.Header" xml:space="preserve"><value>自定义 CA 证书（PEM，可选）</value></data>
+  <data name="EndpointHttpsCustomItem.Content" xml:space="preserve"><value>HTTPS（自定义 CA）</value></data>
+  <data name="EndpointTrustHint.Text" xml:space="preserve"><value>secret 使用 Windows DPAPI 保护；自定义 CA 只对当前端点生效。不会提供“忽略 HTTPS 证书错误”，也不会修改 Windows 全局证书库。</value></data>
+  <data name="SaveEndpointButton.Content" xml:space="preserve"><value>保存端点</value></data>
+  <data name="RemoveEndpointButton.Content" xml:space="preserve"><value>删除端点</value></data>
+  <data name="EndpointFieldsRequired" xml:space="preserve"><value>请填写端点名称和 Controller 根地址。</value></data>
+  <data name="EndpointHttpRiskRequired" xml:space="preserve"><value>使用 HTTP 前必须明确确认明文传输风险。</value></data>
+  <data name="EndpointCustomCaRequired" xml:space="preserve"><value>选择自定义 CA 时，请粘贴 CA 证书内容。</value></data>
+  <data name="EndpointCustomCaOnly" xml:space="preserve"><value>只有选择 HTTPS（自定义 CA）时才能填写 CA 证书。</value></data>
+  <data name="EndpointUriInvalid" xml:space="preserve"><value>Controller 根地址必须是有效的绝对 HTTP(S) 地址。</value></data>
+  <data name="EndpointSaved" xml:space="preserve"><value>端点元数据已保存。</value></data>
+  <data name="EndpointRemoved" xml:space="preserve"><value>端点及不再使用的本地凭据已删除。</value></data>
+  <data name="EndpointNotFound" xml:space="preserve"><value>端点已不存在。</value></data>
+  <data name="EndpointSelectRemote" xml:space="preserve"><value>请选择一个远程端点。</value></data>
+  <data name="EndpointTest" xml:space="preserve"><value>测试</value></data>
+  <data name="EndpointTesting" xml:space="preserve"><value>测试中…</value></data>
+  <data name="EndpointTestSucceeded" xml:space="preserve"><value>只读握手成功：{0}（Mihomo {1}）。</value></data>
+  <data name="EndpointVersionUnknown" xml:space="preserve"><value>未知版本</value></data>
+  <data name="EndpointConnect" xml:space="preserve"><value>连接</value></data>
+  <data name="EndpointCurrent" xml:space="preserve"><value>当前</value></data>
+  <data name="EndpointReturnLocal" xml:space="preserve"><value>切回本机</value></data>
+  <data name="EndpointSelected" xml:space="preserve"><value>已切换到 {0}。</value></data>
+  <data name="EndpointLocalSummary" xml:space="preserve"><value>本机 Controller；不可删除</value></data>
+  <data name="EndpointSecurityHttpsSystemTrust" xml:space="preserve"><value>HTTPS / 系统信任</value></data>
+  <data name="EndpointSecurityHttpsCustomCa" xml:space="preserve"><value>HTTPS / 自定义 CA</value></data>
+  <data name="EndpointSecurityHttpConfirmed" xml:space="preserve"><value>HTTP / 已确认风险</value></data>
+  <data name="EndpointSecurityLoopback" xml:space="preserve"><value>本机回环</value></data>
+  <data name="ControllerPortOneTimeStartDetailFormat" xml:space="preserve"><value>{0} 详情：{1}</value></data>
+<data name="ControllerListCountFormat" xml:space="preserve"><value>核心报告 {0} 条 · 已加载 {1} 条 · 筛选结果 {2} 条</value></data><data name="ControllerListTruncated" xml:space="preserve"><value>。列表已截断；搜索和筛选仅覆盖已加载内容。</value></data>
+</root>

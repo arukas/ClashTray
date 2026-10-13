@@ -1,0 +1,150 @@
+<Window x:Class="ClashTray.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="ClashTray">
+    <Grid x:Name="RootGrid" Background="{ThemeResource ClashTrayCanvasBrush}" Padding="16,16,16,10" KeyDown="RootGrid_KeyDown">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Grid Margin="0,0,0,8" ColumnSpacing="10">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="40"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <Button x:Name="LogoButton" x:Uid="LogoButton" CornerRadius="10" Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                    Width="40" Height="40" Padding="0" BorderThickness="0" Click="LogoButton_Click"
+                    ToolTipService.ToolTip="ClashTray">
+                <Image x:Name="ThemeLogo" Source="ms-appx:///Assets/Themes/Light/logo.png" Width="40" Height="40" Stretch="Uniform"/>
+            </Button>
+            <TeachingTip x:Name="EasterEggTip" Target="{x:Bind LogoButton}" PreferredPlacement="Bottom"
+                         IsLightDismissEnabled="True" ShouldConstrainToRootBounds="True"/>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                <TextBlock Text="ClashTray" FontSize="20" FontWeight="SemiBold"/>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="Gray" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="CoreStateText" x:Uid="CoreStateText" FontSize="12"/>
+                    <Button x:Name="ControllerEndpointButton" x:Uid="ControllerEndpointButton" FontSize="12" Padding="0" BorderThickness="0" Background="Transparent" Click="ControllerEndpointButton_Click" IsEnabled="False"/>
+                </StackPanel>
+                <TextBlock x:Name="ControllerFreshnessText" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Visibility="Collapsed"/>
+            </StackPanel>
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                <Button x:Name="ThemeButton" x:Uid="ThemeButton" Style="{StaticResource ClashTrayIconButtonStyle}">
+                    <FontIcon x:Name="ThemeButtonIcon" Glyph="&#xE790;" FontSize="16"/>
+                    <Button.Flyout>
+                        <Flyout x:Name="ThemeFlyout" Placement="Bottom">
+                            <StackPanel Width="170" Spacing="2">
+                                <TextBlock x:Uid="ThemeFlyoutTitle" FontWeight="SemiBold" Margin="4,2,4,4"/>
+                                <RadioButton x:Name="SystemThemeOption" x:Uid="SystemThemeOption" Tag="system" GroupName="ThemeMode" Click="ThemeOption_Click"/>
+                                <RadioButton x:Name="LightThemeOption" x:Uid="LightThemeOption" Tag="light" GroupName="ThemeMode" Click="ThemeOption_Click"/>
+                                <RadioButton x:Name="DarkThemeOption" x:Uid="DarkThemeOption" Tag="dark" GroupName="ThemeMode" Click="ThemeOption_Click"/>
+                                <RadioButton x:Name="NakhimovThemeOption" Content="Nakhimov" Tag="nakhimov" GroupName="ThemeMode" Click="ThemeOption_Click" Visibility="Collapsed"/>
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+                <Button x:Name="PinButton" x:Uid="PinButton" Style="{StaticResource ClashTrayIconButtonStyle}" Click="PinButton_Click"><FontIcon Glyph="&#xE718;" FontSize="16"/></Button>
+                <Button x:Uid="ReloadConfigurationButton" Style="{StaticResource ClashTrayIconButtonStyle}" Click="RefreshConfigurationButton_Click"><FontIcon Glyph="&#xE8F7;" FontSize="16"/></Button>
+                <Button x:Name="CoreActionButton" x:Uid="CoreActionButton" Style="{StaticResource ClashTrayAccentIconButtonStyle}" Click="CoreActionButton_Click"><FontIcon Glyph="&#xE768;" FontSize="16"/></Button>
+            </StackPanel>
+        </Grid>
+        <Border Grid.Row="1" Style="{StaticResource ClashTrayGroupCardStyle}" Padding="3" Margin="0,2,0,8">
+            <Grid ColumnSpacing="3">
+                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                <ToggleButton x:Name="RuleModeButton" Style="{StaticResource ClashTraySegmentButtonStyle}" Click="RuleModeButton_Click"><StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xEA18;" FontSize="16"/><TextBlock x:Uid="RuleModeText"/></StackPanel></ToggleButton>
+                <ToggleButton x:Name="GlobalModeButton" Grid.Column="1" Style="{StaticResource ClashTraySegmentButtonStyle}" Click="GlobalModeButton_Click"><StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE774;" FontSize="16"/><TextBlock x:Uid="GlobalModeText"/></StackPanel></ToggleButton>
+                <ToggleButton x:Name="DirectModeButton" Grid.Column="2" Style="{StaticResource ClashTraySegmentButtonStyle}" Click="DirectModeButton_Click"><StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE945;" FontSize="16"/><TextBlock x:Uid="DirectModeText"/></StackPanel></ToggleButton>
+            </Grid>
+        </Border>
+        <Grid Grid.Row="2" Margin="0,0,0,8" ColumnSpacing="4">
+            <Grid.Resources><ResourceDictionary><ResourceDictionary.ThemeDictionaries><ResourceDictionary x:Key="Light"><StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="AccentTextFillColorPrimaryBrush"/>
+<StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="AccentTextFillColorPrimaryBrush"/>
+<StaticResource x:Key="ToggleButtonBackgroundCheckedPressed" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundCheckedPressed" ResourceKey="AccentTextFillColorPrimaryBrush"/></ResourceDictionary>
+<ResourceDictionary x:Key="Default"><StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="AccentTextFillColorPrimaryBrush"/>
+<StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="AccentTextFillColorPrimaryBrush"/>
+<StaticResource x:Key="ToggleButtonBackgroundCheckedPressed" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundCheckedPressed" ResourceKey="AccentTextFillColorPrimaryBrush"/></ResourceDictionary>
+<ResourceDictionary x:Key="HighContrast"><SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="{ThemeResource SystemColorHighlightColor}"/><SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="{ThemeResource SystemColorHighlightTextColor}"/>
+<SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="{ThemeResource SystemColorHighlightColor}"/><SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver" Color="{ThemeResource SystemColorHighlightTextColor}"/>
+<SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="{ThemeResource SystemColorHighlightColor}"/><SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed" Color="{ThemeResource SystemColorHighlightTextColor}"/></ResourceDictionary></ResourceDictionary.ThemeDictionaries></ResourceDictionary></Grid.Resources>
+            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+            <ToggleButton x:Name="ProxyPageButton" x:Uid="ProxyPageButton" Style="{StaticResource ClashTrayNavButtonStyle}" Click="ProxyPageButton_Click"/>
+            <ToggleButton x:Name="RulesPageButton" x:Uid="RulesPageButton" Grid.Column="1" Style="{StaticResource ClashTrayNavButtonStyle}" Click="RulesPageButton_Click"/>
+            <ToggleButton x:Name="ConnectionsPageButton" x:Uid="ConnectionsPageButton" Grid.Column="2" Style="{StaticResource ClashTrayNavButtonStyle}" Click="ConnectionsPageButton_Click"/>
+            <ToggleButton x:Name="LogsPageButton" x:Uid="LogsPageButton" Grid.Column="3" Style="{StaticResource ClashTrayNavButtonStyle}" Click="LogsPageButton_Click"/>
+            <ToggleButton x:Name="SettingsPageButton" x:Uid="SettingsPageButton" Grid.Column="4" Style="{StaticResource ClashTrayNavButtonStyle}" Click="SettingsPageButton_Click"/>
+        </Grid>
+        <Border Grid.Row="3" Style="{StaticResource ClashTrayCardStyle}" Padding="12,8" Margin="0,0,0,8"><StackPanel Spacing="4">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE71B;" FontSize="13" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><TextBlock x:Name="ConnectionCountText" Text="0"/><TextBlock x:Uid="ConnectionsUnitText" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE74A;" FontSize="12" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><TextBlock x:Name="UploadText" Text="0 B/s" FontWeight="SemiBold" FontSize="13"/><FontIcon Glyph="&#xE74B;" FontSize="12" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><TextBlock x:Name="DownloadText" Text="0 B/s" FontWeight="SemiBold" FontSize="13"/></StackPanel>
+            </Grid>
+            <Grid x:Name="TrafficGraph" Height="18" SizeChanged="TrafficGraph_SizeChanged" x:Uid="TrafficGraph">
+                <Border BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" VerticalAlignment="Bottom"/>
+                <Polyline x:Name="UploadLine" Stroke="{ThemeResource AccentTextFillColorSecondaryBrush}" StrokeThickness="1.5"/>
+                <Polyline x:Name="DownloadLine" Stroke="{ThemeResource AccentTextFillColorPrimaryBrush}" StrokeThickness="1.8"/>
+            </Grid>
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE950;" FontSize="13"/><TextBlock x:Name="MemoryText" Text="0 KB" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel>
+                <TextBlock Grid.Column="1" x:Name="TotalTrafficText" Text="0 KB" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </Grid>
+            <TextBlock x:Name="TrafficText" Visibility="Collapsed"/>
+        </StackPanel></Border>
+        <Grid Grid.Row="4">
+            <ScrollViewer x:Name="DashboardScrollViewer" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="10" Padding="0,0,10,10">
+                    <InfoBar x:Name="ErrorBanner" IsOpen="False" Severity="Error" IsClosable="True"/>
+                    <Border Style="{StaticResource ClashTrayGroupCardStyle}" Padding="4"><StackPanel Spacing="2"><Button Style="{StaticResource ClashTrayRowButtonStyle}" HorizontalContentAlignment="Stretch" x:Uid="ConfigButton">
+                        <Button.Flyout>
+                            <Flyout>
+                                <StackPanel Width="310" Spacing="10">
+                                    <TextBlock x:Uid="ConfigManagementTitle" FontSize="18" FontWeight="SemiBold"/>
+                                    <ComboBox x:Name="ConfigurationsComboBox" x:Uid="ConfigurationsComboBox" HorizontalAlignment="Stretch" SelectionChanged="ConfigurationsComboBox_SelectionChanged"/>
+                                    <Grid ColumnSpacing="6">
+                                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                        <Button x:Uid="ImportLocalButton" Click="ImportLocalButton_Click" HorizontalAlignment="Stretch"/>
+                                        <Button Grid.Column="1" x:Uid="ImportSubscriptionButton" Click="ImportSubscriptionButton_Click" HorizontalAlignment="Stretch"/>
+                                    </Grid>
+                                    <Grid ColumnSpacing="6">
+                                        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                        <Button x:Uid="ReloadConfigButton" Click="RefreshConfigurationButton_Click" HorizontalAlignment="Stretch"/>
+                                        <Button Grid.Column="1" x:Uid="DeleteConfigButton" Click="DeleteConfigurationButton_Click" HorizontalAlignment="Stretch"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Flyout>
+                        </Button.Flyout>
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="20"/><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="12"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xE8A5;" FontSize="18" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                            <TextBlock Grid.Column="1" x:Uid="ConfigRowLabel" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="2" x:Name="ConfigurationText" x:Uid="ConfigurationText" TextTrimming="CharacterEllipsis" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <FontIcon Grid.Column="3" Glyph="&#xE76C;" FontSize="12"/>
+                        </Grid>
+                    </Button>
+                    <Grid MinHeight="40" ColumnSpacing="6" Padding="6,0">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="20"/><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                        <FontIcon Glyph="&#xE756;" FontSize="17"/>
+                        <TextBlock Grid.Column="1" x:Uid="ProxyPortsLabel" Margin="4,0,0,0" VerticalAlignment="Center" FontSize="14"/>
+                        <Button Grid.Column="2" x:Name="HttpEndpointButton" x:Uid="HttpEndpointButton" Style="{StaticResource ClashTrayEndpointButtonStyle}" Click="CopyEndpointButton_Click"/>
+                        <Button Grid.Column="3" x:Name="MixedEndpointButton" x:Uid="MixedEndpointButton" Style="{StaticResource ClashTrayEndpointButtonStyle}" Click="CopyEndpointButton_Click"/>
+                    </Grid>
+                    </StackPanel></Border>
+                    <ContentControl x:Name="ProxyPageContent" HorizontalContentAlignment="Stretch"/>
+                </StackPanel>
+            </ScrollViewer>
+            <Grid x:Name="OtherPageHost" Visibility="Collapsed">
+                <ScrollViewer x:Name="OtherPageScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <ContentControl x:Name="PageContent" HorizontalContentAlignment="Stretch" Padding="0,0,10,0"/>
+                </ScrollViewer>
+                <ContentControl x:Name="ListPageContent"
+                                Visibility="Collapsed"
+                                HorizontalContentAlignment="Stretch"
+                                VerticalContentAlignment="Stretch"
+                                Padding="0,0,10,0"/>
+            </Grid>
+        </Grid>
+        <Grid Grid.Row="5" Margin="0,6,0,0" Height="28">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <FontIcon Glyph="&#xE950;" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <TextBlock x:Name="CoreVersionText" Grid.Column="1" Text="ClashTray" TextTrimming="CharacterEllipsis" Margin="6,0,0,0" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <Button x:Name="QuitButton" Grid.Column="2" x:Uid="QuitButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="QuitButton_Click"/>
+        </Grid>
+    </Grid>
+</Window>

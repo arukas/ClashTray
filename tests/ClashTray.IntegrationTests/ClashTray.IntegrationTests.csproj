@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>ClashTray.IntegrationTests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/TestFixtureDirectory.cs" Link="TestFixtureDirectory.cs" />
+    <Compile Include="../Shared/RuntimeFixture.cs" Link="RuntimeFixture.cs" />
+    <Compile Include="../Shared/LoopbackPortReservations.cs" Link="LoopbackPortReservations.cs" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="MSTest.TestAdapter" />
+    <PackageReference Include="MSTest.TestFramework" />
+    <ProjectReference Include="..\..\src\ClashTray.Core\ClashTray.Core.csproj" />
+    <ProjectReference Include="..\..\src\ClashTray.Contracts\ClashTray.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\ClashTray.Service\ClashTray.Service.csproj" />
+  </ItemGroup>
+</Project>

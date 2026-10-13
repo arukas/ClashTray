@@ -1,0 +1,7 @@
+{
+  "version": "v1.273.1",
+  "archiveUri": "https://github.com/MetaCubeX/metacubexd/releases/download/v1.273.1/compressed-dist.tgz",
+  "archiveSha256": "a178e00b67acabcda2dcef00afa90be6a7bb261e466a67dad58c8478d9553603",
+  "licenseUri": "https://raw.githubusercontent.com/MetaCubeX/metacubexd/v1.273.1/LICENSE",
+  "sourceUri": "https://github.com/MetaCubeX/metacubexd/tree/v1.273.1"
+}

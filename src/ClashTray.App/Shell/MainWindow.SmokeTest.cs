@@ -1,0 +1,1285 @@
+using System.Runtime.InteropServices.WindowsRuntime;
+using System.Text.Json;
+using ClashTray.Contracts;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Automation.Peers;
+using Microsoft.UI.Xaml.Automation.Provider;
+using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Graphics.Imaging;
+using Windows.Storage;
+using Windows.Storage.Streams;
+using ClashTray.Core;
+
+namespace ClashTray.App;
+
+public sealed partial class MainWindow
+{
+    private static readonly JsonSerializerOptions DiagnosticJsonOptions = new() { WriteIndented = true };
+    private bool _capturingSyntheticSmoke;
+    // Explicit developer-only smoke mode. Uses synthetic data, isolated storage,
+    // no core initialization, no tray registration, and no network changes.
+    internal async Task CaptureSmokeTestAsync(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        _capturingSyntheticSmoke = true;
+        if (NativeMethods.IsWindowVisible(_windowHandle))
+        {
+            throw new InvalidOperationException("Startup window was not hidden.");
+        }
+
+        TogglePanel();
+        if (!NativeMethods.IsWindowVisible(_windowHandle))
+        {
+            throw new InvalidOperationException("Tray selection did not show the panel.");
+        }
+
+        HandleDeactivation();
+        if (NativeMethods.IsWindowVisible(_windowHandle))
+        {
+            throw new InvalidOperationException("Deactivation did not hide the panel.");
+        }
+
+        TogglePanel();
+        TogglePanel();
+        if (NativeMethods.IsWindowVisible(_windowHandle))
+        {
+            throw new InvalidOperationException("Repeated tray selection did not hide the panel.");
+        }
+
+        ShowPanel();
+        await VerifyMinimizedPanelRestoreAsync(directory);
+        _isPinned = true; // Keep the diagnostic render stable if another app takes focus.
+        await VerifyThemeUnlockAsync(directory);
+        RuntimeSnapshot empty = _runtime!.Snapshot;
+        RuntimeSnapshot sample = empty with
+        {
+            Core = empty.Core with
+            {
+                State = CoreState.Running,
+                Version = "v1.19.30",
+                ConfigurationName = "示例配置.yaml",
+                ConnectionCount = 103,
+                MemoryBytes = 95 * 1024 * 1024,
+                UploadBytesPerSecond = 7168,
+                DownloadBytesPerSecond = 156672,
+                UploadBytes = 7864320,
+                DownloadBytes = 222402969,
+                TrafficAvailable = true,
+                MemoryAvailable = true
+            },
+            Tun = TunState.Off,
+            Configurations = [new("sample", "示例配置.yaml", "sample.yaml", null, null, true)],
+            ProxyNodes = [
+                new("香港 · 01", "Shadowsocks", "34", true, []),
+                new("日本 · 02", "VLESS", "60", false, []),
+                new("新加坡 · 03", "Trojan", "89", false, []),
+                new("DIRECT", "Direct", "0", false, [])
+            ],
+            ProxyGroups = [
+                new("节点选择", "Selector", "香港 · 01", ["香港 · 01", "日本 · 02", "新加坡 · 03"]),
+                new("自动选择", "URLTest", "日本 · 02", ["香港 · 01", "日本 · 02"]),
+                new("流媒体", "Selector", "新加坡 · 03", ["新加坡 · 03", "日本 · 02"]),
+                new("国内服务", "Selector", "DIRECT", ["DIRECT", "香港 · 01"])
+            ],
+            Providers = [new("示例订阅", "Proxy", "HTTP", new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero), null, 3)]
+        };
+        foreach (string theme in new[] { "light", "dark" })
+        {
+            foreach (bool populated in new[] { false, true })
+            {
+                UpdateSnapshot(populated ? sample : empty);
+                ApplyTheme(theme);
+                if (populated)
+                {
+                    _trafficHistory.Clear();
+                    for (int i = 0; i < 60; i++)
+                    {
+                        _trafficHistory.Enqueue((2000 + 1000 * Math.Sin(i / 3d), 80000 + 60000 * Math.Sin(i / 4d)));
+                    }
+
+                    DrawTraffic();
+                }
+                await Task.Delay(350);
+                RootGrid.UpdateLayout();
+                RenderTargetBitmap renderer = new RenderTargetBitmap();
+                await renderer.RenderAsync(RootGrid);
+                IBuffer pixels = await renderer.GetPixelsAsync();
+                StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(Path.GetFullPath(directory));
+                StorageFile file = await folder.CreateFileAsync($"{(populated ? "nodes" : "empty")}-{theme}.png", CreationCollisionOption.ReplaceExisting);
+                using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+                BitmapEncoder encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+                encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
+                    (uint)renderer.PixelWidth, (uint)renderer.PixelHeight, 96, 96, pixels.ToArray());
+                await encoder.FlushAsync();
+            }
+        }
+        await VerifyNodeScrollingAsync(directory, sample);
+        await VerifyProxyDelayDisplayAsync(directory, sample);
+        await VerifyRemoteFreshnessPresentationAsync(directory, sample);
+        await VerifyConnectionsAndLogsInteractionsAsync(directory, sample);
+        await VerifyNetworkSwitchErrorPresentationAsync(directory);
+        await VerifySsidFeatureScopeAsync(directory);
+        await VerifySettingsDraftAsync(directory);
+        NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect actual);
+        NativeMethods.Rect anchor = GetTrayRect();
+        nint monitor = NativeMethods.MonitorFromRect(ref anchor, NativeMethods.MONITOR_DEFAULTTONEAREST);
+        NativeMethods.MonitorInfo info = new NativeMethods.MonitorInfo { Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfo>() };
+        if (!NativeMethods.GetMonitorInfo(monitor, ref info))
+        {
+            throw new InvalidOperationException("Monitor query failed.");
+        }
+
+        if (actual.Right > info.Work.Right || actual.Bottom > info.Work.Bottom || actual.Left < info.Work.Left || actual.Top < info.Work.Top)
+        {
+            throw new InvalidOperationException("Flyout escaped the work area.");
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(directory, "geometry.json"), JsonSerializer.Serialize(new
+        {
+            Window = new { actual.Left, actual.Top, actual.Right, actual.Bottom },
+            WorkArea = new { info.Work.Left, info.Work.Top, info.Work.Right, info.Work.Bottom },
+            RootGrid.ActualWidth,
+            RootGrid.ActualHeight,
+            RightGap = info.Work.Right - actual.Right,
+            BottomGap = info.Work.Bottom - actual.Bottom,
+            NodesTop = ProxyPageContent.TransformToVisual(RootGrid).TransformPoint(new Windows.Foundation.Point()).Y,
+            ScreenshotData = "synthetic; core and service operations disabled",
+            StartupHidden = true,
+            TrayToggle = "passed",
+            DeactivationDismissal = "passed"
+        }, DiagnosticJsonOptions));
+        foreach ((UIElement, PanelPage) page in new[] { ((UIElement)_rulesPage!, PanelPage.Rules), ((UIElement)_connectionsPage!, PanelPage.Connections), ((UIElement)_logsPage!, PanelPage.Logs), ((UIElement)_settingsPage!, PanelPage.Settings) })
+        {
+            NavigateTo(page.Item1, page.Item2);
+            await Task.Delay(100);
+            RootGrid.UpdateLayout();
+            bool listPage = page.Item2 is PanelPage.Rules or PanelPage.Connections or PanelPage.Logs;
+            bool pageMounted = listPage
+                ? ReferenceEquals(ListPageContent.Content, page.Item1)
+                : ReferenceEquals(PageContent.Content, page.Item1);
+            bool pageLayoutVisible = listPage
+                ? ListPageContent.Visibility == Visibility.Visible
+                    && OtherPageScrollViewer.Visibility == Visibility.Collapsed
+                : OtherPageScrollViewer.Visibility == Visibility.Visible
+                    && ListPageContent.Visibility == Visibility.Collapsed;
+            if (!pageMounted || !pageLayoutVisible)
+            {
+                throw new InvalidOperationException($"Navigation failed: {page.Item2}");
+            }
+
+            await SaveDiagnosticFrameAsync(directory, $"page-{page.Item2}");
+        }
+        NavigateTo(_proxyPage, PanelPage.Proxy);
+    }
+
+    private async Task VerifyNodeScrollingAsync(string directory, RuntimeSnapshot sample)
+    {
+        string[] members = Enumerable.Range(1, 200).Select(i => $"香港 · {i:000}").ToArray();
+        members[1] = "日本 · 超长节点名称用于检查截断与完整名称提示 · Tokyo Premium 02";
+        RuntimeSnapshot crowded = sample with
+        {
+            ProxyNodes = members.Select((name, i) => new ProxyNode(name, "Shadowsocks", (30 + i).ToString(System.Globalization.CultureInfo.InvariantCulture), i == 0, [])).ToArray(),
+            ProxyGroups = [
+                new("节点选择", "Selector", members[0], members),
+                new("流媒体", "Selector", members[2], members.Take(5).ToArray()),
+                new("自动选择", "URLTest", members[1], members.Take(3).ToArray())
+            ]
+        };
+        UpdateSnapshot(crowded);
+        RootGrid.UpdateLayout();
+        StackPanel groups = (StackPanel)_proxyPage!.FindName("GroupsPanel");
+        TextBox search = (TextBox)_proxyPage.FindName("NodeSearchBox");
+        ListView[] listBeforeExpansion = VisualDescendants<ListView>(_proxyPage).ToArray();
+        if (listBeforeExpansion.Any(list => list.Items.Count > 0))
+        {
+            throw new InvalidOperationException("Collapsed groups eagerly created node items.");
+        }
+
+        void InvokeGroup(int index)
+        {
+            Border card = (Border)groups.Children[index];
+            Button button = (Button)((Grid)((StackPanel)card.Child).Children[0]).Children[0];
+            ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
+        }
+        InvokeGroup(0);
+        InvokeGroup(1);
+        await Task.Delay(200);
+        RootGrid.UpdateLayout();
+        ListView[] lists = VisualDescendants<ListView>(_proxyPage).Where(list => list.Items.Count > 0).ToArray();
+        if (lists.Length != 2 || lists[0].Items.Count != 200 || lists[1].Items.Count != 5)
+        {
+            throw new InvalidOperationException("Multiple expanded groups did not retain their nodes.");
+        }
+
+        if (lists.Any(list => ScrollViewer.GetVerticalScrollMode(list) != ScrollMode.Disabled))
+        {
+            throw new InvalidOperationException("Node list owns a nested scroll viewport.");
+        }
+
+        if (VisualDescendants<ScrollViewer>(_proxyPage).Any(scroll => scroll.ScrollableHeight > 1))
+        {
+            throw new InvalidOperationException("A nested node scrollbar has scrollable content.");
+        }
+
+        if (DashboardScrollViewer.ScrollableHeight <= 0)
+        {
+            throw new InvalidOperationException("Dashboard cannot scroll the expanded node content.");
+        }
+
+        foreach (string theme in new[] { "light", "dark" })
+        {
+            ApplyTheme(theme);
+            DashboardScrollViewer.ChangeView(null, 210, null, true);
+            await SaveDiagnosticFrameAsync(directory, $"expanded-{theme}");
+        }
+        DashboardScrollViewer.ChangeView(null, DashboardScrollViewer.ScrollableHeight, null, true);
+        await Task.Delay(150);
+        RootGrid.UpdateLayout();
+        FrameworkElement lastCard = (FrameworkElement)groups.Children.Last();
+        double bottom = lastCard.TransformToVisual(DashboardScrollViewer).TransformPoint(new Windows.Foundation.Point(0, lastCard.ActualHeight)).Y;
+        if (bottom > DashboardScrollViewer.ActualHeight + 1)
+        {
+            throw new InvalidOperationException("Last group cannot be reached by the dashboard scrollbar.");
+        }
+
+        await SaveDiagnosticFrameAsync(directory, "last-group");
+
+        search.Text = "香港 · 200";
+        await Task.Delay(300);
+        RootGrid.UpdateLayout();
+        ListView[] filtered = VisualDescendants<ListView>(_proxyPage).Where(list => list.Items.Count > 0).ToArray();
+        if (groups.Children.Count != 1 || filtered.Length != 1 || filtered[0].Items.Count != 1)
+        {
+            throw new InvalidOperationException("Node search did not isolate the last node.");
+        }
+
+        DashboardScrollViewer.ChangeView(null, 100, null, true);
+        await SaveDiagnosticFrameAsync(directory, "search-result");
+        search.Text = "no-such-node";
+        await Task.Delay(300);
+        if (((TextBlock)_proxyPage.FindName("NoResultsText")).Visibility != Visibility.Visible || groups.Children.Count != 0)
+        {
+            throw new InvalidOperationException("Missing search results did not show an empty state.");
+        }
+
+        search.Text = "";
+        await Task.Delay(300);
+        RootGrid.UpdateLayout();
+        if (VisualDescendants<ListView>(_proxyPage).Count(list => list.Items.Count > 0) != 2)
+        {
+            throw new InvalidOperationException("Clearing search lost expansion state.");
+        }
+
+        // A metrics-only snapshot must preserve the current node controls.
+        UIElement firstCard = groups.Children[0];
+        UpdateSnapshot(crowded with { Core = crowded.Core with { ConnectionCount = 999 } });
+        if (!ReferenceEquals(firstCard, groups.Children[0]))
+        {
+            throw new InvalidOperationException("Metrics update rebuilt node controls.");
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(directory, "node-scroll-checks.json"), JsonSerializer.Serialize(new
+        {
+            Nodes = 200,
+            ExpandedGroups = 2,
+            NestedScrollableViewports = 0,
+            LastGroupReachable = true,
+            SearchLastNode = true,
+            NoResults = true,
+            ExpansionRestored = true,
+            MetricsPreserveControls = true,
+            HighContrast = "Uses system resources; OS high-contrast mode not toggled by this test.",
+            InputLimits = "Wheel, touch and physical keyboard require manual verification."
+        }, DiagnosticJsonOptions));
+        DashboardScrollViewer.ChangeView(null, 0, null, true);
+    }
+
+    private async Task VerifyConnectionsAndLogsInteractionsAsync(string directory, RuntimeSnapshot sample)
+    {
+        const int connectionCount = 400;
+        const int logCapacity = 500;
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        ConnectionInfo[] connections = Enumerable.Range(0, connectionCount)
+            .Select(index => new ConnectionInfo(
+                $"conn-{index:000}",
+                "tcp",
+                $"10.0.0.2:{10000 + index}",
+                index == 42 ? "needle-connection.example.test:443" : $"host-{index:000}.example.test:443",
+                "MATCH",
+                $"chain-{index:000}",
+                (index * 3L) + 1,
+                (connectionCount - index) * 2L,
+                now.AddMinutes(index),
+                $"payload-{index:000}"))
+            .ToArray();
+
+        NavigateTo(_connectionsPage!, PanelPage.Connections);
+        System.Diagnostics.Stopwatch connectionUpdate = System.Diagnostics.Stopwatch.StartNew();
+        _connectionsPage!.UpdateSnapshot(
+            sample with { Connections = connections },
+            false,
+            EndpointCapability.None,
+            "smoke-controller:generation-1");
+        connectionUpdate.Stop();
+        RootGrid.UpdateLayout();
+        ListView connectionList = (ListView)_connectionsPage.FindName("ConnectionsListView");
+        TextBox connectionSearch = (TextBox)_connectionsPage.FindName("SearchBox");
+        ComboBox connectionSort = (ComboBox)_connectionsPage.FindName("SortBox");
+        TextBlock connectionDetails = (TextBlock)_connectionsPage.FindName("DetailsText");
+        Button closeSelected = (Button)_connectionsPage.FindName("CloseSelectedButton");
+        Button closeAll = (Button)_connectionsPage.FindName("CloseAllButton");
+        if (connectionList.Items.Count != connectionCount
+            || (connectionList.Items[0] as ConnectionRowViewModel)?.Id != "conn-399")
+        {
+            throw new InvalidOperationException("Connections newest ordering did not show the latest connection first.");
+        }
+
+        ConnectionRowViewModel selectedConnection = connectionList.Items
+            .Cast<ConnectionRowViewModel>()
+            .Single(row => row.Id == "conn-042");
+        connectionList.SelectedItem = selectedConnection;
+        if (!connectionDetails.Text.Contains("chain-042", StringComparison.Ordinal)
+            || closeSelected.IsEnabled
+            || closeAll.IsEnabled)
+        {
+            throw new InvalidOperationException("Connection selection details or read-only action state was incorrect.");
+        }
+
+        System.Diagnostics.Stopwatch connectionSortFilter = System.Diagnostics.Stopwatch.StartNew();
+        connectionSort.SelectedIndex = 1;
+        if ((connectionList.Items[0] as ConnectionRowViewModel)?.Id != "conn-399"
+            || !ReferenceEquals(connectionList.SelectedItem, selectedConnection))
+        {
+            throw new InvalidOperationException("Upload sorting lost the selected connection.");
+        }
+
+        connectionSort.SelectedIndex = 2;
+        if ((connectionList.Items[0] as ConnectionRowViewModel)?.Id != "conn-000"
+            || !ReferenceEquals(connectionList.SelectedItem, selectedConnection))
+        {
+            throw new InvalidOperationException("Download sorting lost the selected connection.");
+        }
+
+        connectionSearch.Text = "needle-connection";
+        await WaitForSmokeConditionAsync(() => connectionList.Items.Count == 1, "connection search");
+        if (connectionList.Items.Count != 1
+            || (connectionList.Items[0] as ConnectionRowViewModel)?.Id != "conn-042"
+            || !ReferenceEquals(connectionList.SelectedItem, selectedConnection))
+        {
+            throw new InvalidOperationException("Connection text filtering did not preserve the matching selected item.");
+        }
+
+        connectionSearch.Text = string.Empty;
+        await WaitForSmokeConditionAsync(() => connectionList.Items.Count == connectionCount, "clearing connection search");
+        connectionSortFilter.Stop();
+        if (connectionList.Items.Count != connectionCount
+            || !ReferenceEquals(connectionList.SelectedItem, selectedConnection))
+        {
+            throw new InvalidOperationException("Clearing connection search did not restore the selected full list.");
+        }
+
+        ConnectionInfo[] nextGenerationConnections = connections
+            .Select(connection => connection with { Destination = $"generation-two-{connection.Destination}" })
+            .ToArray();
+        System.Diagnostics.Stopwatch connectionGeneration = System.Diagnostics.Stopwatch.StartNew();
+        _connectionsPage.UpdateSnapshot(
+            sample with { Connections = nextGenerationConnections },
+            false,
+            EndpointCapability.None,
+            "smoke-controller:generation-2");
+        connectionGeneration.Stop();
+        ConnectionRowViewModel regeneratedConnection = connectionList.Items
+            .Cast<ConnectionRowViewModel>()
+            .Single(row => row.Id == "conn-042");
+        if (connectionList.SelectedItem is not null
+            || ReferenceEquals(selectedConnection, regeneratedConnection)
+            || !regeneratedConnection.Connection.Destination.StartsWith("generation-two-", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Connection generation switch retained selection or reused an old row.");
+        }
+
+        connectionList.ScrollIntoView(connectionList.Items[^1]);
+        connectionList.UpdateLayout();
+        await Task.Delay(150);
+        ScrollViewer? connectionScroll = VisualDescendants<ScrollViewer>(connectionList)
+            .FirstOrDefault(viewer => viewer.ScrollableHeight > 1);
+        if (connectionScroll is null)
+        {
+            throw new InvalidOperationException("Connections list did not expose a scrollable viewport.");
+        }
+
+        double connectionScrollRange = connectionScroll.ScrollableHeight;
+        connectionScroll.ChangeView(null, connectionScrollRange, null, true);
+        await Task.Delay(100);
+        if (connectionScroll.VerticalOffset <= 0)
+        {
+            throw new InvalidOperationException("Connections list could not scroll to its tail.");
+        }
+
+        await SaveDiagnosticFrameAsync(directory, "connections-interactions");
+
+        LogEntry[] logs = Enumerable.Range(1, logCapacity)
+            .Select(sequence => new LogEntry(
+                now.AddSeconds(sequence),
+                sequence % 2 == 0 ? "mihomo" : "ClashTray",
+                (sequence % 3) switch { 0 => "info", 1 => "warning", _ => "error" },
+                sequence == 78 ? "needle-log-078" : $"event-bucket-{sequence % 10:00}",
+                Sequence: sequence))
+            .ToArray();
+        NavigateTo(_logsPage!, PanelPage.Logs);
+        System.Diagnostics.Stopwatch logUpdate = System.Diagnostics.Stopwatch.StartNew();
+        _logsPage!.UpdateSnapshot(
+            sample with { Logs = logs },
+            false,
+            EndpointCapability.None,
+            "smoke-logs:generation-1");
+        logUpdate.Stop();
+        RootGrid.UpdateLayout();
+        ListView logList = (ListView)_logsPage.FindName("LogsListView");
+        TextBox logSearch = (TextBox)_logsPage.FindName("SearchBox");
+        ComboBox logLevel = (ComboBox)_logsPage.FindName("LevelBox");
+        ComboBox logSource = (ComboBox)_logsPage.FindName("SourceBox");
+        Button clearLogs = (Button)_logsPage.FindName("ClearLogsButton");
+        if (logList.Items.Count != logCapacity || clearLogs.IsEnabled)
+        {
+            throw new InvalidOperationException("Logs initial bounded view or read-only clear state was incorrect.");
+        }
+
+        System.Diagnostics.Stopwatch logFiltering = System.Diagnostics.Stopwatch.StartNew();
+        logLevel.SelectedIndex = 2;
+        if (logList.Items.Count != 167
+            || logList.Items.Cast<LogRowViewModel>().Any(row => row.Log.Level != "warning"))
+        {
+            throw new InvalidOperationException("Warning level filtering returned an unexpected log set.");
+        }
+
+        logLevel.SelectedIndex = 0;
+        logSource.SelectedIndex = 2;
+        if (logList.Items.Count != 250
+            || logList.Items.Cast<LogRowViewModel>().Any(row => row.Log.Source != "mihomo"))
+        {
+            throw new InvalidOperationException("Mihomo source filtering returned an unexpected log set.");
+        }
+
+        logSource.SelectedIndex = 0;
+        logSearch.Text = "needle-log-078";
+        await WaitForSmokeConditionAsync(() => logList.Items.Count == 1, "log search");
+        if (logList.Items.Count != 1
+            || (logList.Items[0] as LogRowViewModel)?.Sequence != 78)
+        {
+            throw new InvalidOperationException("Log text filtering did not isolate its matching sequence.");
+        }
+
+        logSearch.Text = string.Empty;
+        await WaitForSmokeConditionAsync(() => logList.Items.Count == logCapacity, "clearing log search");
+        logFiltering.Stop();
+        if (logList.Items.Count != logCapacity)
+        {
+            throw new InvalidOperationException("Clearing log filters did not restore the full bounded view.");
+        }
+
+        LogRowViewModel oldGenerationLog = logList.Items
+            .Cast<LogRowViewModel>()
+            .Single(row => row.Sequence == 78);
+        logList.ScrollIntoView(logList.Items[^1]);
+        logList.UpdateLayout();
+        await Task.Delay(150);
+        ScrollViewer? logScroll = VisualDescendants<ScrollViewer>(logList)
+            .FirstOrDefault(viewer => viewer.ScrollableHeight > 1);
+        if (logScroll is null)
+        {
+            throw new InvalidOperationException("Logs list did not expose a scrollable viewport.");
+        }
+
+        double logScrollRange = logScroll.ScrollableHeight;
+        logScroll.ChangeView(null, logScrollRange, null, true);
+        await Task.Delay(100);
+        if (logScroll.VerticalOffset <= 0)
+        {
+            throw new InvalidOperationException("Logs list could not scroll to its tail.");
+        }
+
+        LogEntry[] nextGenerationLogs = logs
+            .Select(entry => entry with { Message = $"generation-two-{entry.Message}" })
+            .ToArray();
+        System.Diagnostics.Stopwatch logGeneration = System.Diagnostics.Stopwatch.StartNew();
+        _logsPage.UpdateSnapshot(
+            sample with { Logs = nextGenerationLogs },
+            false,
+            EndpointCapability.None,
+            "smoke-logs:generation-2");
+        logGeneration.Stop();
+        LogRowViewModel regeneratedLog = logList.Items
+            .Cast<LogRowViewModel>()
+            .Single(row => row.Sequence == 78);
+        if (ReferenceEquals(oldGenerationLog, regeneratedLog)
+            || !regeneratedLog.Log.Message.StartsWith("generation-two-", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Log generation switch reused a row from the previous controller.");
+        }
+
+        LogEntry[] latestBoundedLogs = Enumerable.Range(logCapacity + 1, logCapacity)
+            .Select(sequence => new LogEntry(
+                now.AddSeconds(sequence),
+                sequence % 2 == 0 ? "mihomo" : "ClashTray",
+                (sequence % 3) switch { 0 => "info", 1 => "warning", _ => "error" },
+                $"generation-two-event-{sequence}",
+                Sequence: sequence))
+            .ToArray();
+        System.Diagnostics.Stopwatch logEviction = System.Diagnostics.Stopwatch.StartNew();
+        _logsPage.UpdateSnapshot(
+            sample with { Logs = latestBoundedLogs },
+            false,
+            EndpointCapability.None,
+            "smoke-logs:generation-2");
+        logEviction.Stop();
+        if (logList.Items.Count != logCapacity
+            || logList.Items.Cast<LogRowViewModel>().Min(row => row.Sequence) != logCapacity + 1
+            || logList.Items.Cast<LogRowViewModel>().Max(row => row.Sequence) != logCapacity * 2
+            || clearLogs.IsEnabled)
+        {
+            throw new InvalidOperationException("Log buffer eviction failed to replace the 500-row view or disabled clear state changed.");
+        }
+
+        logList.ScrollIntoView(logList.Items[^1]);
+        logList.UpdateLayout();
+        await Task.Delay(100);
+        await SaveDiagnosticFrameAsync(directory, "logs-interactions");
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "connections-logs-checks.json"),
+            JsonSerializer.Serialize(new
+            {
+                Safety = "synthetic snapshots; isolated smoke storage; no core, service, proxy or TUN actions",
+                Connections = new
+                {
+                    Rows = connectionCount,
+                    NewestSort = true,
+                    UploadSort = true,
+                    DownloadSort = true,
+                    SelectedDetails = true,
+                    SelectionRetainedThroughSortAndFilter = true,
+                    GenerationSwitchClearedSelection = true,
+                    GenerationSwitchRecreatedRows = true,
+                    ScrollableHeight = connectionScrollRange,
+                    ScrolledToTail = true,
+                    ReadOnlyActionsRemainDisabled = true,
+                    InitialUpdateMilliseconds = connectionUpdate.Elapsed.TotalMilliseconds,
+                    SortAndFilterMilliseconds = connectionSortFilter.Elapsed.TotalMilliseconds,
+                    GenerationUpdateMilliseconds = connectionGeneration.Elapsed.TotalMilliseconds
+                },
+                Logs = new
+                {
+                    Capacity = logCapacity,
+                    WarningRows = 167,
+                    MihomoRows = 250,
+                    SearchIsolatedSequence = 78,
+                    GenerationSwitchRecreatedRows = true,
+                    ScrollableHeight = logScrollRange,
+                    ScrolledToTail = true,
+                    OldestSequenceAfterEviction = logCapacity + 1,
+                    NewestSequenceAfterEviction = logCapacity * 2,
+                    EvictedOldRows = true,
+                    ClearRemainsDisabled = true,
+                    InitialUpdateMilliseconds = logUpdate.Elapsed.TotalMilliseconds,
+                    FilteringMilliseconds = logFiltering.Elapsed.TotalMilliseconds,
+                    GenerationUpdateMilliseconds = logGeneration.Elapsed.TotalMilliseconds,
+                    EvictionUpdateMilliseconds = logEviction.Elapsed.TotalMilliseconds
+                }
+            }, DiagnosticJsonOptions));
+    }
+    private async Task VerifyRemoteFreshnessPresentationAsync(string directory, RuntimeSnapshot sample)
+    {
+        AppSnapshot local = _runtime!.AppSnapshot;
+        EndpointDescriptor remote = EndpointUriNormalizer.CreateRemoteDescriptor(
+            new EndpointId("smoke-remote"),
+            "示例远程端点",
+            new Uri("https://remote.example.test"));
+        DateTimeOffset lastConfirmedAt = DateTimeOffset.UtcNow.AddMinutes(-3);
+        RuntimeSnapshot remoteData = sample with
+        {
+            Connections = [new ConnectionInfo(
+                "smoke-connection",
+                "tcp",
+                "127.0.0.1:1234",
+                "example.test:443",
+                "MATCH",
+                "代理",
+                128,
+                256,
+                DateTimeOffset.UtcNow.AddMinutes(-1))],
+            Rules = [new RuleInfo("MATCH", "example.test", "代理", 1)],
+            Logs = [new LogEntry(DateTimeOffset.UtcNow.AddMinutes(-1), "mihomo", "info", "remote data")]
+        };
+        ControllerSessionSnapshot remoteController = new(
+            remote,
+            EndpointSessionState.Reconnecting,
+            1,
+            lastConfirmedAt,
+            remoteData.Core,
+            remoteData.ProxyGroups,
+            remoteData.ProxyNodes,
+            remoteData.Connections,
+            remoteData.Rules,
+            remoteData.Providers,
+            remoteData.RuleProviders,
+            remoteData.Logs,
+            EndpointCapabilityDefaults.Remote,
+            "smoke stale controller",
+            ErrorCode.EndpointStaleResult);
+        AppSnapshot remoteSnapshot = local with
+        {
+            ActiveController = remoteController,
+            Endpoints = local.Endpoints.Append(remote).ToArray()
+        };
+
+        UpdateAppSnapshot(remoteSnapshot);
+        RootGrid.UpdateLayout();
+        string expectedFreshness = LocalizationService.Format(
+            "ControllerLastConfirmedFormat",
+            lastConfirmedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
+        if (CoreStateText.Text != LocalizationService.Get("ControllerStateReconnecting")
+            || ControllerFreshnessText.Visibility != Visibility.Visible
+            || ControllerFreshnessText.Text != expectedFreshness
+            || !string.Equals(
+                ControllerEndpointButton.Content as string,
+                LocalizationService.Format("ControllerRemoteFormat", remote.DisplayName),
+                StringComparison.Ordinal)
+            || CoreActionButton.IsEnabled
+            || RuleModeButton.IsEnabled
+            || GlobalModeButton.IsEnabled
+            || DirectModeButton.IsEnabled
+            || !ErrorBanner.IsOpen
+            || !ErrorBanner.Message.Contains(
+                LocalizationService.Get("ControllerErrorStale"),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Remote stale state was not visible or local controls were enabled.");
+        }
+
+        StackPanel remoteGroups = (StackPanel)_proxyPage!.FindName("GroupsPanel");
+        if (remoteGroups.Children.Count == 0
+            || ((Grid)((StackPanel)((Border)remoteGroups.Children[0]).Child).Children[0]).Children[2] is not Button remoteTestButton
+            || remoteTestButton.IsEnabled)
+        {
+            throw new InvalidOperationException("Remote stale proxy actions were not disabled.");
+        }
+
+        await SaveDiagnosticFrameAsync(directory, "remote-stale-controller");
+
+        NavigateTo(_rulesPage, PanelPage.Rules);
+        await Task.Delay(50);
+        if (((Button)_rulesPage!.FindName("RefreshRulesButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote stale rule refresh was not disabled.");
+        }
+
+        NavigateTo(_connectionsPage, PanelPage.Connections);
+        await Task.Delay(50);
+        ListView remoteConnections = (ListView)_connectionsPage!.FindName("ConnectionsListView");
+        remoteConnections.SelectedIndex = 0;
+        await Task.Delay(20);
+        if (((Button)_connectionsPage!.FindName("CloseAllButton")).IsEnabled
+            || ((Button)_connectionsPage.FindName("CloseSelectedButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote stale connection actions were not disabled.");
+        }
+
+        NavigateTo(_logsPage, PanelPage.Logs);
+        await Task.Delay(50);
+        if (((Button)_logsPage!.FindName("ClearLogsButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote stale log clearing was not disabled.");
+        }
+
+        NavigateTo(_settingsPage, PanelPage.Settings);
+        await Task.Delay(50);
+        ListView remoteProviders = (ListView)_settingsPage!.FindName("ProvidersListView");
+        remoteProviders.SelectedIndex = 0;
+        await Task.Delay(20);
+        if (((Button)_settingsPage!.FindName("ClearDnsButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("ClearFakeIpButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("UpdateGeoButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("RefreshProviderButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote stale maintenance actions were not disabled.");
+        }
+
+        NavigateTo(_proxyPage, PanelPage.Proxy);
+        ControllerSessionSnapshot connectedController = remoteController with
+        {
+            State = EndpointSessionState.Connected,
+            ErrorMessage = null,
+            ErrorCode = ErrorCode.None
+        };
+        UpdateAppSnapshot(remoteSnapshot with { ActiveController = connectedController });
+        RootGrid.UpdateLayout();
+        StackPanel connectedGroups = (StackPanel)_proxyPage!.FindName("GroupsPanel");
+        if (!RuleModeButton.IsEnabled
+            || !GlobalModeButton.IsEnabled
+            || !DirectModeButton.IsEnabled
+            || connectedGroups.Children.Count == 0
+            || ((Grid)((StackPanel)((Border)connectedGroups.Children[0]).Child).Children[0]).Children[2] is not Button connectedTestButton
+            || !connectedTestButton.IsEnabled)
+        {
+            throw new InvalidOperationException("Connected remote controller actions did not recover.");
+        }
+
+        EndpointCapability restrictedCapabilities = EndpointCapabilityDefaults.Remote
+            & ~EndpointCapability.ObserveRules
+            & ~EndpointCapability.ObserveProviders
+            & ~EndpointCapability.SwitchMode
+            & ~EndpointCapability.SwitchProxy
+            & ~EndpointCapability.TestDelay
+            & ~EndpointCapability.RefreshProvider
+            & ~EndpointCapability.CloseConnection
+            & ~EndpointCapability.ClearCache
+            & ~EndpointCapability.UpdateGeo;
+        UpdateAppSnapshot(remoteSnapshot with
+        {
+            ActiveController = connectedController with { Capabilities = restrictedCapabilities }
+        });
+        RootGrid.UpdateLayout();
+        StackPanel restrictedGroups = (StackPanel)_proxyPage!.FindName("GroupsPanel");
+        if (RuleModeButton.IsEnabled
+            || GlobalModeButton.IsEnabled
+            || DirectModeButton.IsEnabled
+            || restrictedGroups.Children.Count == 0
+            || ((Grid)((StackPanel)((Border)restrictedGroups.Children[0]).Child).Children[0]).Children[2] is not Button restrictedTestButton
+            || restrictedTestButton.IsEnabled)
+        {
+            throw new InvalidOperationException("Remote capability restrictions were not reflected in the proxy controls.");
+        }
+
+        NavigateTo(_rulesPage, PanelPage.Rules);
+        await Task.Delay(50);
+        if (((Button)_rulesPage!.FindName("RefreshRulesButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote capability restrictions were not reflected in rule refresh.");
+        }
+
+        NavigateTo(_connectionsPage, PanelPage.Connections);
+        await Task.Delay(50);
+        if (((Button)_connectionsPage!.FindName("CloseAllButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote capability restrictions were not reflected in connection actions.");
+        }
+
+        NavigateTo(_settingsPage, PanelPage.Settings);
+        await Task.Delay(50);
+        if (((Button)_settingsPage!.FindName("ClearDnsButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("ClearFakeIpButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("UpdateGeoButton")).IsEnabled
+            || ((Button)_settingsPage.FindName("RefreshProviderButton")).IsEnabled)
+        {
+            throw new InvalidOperationException("Remote capability restrictions were not reflected in maintenance actions.");
+        }
+
+        UpdateAppSnapshot(remoteSnapshot with { ActiveController = connectedController });
+        NavigateTo(_proxyPage, PanelPage.Proxy);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "remote-freshness-checks.json"),
+            JsonSerializer.Serialize(new
+            {
+                RemoteState = "Reconnecting",
+                LastConfirmedTimestampVisible = true,
+                LocalCoreActionDisabled = true,
+                LocalSystemProxyActionDisabled = true,
+                LocalTunActionDisabled = true,
+                RemoteModeActionsDisabled = true,
+                RemoteProxyActionsDisabled = true,
+                RemoteRulesRefreshDisabled = true,
+                RemoteConnectionCloseDisabled = true,
+                RemoteLogClearDisabled = true,
+                RemoteMaintenanceActionsDisabled = true,
+                ConnectedRemoteActionsReenabled = true,
+                RestrictedCapabilityActionsDisabled = true,
+                NetworkStateChanged = false,
+                TunTouched = false
+            }, DiagnosticJsonOptions));
+
+        UpdateAppSnapshot(local);
+    }
+
+    private async Task VerifySettingsDraftAsync(string directory)
+    {
+        SettingsPage page = _settingsPage!;
+        NavigateTo(page, PanelPage.Settings);
+        await Task.Delay(100);
+        ToggleSwitch windows = (ToggleSwitch)page.FindName("StartWithWindowsSwitch");
+        ToggleSwitch core = (ToggleSwitch)page.FindName("StartCoreSwitch");
+        NumberBox port = (NumberBox)page.FindName("HttpPortBox");
+        TextBox bypass = (TextBox)page.FindName("BypassListBox");
+        ComboBox theme = (ComboBox)page.FindName("ThemeBox");
+        Button save = (Button)page.FindName("SaveSettingsButton");
+        TextBlock status = (TextBlock)page.FindName("StatusText");
+        IToggleProvider windowsToggle = (IToggleProvider)new ToggleSwitchAutomationPeer(windows).GetPattern(PatternInterface.Toggle);
+        IToggleProvider coreToggle = (IToggleProvider)new ToggleSwitchAutomationPeer(core).GetPattern(PatternInterface.Toggle);
+        IInvokeProvider invokeSave = (IInvokeProvider)new ButtonAutomationPeer(save).GetPattern(PatternInterface.Invoke);
+        windowsToggle.Toggle();
+        coreToggle.Toggle();
+        int draftPort = _runtime!.Settings.HttpPort + 10;
+        port.Value = draftPort;
+        bypass.Text = "localhost;127.*;example.test";
+        for (int index = 0; index < 8; index++)
+        {
+            UpdateSnapshot(_runtime.Snapshot);
+            await Task.Delay(30);
+        }
+        if (!windows.IsOn || !core.IsOn || port.Value != draftPort || bypass.Text != "localhost;127.*;example.test")
+        {
+            throw new InvalidOperationException("Live snapshots overwrote an unsaved settings field.");
+        }
+
+        port.ApplyTemplate();
+        TextBox input = FindSettingsNumberInput(port) ?? throw new InvalidOperationException("NumberBox template input is unavailable.");
+        input.Focus(FocusState.Programmatic);
+        string pendingText = (draftPort + 1).ToString(System.Globalization.CultureInfo.CurrentCulture);
+        input.Text = pendingText;
+        UpdateSnapshot(_runtime.Snapshot);
+        if (input.Text != pendingText || !ReferenceEquals(FocusManager.GetFocusedElement(RootGrid.XamlRoot), input))
+        { throw new InvalidOperationException("A snapshot changed the focused uncommitted NumberBox text."); }
+
+        await _runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set("dark")));
+        page.UpdateSnapshot(_runtime.Snapshot);
+        if (!windows.IsOn || !core.IsOn || input.Text != pendingText
+            || (theme.SelectedItem as ComboBoxItem)?.Tag?.ToString() != "dark")
+        {
+            throw new InvalidOperationException("An external theme change lost drafts or failed to update the untouched theme.");
+        }
+
+        input.Text = "not-a-port";
+        invokeSave.Invoke();
+        await Task.Delay(100);
+        if (input.Text != "not-a-port" || !windows.IsOn || !core.IsOn || _runtime.Settings.StartCoreAutomatically)
+        { throw new InvalidOperationException("Invalid pending numeric text was discarded or saved as the old Value."); }
+
+        port.Value = _runtime.Settings.MixedPort;
+        invokeSave.Invoke();
+        await Task.Delay(100);
+        if (!windows.IsOn || !core.IsOn || _runtime.Settings.StartCoreAutomatically
+            || !status.Text.Contains("不能重复", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Validation failure lost the startup drafts or falsely saved them.");
+        }
+
+        port.Value = draftPort;
+        // Exercise both switches without ever changing the real Windows startup registry.
+        windowsToggle.Toggle();
+        invokeSave.Invoke();
+        for (int attempt = 0; attempt < 50; attempt++)
+        {
+            await Task.Delay(30);
+            if (_runtime.Settings.StartCoreAutomatically && save.IsEnabled)
+            {
+                break;
+            }
+        }
+        SettingsStore store = new ClashTray.Core.SettingsStore(new ClashTray.Core.AppPaths(
+            Path.Combine(directory, "user"), Path.Combine(directory, "service")));
+        AppSettings persisted = await store.LoadAsync();
+        if (!persisted.StartCoreAutomatically || persisted.StartWithWindows || persisted.HttpPort != draftPort
+            || persisted.BypassList != "localhost;127.*;example.test")
+        {
+            throw new InvalidOperationException("Saved startup/core preferences and edited fields did not survive reload.");
+        }
+
+        UpdateSnapshot(_runtime.Snapshot);
+        if (!core.IsOn || windows.IsOn || port.Value != draftPort)
+        {
+            throw new InvalidOperationException("Saved values reverted after another snapshot.");
+        }
+
+        SettingsPage reopened = new SettingsPage(_runtime);
+        if (!((ToggleSwitch)reopened.FindName("StartCoreSwitch")).IsOn)
+        {
+            throw new InvalidOperationException("A recreated settings page lost the saved core startup preference.");
+        }
+
+        OtherPageScrollViewer.ChangeView(null, 0, null, true);
+        await SaveDiagnosticFrameAsync(directory, "settings-startup");
+        await File.WriteAllTextAsync(Path.Combine(directory, "settings-draft-checks.json"), JsonSerializer.Serialize(new
+        {
+            BothStartupSwitchesSurviveSnapshots = true,
+            PortAndTextDraftsPreserved = true,
+            ExternalThemeMergesWithoutLosingDrafts = true,
+            FocusedUncommittedNumberTextPreserved = true,
+            InvalidUncommittedTextPreservedAndRejected = true,
+            InvalidSavePreservesDrafts = true,
+            SavedCoreStartupSurvivesReload = true,
+            RecreatedPageLoadsSavedValues = true,
+            WindowsStartupRegistryChanged = false,
+            ManualChecks = "Windows sign-in startup and automatic core launch after sign-in were not exercised."
+        }, DiagnosticJsonOptions));
+        NavigateTo(_proxyPage, PanelPage.Proxy);
+    }
+
+    private static TextBox? FindSettingsNumberInput(DependencyObject parent, int depth = 0)
+    {
+        if (parent is TextBox input) { return input; }
+        if (depth >= 16) { return null; }
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            TextBox? child = FindSettingsNumberInput(VisualTreeHelper.GetChild(parent, index), depth + 1);
+            if (child is not null) { return child; }
+        }
+        return null;
+    }
+
+    private async Task VerifyNetworkSwitchErrorPresentationAsync(string directory)
+    {
+        RuntimeSnapshot local = _runtime!.Snapshot;
+        NetworkContextSnapshot context = new(
+            7,
+            DateTimeOffset.UtcNow,
+            NetworkConnectivityKind.WiFi,
+            "Office Wi-Fi",
+            "wifi-1",
+            NetworkPermissionState.Allowed,
+            false,
+            true);
+        NetworkSwitchStatus status = new(
+            true,
+            NetworkSwitchState.Failed,
+            NetworkPermissionState.Allowed,
+            context,
+            new NetworkSwitchDecision(
+                NetworkSwitchDecisionKind.KeepCurrentWithWarning,
+                NetworkSwitchState.Failed,
+                NetworkSwitchReason.MissingTarget,
+                context.Revision,
+                "missing-profile",
+                Message: "Mapped configuration is unavailable."),
+            "Mapped configuration is unavailable.",
+            ErrorCode.NetworkRuleTargetMissing);
+
+        NavigateTo(_settingsPage!, PanelPage.Settings);
+        UpdateSnapshot(local with { NetworkSwitch = status });
+        RootGrid.UpdateLayout();
+        string expectedMissingTarget = LocalizationService.Format(
+            "NetworkSwitchStatusErrorFormat",
+            LocalizationService.Format("NetworkSwitchStatusFormat", LocalizationService.Get("NetworkSwitchStateFailed"), "Office Wi-Fi"),
+            LocalizationService.Get("NetworkSwitchErrorTargetMissing"));
+        if (((TextBlock)_settingsPage!.FindName("NetworkSwitchStateText")).Text != expectedMissingTarget)
+        {
+            throw new InvalidOperationException("Missing network-switch target error was not localized in the settings page.");
+        }
+
+        status = status with
+        {
+            LastDecision = status.LastDecision! with { Reason = NetworkSwitchReason.ExecutionFailed },
+            ErrorMessage = "Automatic switch failed.",
+            ErrorCode = ErrorCode.ConfigurationSwitchFailed
+        };
+        UpdateSnapshot(local with { NetworkSwitch = status });
+        RootGrid.UpdateLayout();
+        string expectedExecutionFailure = LocalizationService.Format(
+            "NetworkSwitchStatusErrorFormat",
+            LocalizationService.Format("NetworkSwitchStatusFormat", LocalizationService.Get("NetworkSwitchStateFailed"), "Office Wi-Fi"),
+            LocalizationService.Get("NetworkSwitchErrorExecution"));
+        if (((TextBlock)_settingsPage.FindName("NetworkSwitchStateText")).Text != expectedExecutionFailure)
+        {
+            throw new InvalidOperationException("Network-switch execution error was not localized in the settings page.");
+        }
+
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "network-switch-error-checks.json"),
+            JsonSerializer.Serialize(new
+            {
+                MissingTargetErrorCode = ErrorCode.NetworkRuleTargetMissing.ToString(),
+                ExecutionFailureErrorCode = ErrorCode.ConfigurationSwitchFailed.ToString(),
+                ErrorDetailsVisible = true,
+                CurrentConfigurationPreserved = true,
+                NetworkStateChanged = false,
+                TunTouched = false
+            }, DiagnosticJsonOptions));
+        UpdateSnapshot(local);
+    }
+
+    private async Task VerifySsidFeatureScopeAsync(string directory)
+    {
+        NavigateTo(_settingsPage!, PanelPage.Settings);
+        RootGrid.UpdateLayout();
+
+        if (_settingsPage!.FindName("NetworkSwitchCard") is not Border networkSwitchCard
+            || networkSwitchCard.Visibility != Visibility.Collapsed
+            || _settingsPage.FindName("NetworkSwitchRulesCard") is not Border networkSwitchRulesCard
+            || networkSwitchRulesCard.Visibility != Visibility.Collapsed)
+        {
+            throw new InvalidOperationException("SSID/Wi-Fi switching must remain hidden in the 0.3.0 Beta.");
+        }
+
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "ssid-feature-checks.json"),
+            JsonSerializer.Serialize(new
+            {
+                IncludedInBeta = false,
+                SettingsCardsVisible = false,
+                NetworkContextSourceCreated = false,
+                SsidReadOrMonitored = false,
+                NetworkStateChanged = false,
+                TunTouched = false
+            }, DiagnosticJsonOptions));
+    }
+
+    private async Task VerifyProxyDelayDisplayAsync(string directory, RuntimeSnapshot sample)
+    {
+        ProxyPage proxyPage = _proxyPage!;
+        RuntimeSnapshot state = sample with
+        {
+            ProxyGroups = [new("自动选择", "URLTest", "A", ["A", "B", "C"]),
+                new("故障转移", "Fallback", "B", ["A", "B", "C"])],
+            ProxyNodes = [new("A", "Direct", "42", false, []), new("B", "Direct", "0", false, []),
+                new("C", "Direct", null, false, [])]
+        };
+        UpdateSnapshot(state);
+        StackPanel groups = (StackPanel)proxyPage.FindName("GroupsPanel");
+        for (int index = 0; index < 2; index++)
+        {
+            Button button = (Button)((Grid)((StackPanel)((Border)groups.Children[index]).Child).Children[0]).Children[0];
+            ((IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke)).Invoke();
+        }
+        await Task.Delay(150);
+        RootGrid.UpdateLayout();
+        void AssertCurrent(ListView list, string name)
+        {
+            ListViewItem[] items = list.Items.OfType<ListViewItem>().ToArray();
+            if ((list.SelectedItem as ListViewItem)?.Tag?.ToString() != name)
+            {
+                throw new InvalidOperationException("Automatic group selected row does not match core now.");
+            }
+
+            foreach (ListViewItem item in items)
+            {
+                bool current = item.Tag?.ToString() == name;
+                if (VisualDescendants<TextBlock>(item).Any(text => text.Text == LocalizationService.Get("CurrentLabel")) != current)
+                {
+                    throw new InvalidOperationException("Current badge is missing or stale.");
+                }
+
+                FontIcon mark = ((Grid)item.Content).Children.OfType<FontIcon>().Single();
+                if ((mark.Opacity == 1) != current)
+                {
+                    throw new InvalidOperationException("Current checkmark is missing or stale.");
+                }
+            }
+        }
+        ListView[] lists = VisualDescendants<ListView>(proxyPage).Where(list => list.Items.Count > 0).ToArray();
+        if (lists.Length != 2)
+        {
+            throw new InvalidOperationException("Automatic groups did not expand.");
+        }
+
+        AssertCurrent(lists[0], "A");
+        AssertCurrent(lists[1], "B");
+        foreach (string expected in new[] { "42 ms", LocalizationService.Get("DelayTimeout"), LocalizationService.Get("DelayNotTested") })
+        {
+            if (!VisualDescendants<TextBlock>(lists[0]).Any(text => text.Text == expected))
+            {
+                throw new InvalidOperationException($"Latency state missing: {expected}");
+            }
+        }
+
+        state = state with { ProxyGroups = state.ProxyGroups.Select(group => group with { Current = "C" }).ToArray() };
+        proxyPage.UpdateSnapshot(state);
+        await Task.Delay(150);
+        RootGrid.UpdateLayout();
+        foreach (ListView list in VisualDescendants<ListView>(proxyPage).Where(list => list.Items.Count > 0))
+        {
+            AssertCurrent(list, "C");
+        }
+
+        DashboardScrollViewer.ChangeView(null, 190, null, true);
+        await SaveDiagnosticFrameAsync(directory, "proxy-delay-states");
+        await File.WriteAllTextAsync(Path.Combine(directory, "proxy-delay-checks.json"), JsonSerializer.Serialize(new
+        {
+            UrlTestCurrentMarked = true,
+            FallbackCurrentMarked = true,
+            AutomaticSwitchMovesMarker = true,
+            MillisecondsTimeoutAndUntestedDistinct = true
+        }, DiagnosticJsonOptions));
+        DashboardScrollViewer.ChangeView(null, 0, null, true);
+    }
+    private static async Task WaitForSmokeConditionAsync(Func<bool> condition, string operation)
+    {
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (!condition())
+        {
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(started) >= TimeSpan.FromSeconds(5))
+            {
+                throw new TimeoutException($"UI smoke did not observe completion of {operation}.");
+            }
+
+            await Task.Delay(20);
+        }
+    }
+
+    private async Task VerifyMinimizedPanelRestoreAsync(string directory)
+    {
+        PinButton_Click(PinButton, new RoutedEventArgs());
+        if (!_isPinned || !NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect initial))
+        {
+            throw new InvalidOperationException("Could not prepare the pinned-window restore regression.");
+        }
+
+        if (!NativeMethods.SetWindowPos(
+            _windowHandle, IntPtr.Zero, initial.Left, initial.Top, initial.Width + 32, initial.Height,
+            NativeMethods.SWP_NOACTIVATE)
+            || !NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect resized))
+        {
+            throw new InvalidOperationException("Could not resize the pinned window before minimizing it.");
+        }
+
+        foreach (Action restore in new Action[] { TogglePanel, ShowPanel })
+        {
+            NativeMethods.ShowWindow(_windowHandle, NativeMethods.SW_MINIMIZE);
+            if (!NativeMethods.IsIconic(_windowHandle) || CanRenderPanel)
+            {
+                throw new InvalidOperationException("The pinned panel did not enter the minimized state.");
+            }
+
+            restore();
+            if (!CanRenderPanel)
+            {
+                throw new InvalidOperationException($"{restore.Method.Name} did not restore the minimized pinned panel.");
+            }
+
+            if (!NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect restored)
+                || restored.Left != resized.Left || restored.Top != resized.Top
+                || restored.Width != resized.Width || restored.Height != resized.Height)
+            {
+                throw new InvalidOperationException($"{restore.Method.Name} changed the pinned window's restored bounds.");
+            }
+        }
+
+        TogglePanel();
+        if (NativeMethods.IsWindowVisible(_windowHandle))
+        {
+            throw new InvalidOperationException("Tray selection did not hide the restored pinned panel.");
+        }
+
+        TogglePanel();
+        if (!CanRenderPanel)
+        {
+            throw new InvalidOperationException("Tray selection did not reopen the hidden pinned panel.");
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(directory, "minimized-panel-restore.json"),
+            JsonSerializer.Serialize(new
+            {
+                TrayToggleRestores = true,
+                OpenPanelRestores = true,
+                MinimizedPanelCannotRender = true,
+                RestoredBoundsPreserved = true,
+                NormalTogglePreserved = true
+            }, DiagnosticJsonOptions));
+        PinButton_Click(PinButton, new RoutedEventArgs());
+    }
+
+    private async Task VerifyThemeUnlockAsync(string directory)
+    {
+        if (NakhimovThemeOption.Visibility != Visibility.Collapsed)
+        {
+            throw new InvalidOperationException("Locked theme is visible before the gesture.");
+        }
+
+        IInvokeProvider invoke = (IInvokeProvider)new ButtonAutomationPeer(LogoButton).GetPattern(PatternInterface.Invoke);
+        for (int index = 0; index < 4; index++)
+        {
+            invoke.Invoke();
+            await Task.Delay(50);
+        }
+        if (_runtime!.Settings.NakhimovUnlocked || _themeName == "nakhimov")
+        {
+            throw new InvalidOperationException("Theme unlocked before the fifth click.");
+        }
+
+        invoke.Invoke();
+        for (int attempt = 0; attempt < 50; attempt++)
+        {
+            await Task.Delay(50);
+            if (_runtime.Settings.NakhimovUnlocked && !_unlockInProgress)
+            {
+                break;
+            }
+        }
+        if (!_runtime.Settings.NakhimovUnlocked || _themeName != "nakhimov"
+            || NakhimovThemeOption.Visibility != Visibility.Visible
+            || _logoAsset != "Nakhimov")
+        {
+            throw new InvalidOperationException("Fifth Logo button invocation did not enable the theme.");
+        }
+
+        SettingsStore store = new ClashTray.Core.SettingsStore(new ClashTray.Core.AppPaths(
+            Path.Combine(directory, "user"), Path.Combine(directory, "service")));
+        AppSettings restored = await store.LoadAsync();
+        if (!restored.NakhimovUnlocked || restored.Theme != "nakhimov")
+        {
+            throw new InvalidOperationException("Unlock state was not persisted.");
+        }
+
+        await SaveDiagnosticFrameAsync(directory, "nakhimov-unlocked");
+        EasterEggTip.IsOpen = false;
+        await SaveDiagnosticFrameAsync(directory, "nakhimov-panel");
+        await _runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set("light")));
+        ApplyTheme(_runtime.Settings.Theme);
+        if (NakhimovThemeOption.Visibility != Visibility.Visible || _logoAsset != "Light")
+        {
+            throw new InvalidOperationException("Switching back lost unlock state or kept the wrong logo.");
+        }
+
+        if (((SolidColorBrush)((ResourceDictionary)Application.Current.Resources.ThemeDictionaries["Default"])["ClashTrayCanvasBrush"]).Color
+            != Windows.UI.Color.FromArgb(255, 25, 28, 34))
+        {
+            throw new InvalidOperationException("Normal dark palette was not restored.");
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(directory, "theme-unlock-checks.json"), JsonSerializer.Serialize(new
+        {
+            HiddenUntilUnlocked = true,
+            FourClicksStayLocked = true,
+            FifthButtonInvocationUnlocks = true,
+            NakhimovLogoSelected = true,
+            SavedStateReloads = true,
+            SwitchBackKeepsUnlock = true,
+            OriginalPaletteRestored = true,
+            ManualChecks = "Physical mouse double-click timing and OS high contrast require manual verification."
+        }, DiagnosticJsonOptions));
+        ResetLogoClicks();
+    }
+    private async Task SaveDiagnosticFrameAsync(string directory, string name)
+    {
+        await Task.Delay(200);
+        RootGrid.UpdateLayout();
+        RenderTargetBitmap renderer = new RenderTargetBitmap();
+        await renderer.RenderAsync(RootGrid);
+        IBuffer pixels = await renderer.GetPixelsAsync();
+        StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(Path.GetFullPath(directory));
+        StorageFile file = await folder.CreateFileAsync($"{name}.png", CreationCollisionOption.ReplaceExisting);
+        using IRandomAccessStream stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+        BitmapEncoder encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+        encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
+            (uint)renderer.PixelWidth, (uint)renderer.PixelHeight, 96, 96, pixels.ToArray());
+        await encoder.FlushAsync();
+    }
+
+    private static IEnumerable<T> VisualDescendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (T descendant in VisualDescendants<T>(child))
+            {
+                yield return descendant;
+            }
+        }
+    }
+}

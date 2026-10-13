@@ -1,0 +1,542 @@
+using System.Diagnostics.CodeAnalysis;
+using ClashTray.Contracts;
+using ClashTray.Core;
+using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
+
+namespace ClashTray.App;
+
+public partial class App : Application, IAsyncDisposable
+{
+    private readonly SingleInstanceCoordinator _instanceCoordinator;
+    private DispatcherQueue? _dispatcherQueue;
+    private MainWindow? _mainWindow;
+    private TrayIconService? _trayIcon;
+    private readonly ClashTrayRuntime _runtime;
+    private readonly ShutdownCoordinator _shutdownCoordinator;
+#if DEBUG
+    private readonly string? _smokeDirectory;
+#endif
+    private readonly object _snapshotDispatchGate = new();
+    private AppSnapshot? _pendingAppSnapshot;
+    private bool _snapshotDispatchScheduled;
+    private bool _disposed;
+    private RuntimeShutdownResult? _shutdownResult;
+
+    [SuppressMessage(
+        "Reliability",
+        "CA2000:Dispose objects before losing scope",
+        Justification = "The runtime takes ownership of the network context source and disposes it with the application lifecycle.")]
+    internal App(SingleInstanceCoordinator instanceCoordinator, string? smokeDirectory = null)
+    {
+        _instanceCoordinator = instanceCoordinator;
+#if DEBUG
+        _smokeDirectory = smokeDirectory;
+        AppPaths? runtimePaths = smokeDirectory is null
+            ? null
+            : new AppPaths(
+                Path.Combine(smokeDirectory, "user"),
+                Path.Combine(smokeDirectory, "service"));
+#endif
+        // Wi-Fi/SSID switching is intentionally outside the 0.3.0 Beta scope.
+        // Keep the runtime seam available for a later release, but do not create
+        // a production network context source that could read or monitor SSIDs.
+#if DEBUG
+        _runtime = runtimePaths is null
+            ? ClashTrayRuntimeFactory.CreateProduction()
+            : ClashTrayRuntimeFactory.CreateIsolated(runtimePaths);
+#else
+        _runtime = ClashTrayRuntimeFactory.CreateProduction();
+#endif
+        _shutdownCoordinator = new ShutdownCoordinator(
+            DispatchUiActionAsync,
+            () => _mainWindow?.AllowClose(),
+            DisposeForQuitAsync,
+            () =>
+            {
+                _mainWindow?.Close();
+                Environment.Exit(_shutdownResult?.IsFullyClean == true ? 0 : 2);
+            });
+        UnhandledException += (_, e) =>
+        {
+            BoundedDiagnosticWriter.TryWriteException(GetDiagnosticDirectory(), e.Exception);
+        };
+
+        // Set the Windows App SDK language override after the Application object
+        // exists but before InitializeComponent loads MRT resources.
+        LocalizationService.ApplyStartupLanguage(
+#if DEBUG
+            smokeDirectory is null
+                ? new AppPaths()
+                : new AppPaths(
+                    Path.Combine(smokeDirectory, "user"),
+                    Path.Combine(smokeDirectory, "service")),
+            forceChineseForDiagnostics: smokeDirectory is not null);
+#else
+            new AppPaths(),
+            forceChineseForDiagnostics: false);
+#endif
+
+        InitializeComponent();
+    }
+
+    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    {
+        _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+        _instanceCoordinator.ActivationRequested += OnActivationRequested;
+        _runtime.AppSnapshotChanged += OnAppSnapshotChanged;
+
+        _mainWindow = new MainWindow(this);
+        _mainWindow.Activate();
+        _mainWindow.HidePanel();
+        _trayIcon = new TrayIconService(_mainWindow, OnTrayInteraction, _mainWindow.HandleDeactivation);
+        _trayIcon.MenuItemSelected += OnMenuItemSelected;
+#if DEBUG
+        if (_smokeDirectory is null)
+        {
+            _trayIcon.Install();
+        }
+#else
+        _trayIcon.Install();
+#endif
+
+        _mainWindow.Initialize(_trayIcon, _runtime);
+#if DEBUG
+        if (_smokeDirectory is null)
+        {
+            _ = InitializeRuntimeAsync();
+        }
+        else
+        {
+            _ = RunSmokeTestAsync();
+        }
+#else
+        _ = InitializeRuntimeAsync();
+#endif
+    }
+
+#if DEBUG
+    private async Task RunSmokeTestAsync()
+    {
+        try
+        {
+            await _mainWindow!.CaptureSmokeTestAsync(_smokeDirectory!);
+            await RequestQuitAsync();
+        }
+        catch (Exception exception)
+        {
+            await File.WriteAllTextAsync(Path.Combine(_smokeDirectory!, "failure.log"), exception.ToString());
+            Environment.Exit(1);
+        }
+    }
+#endif
+
+    private Task DispatchUiActionAsync(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        DispatcherQueue? dispatcher = _dispatcherQueue;
+        if (dispatcher is null)
+        {
+            return Task.FromException(new ShutdownUiDispatcherRejectedException());
+        }
+
+        if (dispatcher.HasThreadAccess)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        TaskCompletionSource completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!dispatcher.TryEnqueue(() =>
+        {
+            try
+            {
+                action();
+                completion.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.TrySetException(exception);
+            }
+        }))
+        {
+            completion.TrySetException(new ShutdownUiDispatcherRejectedException());
+        }
+
+        return completion.Task;
+    }
+    public Task RequestQuitAsync() => _shutdownCoordinator.RequestQuitAsync();
+
+    internal async Task RequestQuitEnsuringExitAsync()
+    {
+        try
+        {
+            await _shutdownCoordinator.RequestQuitAsync();
+        }
+        catch (Exception exception)
+        {
+            // The quit pipeline failed before reaching the exit action (for example
+            // the dispatcher is already gone). An explicit quit must never leave the
+            // process running: rerun the idempotent cleanup, then exit directly.
+            BoundedDiagnosticWriter.TryWriteException(GetDiagnosticDirectory(), exception);
+            await DisposeForQuitAsync();
+            Environment.Exit(_shutdownResult?.IsFullyClean == true ? 0 : 2);
+        }
+    }
+
+    [SuppressMessage("Performance", "CA1822:Mark members as static", Justification = "The DEBUG build reads the instance smoke-test directory; Release uses the shared log directory.")]
+    private string GetDiagnosticDirectory()
+    {
+#if DEBUG
+        return _smokeDirectory
+            ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "ClashTray",
+                "logs");
+#else
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "ClashTray",
+            "logs");
+#endif
+    }
+
+    private async Task DisposeForQuitAsync()
+    {
+        try
+        {
+            await DisposeAsync();
+        }
+        catch (Exception)
+        {
+            // An explicit quit must still complete when cleanup fails; the
+            // runtime has already logged the individual cleanup failures.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _instanceCoordinator.ActivationRequested -= OnActivationRequested;
+        _runtime.AppSnapshotChanged -= OnAppSnapshotChanged;
+        if (_trayIcon is not null)
+        {
+            _trayIcon.MenuItemSelected -= OnMenuItemSelected;
+        }
+
+        lock (_snapshotDispatchGate)
+        {
+            _pendingAppSnapshot = null;
+            _snapshotDispatchScheduled = false;
+        }
+
+        _trayIcon?.Dispose();
+        _shutdownResult = await _runtime.ShutdownAsync();
+        await _runtime.DisposeAsync();
+        _instanceCoordinator.Dispose();
+        GC.SuppressFinalize(this);
+    }
+
+    internal async Task ToggleCoreAsync()
+    {
+        if (_runtime.Snapshot.Core.State is CoreState.Validating
+            or CoreState.Starting
+            or CoreState.Stopping
+            or CoreState.Restarting)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_runtime.Snapshot.Core.State == CoreState.Running)
+            {
+                await _runtime.RestartCoreAsync();
+            }
+            else
+            {
+                await _runtime.StartCoreAsync();
+            }
+        }
+        catch (Exception exception)
+        {
+            ShowCommandError(exception);
+        }
+    }
+
+    private async Task StopCoreAsync()
+    {
+        try
+        {
+            await _runtime.StopCoreAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowCommandError(exception);
+        }
+    }
+
+    internal async Task ToggleSystemProxyAsync()
+    {
+        SystemProxyState currentState = _runtime.Snapshot.SystemProxy;
+        if (currentState is SystemProxyState.Enabling or SystemProxyState.Disabling)
+        {
+            return;
+        }
+
+        bool enabled = currentState is not (SystemProxyState.On or SystemProxyState.RestoreRequired);
+        try
+        {
+            await _runtime.SetSystemProxyAsync(enabled);
+        }
+        catch (Exception exception)
+        {
+            ShowCommandError(exception);
+        }
+    }
+
+    internal async Task ToggleTunAsync()
+    {
+        if (_runtime.Snapshot.Tun is TunState.Enabling or TunState.Disabling)
+        {
+            return;
+        }
+
+        if (_runtime.Snapshot.Tun is TunState.Unknown or TunState.Failed or TunState.Unavailable)
+        {
+            _mainWindow?.ShowError(LocalizationService.Get("TunStateUnknown"));
+            return;
+        }
+
+        try
+        {
+            await _runtime.SetTunAsync(_runtime.Snapshot.Tun is not TunState.On);
+        }
+        catch (Exception exception)
+        {
+            ShowCommandError(exception);
+        }
+    }
+
+    internal async Task SetModeAsync(ProxyMode mode, EndpointCommandTarget? expectedTarget = null)
+    {
+        try
+        {
+            await _runtime.SetModeAsync(mode, expectedTarget);
+        }
+        catch (Exception exception)
+        {
+            ShowCommandError(exception);
+        }
+    }
+
+    internal async Task ImportLocalConfigurationAsync()
+    {
+        await _mainWindow!.ImportLocalConfigurationAsync();
+    }
+
+    internal async Task ImportSubscriptionAsync()
+    {
+        await _mainWindow!.ImportSubscriptionAsync();
+    }
+
+    internal Task SetActiveConfigurationAsync(string id) => _runtime.SetActiveConfigurationAsync(id);
+
+    internal Task DeleteConfigurationAsync(ConfigurationProfile profile) => _runtime.DeleteConfigurationAsync(profile);
+
+    internal Task RefreshSubscriptionAsync(ConfigurationProfile profile) => _runtime.RefreshSubscriptionAsync(profile);
+
+    internal RuntimeSnapshot GetSnapshot() => _runtime.Snapshot;
+
+    private async Task InitializeRuntimeAsync()
+    {
+        try
+        {
+            await _runtime.InitializeAsync();
+        }
+        catch (Exception exception)
+        {
+            ShowCommandError(exception);
+        }
+    }
+
+    private void OnTrayInteraction(TrayInteraction interaction)
+    {
+        if (interaction == TrayInteraction.LeftClick)
+        {
+            _mainWindow?.TogglePanel();
+        }
+        else
+        {
+            _trayIcon?.ShowContextMenu(
+            [
+                (1001, LocalizationService.Get("MenuOpenPanel")),
+                (1002, _runtime.Snapshot.Core.State == CoreState.Running ? LocalizationService.Get("MenuRestartCore") : LocalizationService.Get("MenuStartCore")),
+                (1003, LocalizationService.Get("MenuStopCore")),
+                (0, string.Empty),
+                (1004, _runtime.Snapshot.SystemProxy == SystemProxyState.On ? LocalizationService.Get("MenuDisableSystemProxy") : _runtime.Snapshot.SystemProxy == SystemProxyState.RestoreRequired ? LocalizationService.Get("MenuRestoreSystemProxy") : LocalizationService.Get("MenuEnableSystemProxy")),
+                (1005, _runtime.Snapshot.Tun == TunState.On ? LocalizationService.Get("MenuDisableTun") : LocalizationService.Get("MenuEnableTun")),
+                (0, string.Empty),
+                (1006, LocalizationService.Get("MenuModeRule")),
+                (1007, LocalizationService.Get("MenuModeGlobal")),
+                (1008, LocalizationService.Get("MenuModeDirect")),
+                (0, string.Empty),
+                (1009, LocalizationService.Get("MenuQuit"))
+            ]);
+        }
+    }
+
+    private void OnMenuItemSelected(uint id)
+    {
+        _dispatcherQueue?.TryEnqueue(() =>
+        {
+            switch (id)
+            {
+                case 1001:
+                    _mainWindow?.ShowPanel();
+                    break;
+                case 1002:
+                    _ = ToggleCoreAsync();
+                    break;
+                case 1003:
+                    _ = StopCoreAsync();
+                    break;
+                case 1004:
+                    _ = ToggleSystemProxyAsync();
+                    break;
+                case 1005:
+                    _ = ToggleTunAsync();
+                    break;
+                 case 1006:
+                    _ = SetLocalModeFromTrayAsync(ProxyMode.Rule);
+                    break;
+                 case 1007:
+                    _ = SetLocalModeFromTrayAsync(ProxyMode.Global);
+                    break;
+                 case 1008:
+                    _ = SetLocalModeFromTrayAsync(ProxyMode.Direct);
+                    break;
+                case 1009:
+                    _ = RequestQuitEnsuringExitAsync();
+                    break;
+            }
+        });
+    }
+
+    private async Task SetLocalModeFromTrayAsync(ProxyMode mode)
+    {
+        try
+        {
+            await _runtime.SetLocalModeAsync(mode);
+        }
+        catch (Exception exception)
+        {
+            ShowCommandError(exception);
+        }
+    }
+
+    private void OnActivationRequested()
+    {
+        _dispatcherQueue?.TryEnqueue(() => _mainWindow?.ShowPanel());
+    }
+
+    private void OnAppSnapshotChanged(object? sender, AppSnapshot snapshot)
+    {
+        DispatcherQueue? dispatcher = _dispatcherQueue;
+        if (dispatcher is null)
+        {
+            return;
+        }
+
+        bool schedule;
+        lock (_snapshotDispatchGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _pendingAppSnapshot = snapshot;
+            schedule = !_snapshotDispatchScheduled;
+            if (schedule)
+            {
+                _snapshotDispatchScheduled = true;
+            }
+        }
+
+        if (schedule && !dispatcher.TryEnqueue(DrainLatestAppSnapshot))
+        {
+            lock (_snapshotDispatchGate)
+            {
+                _snapshotDispatchScheduled = false;
+            }
+        }
+    }
+
+    private void DrainLatestAppSnapshot()
+    {
+        AppSnapshot? snapshot;
+        lock (_snapshotDispatchGate)
+        {
+            snapshot = _pendingAppSnapshot;
+            _pendingAppSnapshot = null;
+        }
+
+        try
+        {
+            if (snapshot is not null && !_disposed)
+            {
+                UpdateTrayState(snapshot.LocalDevice);
+                _mainWindow?.UpdateAppSnapshot(snapshot);
+            }
+        }
+        finally
+        {
+            DispatcherQueue? dispatcher = _dispatcherQueue;
+            bool schedule;
+            lock (_snapshotDispatchGate)
+            {
+                schedule = !_disposed && _pendingAppSnapshot is not null;
+                if (!schedule)
+                {
+                    _snapshotDispatchScheduled = false;
+                }
+            }
+
+            if (schedule && (dispatcher is null || !dispatcher.TryEnqueue(DrainLatestAppSnapshot)))
+            {
+                lock (_snapshotDispatchGate)
+                {
+                    _snapshotDispatchScheduled = false;
+                }
+            }
+        }
+    }
+
+    private void UpdateTrayState(LocalDeviceSnapshot device) =>
+        _trayIcon?.SetState(TrayStateProjection.FromDevice(device));
+
+    private void ShowCommandError(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        string message = exception switch
+        {
+            OperationBusyException => LocalizationService.Get("OperationBusy"),
+            ServiceCommandException { ErrorCode: ServiceErrorCode.OperationBusy }
+                => LocalizationService.Get("OperationBusy"),
+            ServiceCommandException { ErrorCode: ServiceErrorCode.TunConfigurationMissingAddress }
+                => LocalizationService.Get("TunConfigurationMissingAddress"),
+            ServiceCommandException { ErrorCode: ServiceErrorCode.TunMissingInterfaceAddress }
+                => LocalizationService.Get("TunRecoveryMissingAddress"),
+            ServiceCommandException { ErrorCode: ServiceErrorCode.TunStateUnknown }
+                => LocalizationService.Get("TunRecoveryUnknown"),
+            _ => exception.Message
+        };
+        _mainWindow?.ShowError(message);
+    }
+}

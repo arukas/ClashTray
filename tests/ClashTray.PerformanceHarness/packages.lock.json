@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0-windows10.0.19041": {
+      "clashtray.contracts": {
+        "type": "Project"
+      },
+      "clashtray.core": {
+        "type": "Project",
+        "dependencies": {
+          "ClashTray.Contracts": "[0.3.5, )"
+        }
+      }
+    },
+    "net10.0-windows10.0.19041/win-x64": {}
+  }
+}

@@ -1,0 +1,689 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using ClashTray.Contracts;
+
+namespace ClashTray.Core.Tests;
+
+[TestClass]
+public sealed class RuntimeDisposeTests
+{
+    [TestMethod]
+    public async Task InvalidLocalCoreJournalDoesNotInterruptInitializationOrAutoStart()
+    {
+        string root = CreateRoot();
+        Directory.CreateDirectory(root);
+        AppPaths paths = CreatePaths(root);
+        Directory.CreateDirectory(paths.LocalRoot);
+        const string corruptJournal = """{"version":1,"identity":null}""";
+        await File.WriteAllTextAsync(paths.LocalCoreShutdownFile, corruptJournal);
+
+        string sourcePath = Path.Combine(root, "valid.yaml");
+        await File.WriteAllTextAsync(
+            sourcePath,
+            "mode: rule" + Environment.NewLine
+            + "proxies: []" + Environment.NewLine
+            + "proxy-groups: []" + Environment.NewLine
+            + "rules: []" + Environment.NewLine);
+        AcceptingCandidateValidator candidateValidator = new();
+        ConfigurationStore configurationStore = new(paths, candidateValidator: candidateValidator);
+        ConfigurationProfile profile = await configurationStore.ImportLocalAsync(sourcePath, "active");
+        TestSettingsStore settings = new(new AppSettings(
+            ActiveConfigurationId: profile.Id,
+            StartCoreAutomatically: true));
+        FakeServicePipeClient service = new((command, _) =>
+        {
+            if (command == ServiceCommand.StartCore)
+            {
+                return Task.FromException<ServiceResponse>(
+                    new InvalidOperationException("Malformed recovery must suppress this command."));
+            }
+
+            return Task.FromResult(Response(
+                succeeded: true,
+                tun: TunState.Off,
+                core: CoreState.Stopped));
+        });
+        await using ClashTrayRuntime runtime = RuntimeTestBuilder.Create(
+            paths,
+            null,
+            service,
+            settings,
+            new FakeSystemProxyController(SystemProxyState.Off),
+            candidateValidator);
+
+        try
+        {
+            await runtime.InitializeAsync().WaitAsync(TimeSpan.FromSeconds(3));
+
+            Assert.AreEqual(1, settings.LoadCount);
+            Assert.AreEqual(profile.Id, runtime.Settings.ActiveConfigurationId);
+            Assert.IsTrue(runtime.Settings.StartCoreAutomatically);
+            Assert.IsFalse(service.Commands.Contains(ServiceCommand.StartCore));
+            Assert.AreEqual(CoreState.Missing, runtime.Snapshot.Core.State);
+            Assert.IsNull(runtime.Snapshot.Core.ErrorMessage);
+            StringAssert.Contains(runtime.Snapshot.ErrorMessage, "退出后的本地核心恢复未确认", StringComparison.Ordinal);
+            Assert.IsTrue(File.Exists(paths.LocalCoreShutdownFile));
+            Assert.AreEqual(corruptJournal, await File.ReadAllTextAsync(paths.LocalCoreShutdownFile));
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task DisposeUsesBoundedAdmissionWaitAndKeepsGateAliveForOutstandingReader()
+    {
+        string root = CreateRoot();
+        AppPaths paths = CreatePaths(root);
+        await using ClashTrayRuntime runtime = RuntimeTestBuilder.Create(
+            paths,
+            null,
+            null,
+            null,
+            disposeCleanupTimeout: TimeSpan.FromMilliseconds(300));
+        runtime.SetShutdownStateForTesting(true, CoreState.Running, TunState.Off, SystemProxyState.Off);
+        OperationGate.Lease reader = await runtime.AcquireSharedOperationForTestingAsync();
+
+        try
+        {
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            RuntimeShutdownResult result = await runtime.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.IsTrue(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.OperationGate.Status);
+            Assert.AreEqual(ShutdownCleanupStatus.NotRequired, result.Tun.Status);
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.Core.Status);
+            // If Runtime.DisposeCoreAsync disposed the gate after timing out,
+            // releasing this still-admitted operation would throw.
+            reader.Dispose();
+        }
+        finally
+        {
+            reader.Dispose();
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task NoncriticalLogShutdownTimeoutDoesNotConsumeNetworkCleanupResult()
+    {
+        string root = CreateRoot();
+        FakeServicePipeClient service = new((command, _) => Task.FromResult(Response(
+            succeeded: true,
+            tun: TunState.Off,
+            core: command == ServiceCommand.StopCore ? CoreState.Stopped : CoreState.Running)));
+        TaskCompletionSource logStopEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseLogStop = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task PauseLogStopAsync(string step, CancellationToken _)
+        {
+            if (step == "停止日志流")
+            {
+                logStopEntered.TrySetResult();
+                await releaseLogStop.Task;
+            }
+        }
+
+        await using ClashTrayRuntime runtime = CreateRuntime(
+            root,
+            service,
+            new FakeSystemProxyController(SystemProxyState.Off),
+            TimeSpan.FromMilliseconds(700),
+            PauseLogStopAsync);
+        runtime.SetShutdownStateForTesting(
+            serviceOwnsCore: true,
+            CoreState.Running,
+            TunState.Off,
+            SystemProxyState.Off);
+
+        try
+        {
+            Task<RuntimeShutdownResult> shutdownTask = runtime.ShutdownAsync();
+            await logStopEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            RuntimeShutdownResult result = await shutdownTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.IsTrue(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
+            Assert.IsTrue(result.NetworkCleanupConfirmed, result.ToDiagnosticSummary());
+            Assert.AreEqual(ShutdownCleanupStatus.Completed, result.Core.Status);
+            Assert.AreEqual(ShutdownCleanupStatus.NotRequired, result.Tun.Status);
+            Assert.AreEqual(ShutdownCleanupStatus.NotRequired, result.SystemProxy.Status);
+            Assert.AreEqual(
+                ShutdownCleanupStatus.TimedOutUnknown,
+                result.AdditionalSteps.Single(step => step.Name == "停止日志流").Status);
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.RuntimeResources.Status);
+            CollectionAssert.Contains(service.Commands.ToArray(), ServiceCommand.StopCore);
+        }
+        finally
+        {
+            releaseLogStop.TrySetResult();
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task UnknownTunResponseNeverReportsOffAndLateServiceResponseRetainsShutdownOwnership()
+    {
+        string root = CreateRoot();
+        TaskCompletionSource tunDisableEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<ServiceResponse> releaseTunDisable = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        FakeServicePipeClient service = new((command, _) =>
+        {
+            if (command == ServiceCommand.DisableTun)
+            {
+                tunDisableEntered.TrySetResult();
+                return releaseTunDisable.Task;
+            }
+
+            return Task.FromResult(Response(
+                succeeded: true,
+                tun: TunState.Off,
+                core: CoreState.Stopped));
+        });
+        await using ClashTrayRuntime runtime = CreateRuntime(
+            root,
+            service,
+            new FakeSystemProxyController(SystemProxyState.Off),
+            TimeSpan.FromMilliseconds(600));
+        runtime.SetShutdownStateForTesting(
+            serviceOwnsCore: true,
+            CoreState.Running,
+            TunState.On,
+            SystemProxyState.Off);
+
+        try
+        {
+            Task<RuntimeShutdownResult> shutdownTask = runtime.ShutdownAsync();
+            Assert.AreSame(shutdownTask, runtime.ShutdownAsync());
+            await tunDisableEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            RuntimeShutdownResult result = await shutdownTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.Tun.Status);
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.Core.Status);
+            Assert.IsTrue(runtime.Snapshot.Tun is TunState.Disabling or TunState.Failed);
+            Assert.AreNotEqual(TunState.Off, runtime.Snapshot.Tun);
+            Assert.IsFalse(service.Commands.Contains(ServiceCommand.StopCore));
+            Assert.IsTrue(result.RecoveryResponsibilities.Any(
+                item => item.Owner == "Existing Mihomo service"));
+
+            releaseTunDisable.TrySetResult(Response(
+                succeeded: true,
+                tun: TunState.Off,
+                core: CoreState.Running));
+            await WaitForTunStateAsync(runtime, TunState.Off, TimeSpan.FromSeconds(2));
+
+            Assert.AreEqual(1, service.Commands.Count(command => command == ServiceCommand.DisableTun));
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.Tun.Status);
+            Assert.AreEqual(CoreState.Running, runtime.Snapshot.Core.State);
+        }
+        finally
+        {
+            releaseTunDisable.TrySetResult(Response(
+                succeeded: true,
+                tun: TunState.Off,
+                core: CoreState.Running));
+            await WaitForTunStateAsync(runtime, TunState.Off, TimeSpan.FromSeconds(2));
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task UnavailableServiceDoesNotStopCoreWhileTunStateIsUnconfirmed()
+    {
+        string root = CreateRoot();
+        FakeServicePipeClient service = new((command, _) =>
+        {
+            if (command == ServiceCommand.DisableTun)
+            {
+                return Task.FromException<ServiceResponse>(new IOException("simulated unavailable service"));
+            }
+
+            return Task.FromResult(Response(true, TunState.Off, CoreState.Stopped));
+        });
+        await using ClashTrayRuntime runtime = CreateRuntime(
+            root,
+            service,
+            new FakeSystemProxyController(SystemProxyState.Off),
+            TimeSpan.FromSeconds(2));
+        runtime.SetShutdownStateForTesting(
+            serviceOwnsCore: true,
+            CoreState.Running,
+            TunState.On,
+            SystemProxyState.Off);
+
+        try
+        {
+            RuntimeShutdownResult result = await runtime.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.AreEqual(ShutdownCleanupStatus.Failed, result.Tun.Status);
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.Core.Status);
+            Assert.IsFalse(service.Commands.Contains(ServiceCommand.StopCore));
+            Assert.AreNotEqual(TunState.Off, runtime.Snapshot.Tun);
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task ProxyOwnershipConflictIsReportedAndPersistentJournalOwnsLaterRecovery()
+    {
+        string root = CreateRoot();
+        AppPaths paths = CreatePaths(root);
+        paths.EnsureDirectories();
+        await File.WriteAllTextAsync(paths.ProxyOwnershipFile, "simulated ownership record");
+        FakeServicePipeClient service = new((command, _) => Task.FromResult(Response(
+            true,
+            TunState.Off,
+            command == ServiceCommand.StopCore ? CoreState.Stopped : CoreState.Running)));
+        FakeSystemProxyController proxy = new(SystemProxyState.RestoreRequired);
+        await using ClashTrayRuntime runtime = RuntimeTestBuilder.Create(
+            paths,
+            null,
+            service,
+            null,
+            proxy,
+            disposeCleanupTimeout: TimeSpan.FromSeconds(2));
+        runtime.SetShutdownStateForTesting(
+            serviceOwnsCore: true,
+            CoreState.Running,
+            TunState.Off,
+            SystemProxyState.RestoreRequired);
+
+        try
+        {
+            RuntimeShutdownResult result = await runtime.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.AreEqual(ShutdownCleanupStatus.Failed, result.SystemProxy.Status);
+            Assert.AreEqual(SystemProxyState.RestoreRequired, proxy.State);
+            Assert.AreEqual(1, proxy.DisableCount);
+            ShutdownRecoveryResponsibility responsibility = result.RecoveryResponsibilities.Single(
+                item => item.Owner == "System Proxy ownership journal");
+            StringAssert.Contains(responsibility.Trigger, "next app launch", StringComparison.Ordinal);
+            StringAssert.Contains(responsibility.Limitation, "not in this exiting process", StringComparison.Ordinal);
+            Assert.IsTrue(service.Commands.Contains(ServiceCommand.StopCore));
+        }
+        finally
+        {
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task LocalCoreGateTimeoutPersistsJournalForNextRuntimeRecovery()
+    {
+        string root = CreateRoot();
+        AppPaths paths = CreatePaths(root);
+        ShutdownDeadlineClock clock = new();
+        LocalCoreProcessIdentity identity = new(
+            42_424,
+            DateTimeOffset.UnixEpoch.AddDays(100).UtcDateTime.Ticks,
+            paths.ManagedCoreExecutable);
+        await using ClashTrayRuntime runtime = RuntimeTestBuilder.Create(
+            paths,
+            startupRegistration: null,
+            servicePipeClient: null,
+            settingsStore: null,
+            systemProxy: new FakeSystemProxyController(SystemProxyState.Off),
+            disposeCleanupTimeout: TimeSpan.FromSeconds(1.5),
+            localCoreProcessIdentityProvider: () => identity,
+            shutdownTimeProvider: clock,
+            shutdownStepTestHook: (step, _) =>
+            {
+                // This case tests a gate timeout after the journal is persisted,
+                // rather than racing cold/coverage-instrumented disk I/O against 500 ms.
+                if (step == "取消运行时工作")
+                {
+                    clock.Expire();
+                }
+
+                return Task.CompletedTask;
+            });
+        runtime.SetShutdownStateForTesting(
+            serviceOwnsCore: false,
+            CoreState.Running,
+            TunState.Off,
+            SystemProxyState.Off);
+        OperationGate.Lease reader = await runtime.AcquireSharedOperationForTestingAsync();
+
+        try
+        {
+            RuntimeShutdownResult result = await runtime.ShutdownAsync().WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.OperationGate.Status);
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.Core.Status);
+            Assert.AreEqual(ShutdownCleanupStatus.Completed, result.LocalCoreRecovery.Status);
+            Assert.IsTrue(File.Exists(paths.LocalCoreShutdownFile));
+            Assert.AreEqual(
+                "Local core shutdown journal",
+                result.RecoveryResponsibilities.Single().Owner);
+
+            reader.Dispose();
+            LocalCoreProcessIdentity? recoveredIdentity = null;
+            await using ClashTrayRuntime restartedRuntime = RuntimeTestBuilder.Create(
+                paths,
+                startupRegistration: null,
+                servicePipeClient: null,
+                settingsStore: null,
+                systemProxy: new FakeSystemProxyController(SystemProxyState.Off),
+                localCoreRecoveryAction: (pending, _) =>
+                {
+                    recoveredIdentity = pending;
+                    return Task.FromResult(new LocalCoreShutdownJournalResult(
+                        Succeeded: true,
+                        RecordFound: true,
+                        Detail: "fake owned child stopped after previous app process exit"));
+                });
+
+            await restartedRuntime.InitializeAsync().WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.AreEqual(identity, recoveredIdentity);
+            Assert.IsFalse(File.Exists(paths.LocalCoreShutdownFile));
+        }
+        finally
+        {
+            reader.Dispose();
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("取消运行时工作")]
+    [DataRow("停止远程端点刷新")]
+    [DataRow("停止订阅调度器")]
+    public async Task PreNetworkTimeoutUsesRemainingBudgetAndRetainsLateWork(string blockedStep)
+    {
+        string root = CreateRoot();
+        FakeServicePipeClient service = new((command, _) => Task.FromResult(Response(
+            succeeded: true,
+            tun: TunState.Off,
+            core: command == ServiceCommand.StopCore ? CoreState.Stopped : CoreState.Running)));
+        FakeSystemProxyController proxy = new(SystemProxyState.On);
+        TaskCompletionSource stepEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseStep = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource stepResumed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task PauseStepAsync(string step, CancellationToken _)
+        {
+            if (step == blockedStep)
+            {
+                stepEntered.TrySetResult();
+                await releaseStep.Task;
+                stepResumed.TrySetResult();
+            }
+        }
+
+        await using ClashTrayRuntime runtime = CreateRuntime(
+            root,
+            service,
+            proxy,
+            TimeSpan.FromMilliseconds(900),
+            PauseStepAsync);
+        runtime.SetShutdownStateForTesting(
+            serviceOwnsCore: true,
+            CoreState.Running,
+            TunState.Off,
+            SystemProxyState.On);
+
+        try
+        {
+            Task<RuntimeShutdownResult> shutdownTask = runtime.ShutdownAsync();
+            await stepEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            RuntimeShutdownResult result = await shutdownTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.IsTrue(result.NetworkCleanupConfirmed, result.ToDiagnosticSummary());
+            Assert.AreEqual(ShutdownCleanupStatus.Completed, result.Core.Status);
+            Assert.AreEqual(ShutdownCleanupStatus.Completed, result.SystemProxy.Status);
+            Assert.AreEqual(
+                ShutdownCleanupStatus.TimedOutUnknown,
+                result.AdditionalSteps.Single(step => step.Name == blockedStep).Status);
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.RuntimeResources.Status);
+            Assert.AreEqual(1, service.Commands.Count(command => command == ServiceCommand.StopCore));
+            Assert.AreEqual(1, proxy.DisableCount);
+            Assert.AreEqual(CoreState.Stopped, runtime.Snapshot.Core.State);
+
+            releaseStep.TrySetResult();
+            await stepResumed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+
+            Assert.AreEqual(1, service.Commands.Count(command => command == ServiceCommand.StopCore));
+            Assert.AreEqual(1, proxy.DisableCount);
+            Assert.AreEqual(CoreState.Stopped, runtime.Snapshot.Core.State);
+        }
+        finally
+        {
+            releaseStep.TrySetResult();
+            await stepResumed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            await runtime.DisposeAsync();
+            DeleteRoot(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task OperationGateTimeoutDoesNotRunNetworkCleanupWhileAnOperationIsActive()
+    {
+        string root = CreateRoot();
+        FakeServicePipeClient service = new((command, _) => Task.FromResult(Response(
+            succeeded: true,
+            tun: TunState.Off,
+            core: command == ServiceCommand.StopCore ? CoreState.Stopped : CoreState.Running)));
+        FakeSystemProxyController proxy = new(SystemProxyState.On);
+        TaskCompletionSource stepEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseStep = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task PauseCancellationAsync(string step, CancellationToken _)
+        {
+            if (step == "取消运行时工作")
+            {
+                stepEntered.TrySetResult();
+                await releaseStep.Task;
+            }
+        }
+
+        await using ClashTrayRuntime runtime = CreateRuntime(
+            root,
+            service,
+            proxy,
+            TimeSpan.FromMilliseconds(700),
+            PauseCancellationAsync);
+        runtime.SetShutdownStateForTesting(
+            serviceOwnsCore: true,
+            CoreState.Running,
+            TunState.Off,
+            SystemProxyState.On);
+        OperationGate.Lease activeOperation = await runtime.AcquireSharedOperationForTestingAsync();
+
+        try
+        {
+            Task<RuntimeShutdownResult> shutdownTask = runtime.ShutdownAsync();
+            await stepEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            RuntimeShutdownResult result = await shutdownTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.OperationGate.Status);
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.Core.Status);
+            Assert.AreEqual(ShutdownCleanupStatus.TimedOutUnknown, result.SystemProxy.Status);
+            Assert.AreEqual(0, proxy.DisableCount);
+            Assert.IsFalse(service.Commands.Contains(ServiceCommand.StopCore));
+            Assert.AreEqual(SystemProxyState.On, runtime.Snapshot.SystemProxy);
+            Assert.AreEqual(CoreState.Running, runtime.Snapshot.Core.State);
+
+            releaseStep.TrySetResult();
+            await runtime.DisposeAsync();
+            activeOperation.Dispose();
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+
+            Assert.AreEqual(0, proxy.DisableCount);
+            Assert.IsFalse(service.Commands.Contains(ServiceCommand.StopCore));
+        }
+        finally
+        {
+            releaseStep.TrySetResult();
+            activeOperation.Dispose();
+            DeleteRoot(root);
+        }
+    }
+    [TestMethod]
+    public async Task IAsyncDisposableStillWaitsForTheSameStructuredShutdownTask()
+    {
+        string root = CreateRoot();
+        await using ClashTrayRuntime runtime = CreateRuntime(
+            root,
+            new FakeServicePipeClient((_, _) => Task.FromResult(Response(
+                true,
+                TunState.Off,
+                CoreState.Stopped))),
+            new FakeSystemProxyController(SystemProxyState.Off),
+            TimeSpan.FromSeconds(2));
+
+        RuntimeShutdownResult result = await runtime.ShutdownAsync();
+        await runtime.DisposeAsync();
+
+        Assert.IsTrue(result.IsFullyClean, result.ToDiagnosticSummary());
+        DeleteRoot(root);
+    }
+
+    private sealed class ShutdownDeadlineClock : TimeProvider
+    {
+        private readonly List<DeadlineTimer> _timers = [];
+        public void Expire()
+        {
+            foreach (DeadlineTimer timer in _timers.ToArray())
+            {
+                timer.Fire();
+            }
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            DeadlineTimer timer = new(callback, state);
+            _timers.Add(timer);
+            return timer;
+        }
+
+        private sealed class DeadlineTimer(TimerCallback callback, object? state) : ITimer
+        {
+            private bool _disposed;
+            public void Fire() { if (!_disposed) { callback(state); } }
+            public bool Change(TimeSpan dueTime, TimeSpan period) => !_disposed;
+            public void Dispose() => _disposed = true;
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
+    }
+
+    private static ClashTrayRuntime CreateRuntime(
+        string root,
+        FakeServicePipeClient service,
+        FakeSystemProxyController proxy,
+        TimeSpan timeout,
+        Func<string, CancellationToken, Task>? shutdownStepTestHook = null) =>
+        RuntimeTestBuilder.Create(
+            CreatePaths(root),
+            null,
+            service,
+            null,
+            proxy,
+            disposeCleanupTimeout: timeout,
+            shutdownStepTestHook: shutdownStepTestHook);
+
+    private static AppPaths CreatePaths(string root) =>
+        new(Path.Combine(root, "local"), Path.Combine(root, "service"));
+
+    private static string CreateRoot() =>
+        Path.Combine(Path.GetTempPath(), "ClashTrayTests", Guid.NewGuid().ToString("N"));
+
+    private static void DeleteRoot(string root)
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class AcceptingCandidateValidator : IConfigurationCandidateValidator
+    {
+        public Task ValidateAsync(string candidatePath, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class TestSettingsStore(AppSettings settings) : ISettingsStore
+    {
+        public AppSettings Settings { get; private set; } = settings;
+
+        public int LoadCount { get; private set; }
+
+        public Task<SettingsLoadResult> LoadWithStatusAsync(CancellationToken cancellationToken = default)
+        {
+            LoadCount++;
+            return Task.FromResult(new SettingsLoadResult(Settings, SettingsLoadStatus.Loaded, null));
+        }
+
+        public Task SaveAsync(AppSettings value, CancellationToken cancellationToken = default)
+        {
+            Settings = value;
+            return Task.CompletedTask;
+        }
+    }
+
+    private static ServiceResponse Response(bool succeeded, TunState tun, CoreState core) =>
+        new(Guid.NewGuid(), succeeded, tun, Core: core);
+
+    private static async Task WaitForTunStateAsync(
+        ClashTrayRuntime runtime,
+        TunState expected,
+        TimeSpan timeout)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        while (runtime.Snapshot.Tun != expected && stopwatch.Elapsed < timeout)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.AreEqual(expected, runtime.Snapshot.Tun);
+    }
+
+    private sealed class FakeServicePipeClient(
+        Func<ServiceCommand, CancellationToken, Task<ServiceResponse>> handler) : IServicePipeClient
+    {
+        private readonly ConcurrentQueue<ServiceCommand> _commands = new();
+
+        public IReadOnlyCollection<ServiceCommand> Commands => _commands.ToArray();
+
+        public Task<ServiceResponse> SendAsync(
+            ServiceCommand command,
+            string? payload = null,
+            CancellationToken cancellationToken = default)
+        {
+            _commands.Enqueue(command);
+            return handler(command, cancellationToken);
+        }
+    }
+
+    private sealed class FakeSystemProxyController(SystemProxyState initialState) : ISystemProxyController
+    {
+        public SystemProxyState State { get; private set; } = initialState;
+
+        public int DisableCount { get; private set; }
+
+        public SystemProxyState DetectState() => State;
+
+        public Task EnableAsync(int port, string bypassList, CancellationToken cancellationToken = default)
+        {
+            State = SystemProxyState.On;
+            return Task.CompletedTask;
+        }
+
+        public Task DisableAsync(CancellationToken cancellationToken = default)
+        {
+            DisableCount++;
+            if (State != SystemProxyState.RestoreRequired)
+            {
+                State = SystemProxyState.Off;
+            }
+
+            return Task.CompletedTask;
+        }
+    }
+}

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>ClashTray.Core.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Shared/TestFixtureDirectory.cs" Link="TestFixtureDirectory.cs" />
+    <Compile Include="../Shared/RuntimeFixture.cs" Link="RuntimeFixture.cs" />
+    <Compile Include="../Shared/LoopbackPortReservations.cs" Link="LoopbackPortReservations.cs" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="MSTest.TestAdapter" />
+    <PackageReference Include="MSTest.TestFramework" />
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <ProjectReference Include="..\..\src\ClashTray.Core\ClashTray.Core.csproj" />
+    <ProjectReference Include="..\..\src\ClashTray.Contracts\ClashTray.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\ClashTray.Presentation\ClashTray.Presentation.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RootNamespace>ClashTray.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../packaging/mihomo-release.json" LogicalName="ClashTray.MihomoRelease.json" />
+    <ProjectReference Include="..\ClashTray.Contracts\ClashTray.Contracts.csproj" />
+  </ItemGroup>
+</Project>

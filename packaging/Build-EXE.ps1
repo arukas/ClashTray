@@ -1,0 +1,485 @@
+[CmdletBinding()]
+param(
+    [ValidateSet('Debug', 'Release')]
+    [string]$Configuration = 'Release',
+
+    # Resolved from Directory.Build.props when omitted; an explicit value must stay compatible with it.
+    [string]$PackageVersion,
+
+    [ValidateSet('Full', 'NoCET')]
+    [string]$Variant = 'Full',
+
+    [string]$OutputDirectory
+)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$productVersion = & (Join-Path $PSScriptRoot 'Get-ProductVersion.ps1')
+if ([string]::IsNullOrWhiteSpace($PackageVersion)) {
+    $PackageVersion = $productVersion.Version
+} elseif ($PackageVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+    throw "PackageVersion must look like 1.2.3 or 1.2.3-alpha.1; received '$PackageVersion'."
+} elseif (($PackageVersion -split '-', 2)[0] -ne $productVersion.VersionPrefix) {
+    throw "PackageVersion '$PackageVersion' is not compatible with VersionPrefix '$($productVersion.VersionPrefix)' in Directory.Build.props. Bump Directory.Build.props or pass the matching version."
+}
+$packageCoreVersion = ($PackageVersion -split '-', 2)[0]
+$packageFileVersion = if (($packageCoreVersion -split '\.').Count -eq 3) {
+    "$packageCoreVersion.0"
+} else {
+    $packageCoreVersion
+}
+$disableCet = $Variant -eq 'NoCET'
+$mihomoRelease = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'mihomo-release.json') -Raw | ConvertFrom-Json
+$mihomoVersion = $mihomoRelease.version
+if ($mihomoVersion -notmatch '^v\d+\.\d+\.\d+$' -or $mihomoRelease.windowsAmd64Sha256 -notmatch '^[a-fA-F0-9]{64}$') {
+    throw 'Invalid pinned Mihomo release metadata.'
+}
+$dotnet = (Get-Command dotnet.exe -ErrorAction Stop).Source
+$innoCandidates = @(
+    'C:\Program Files\Inno Setup 7\ISCC.exe',
+    'C:\Program Files (x86)\Inno Setup 7\ISCC.exe',
+    (Get-Command iscc.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1)
+) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) }
+$inno = $null
+$innoVersion = $null
+foreach ($candidate in ($innoCandidates | Select-Object -Unique)) {
+    $candidateVersion = (& $candidate --version 2>$null | Select-Object -First 1)
+    if ($null -eq $candidateVersion) {
+        continue
+    }
+    $candidateVersionText = $candidateVersion.ToString().Trim()
+    if ($candidateVersionText -match '^7\.') {
+        $inno = $candidate
+        $innoVersion = $candidateVersionText
+        break
+    }
+}
+if ([string]::IsNullOrWhiteSpace($inno)) {
+    throw 'Inno Setup 7 is required. Install the 7.x compiler so ISCC.exe is available at C:\Program Files\Inno Setup 7\ISCC.exe.'
+}
+Write-Host "Using Inno Setup compiler $innoVersion at $inno"
+$outputRoot = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    Join-Path $PSScriptRoot 'out'
+} else {
+    [IO.Path]::GetFullPath($OutputDirectory)
+}
+
+$stageRoot = Join-Path $PSScriptRoot '.stage'
+$payloadRoot = Join-Path $stageRoot 'payload'
+$appPayload = Join-Path $payloadRoot 'App'
+$corePayload = Join-Path $payloadRoot 'Core'
+$appPublish = Join-Path $stageRoot 'app'
+$servicePublish = Join-Path $stageRoot 'service'
+$appBuildOutput = Join-Path $repoRoot "src\ClashTray.App\bin\x64\$Configuration\net10.0-windows10.0.19041.0\win-x64"
+$mihomoBinaryArchivePath = Join-Path $stageRoot "mihomo-windows-amd64-$mihomoVersion.zip"
+$coreExtract = Join-Path $stageRoot 'mihomo-extract'
+$dashboardExtract = Join-Path $stageRoot 'metacubexd-extract'
+$dashboardPayload = Join-Path $payloadRoot 'Dashboard'
+
+$mihomoBinaryArchiveUri = "https://github.com/MetaCubeX/mihomo/releases/download/$mihomoVersion/mihomo-windows-amd64-$mihomoVersion.zip"
+$mihomoBinaryArchiveSha256 = $mihomoRelease.windowsAmd64Sha256
+$mihomoSourceUri = "https://github.com/MetaCubeX/mihomo/tree/$mihomoVersion"
+$mihomoSourceArchiveUri = "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/refs/tags/$mihomoVersion"
+$mihomoLicenseUri = "https://raw.githubusercontent.com/MetaCubeX/mihomo/$mihomoVersion/LICENSE"
+
+$dashboardRelease = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'metacubexd-release.json') -Raw | ConvertFrom-Json
+$dashboardVersion = $dashboardRelease.version
+$dashboardArchiveUri = $dashboardRelease.archiveUri
+$dashboardArchiveSha256 = $dashboardRelease.archiveSha256
+$dashboardLicenseUri = $dashboardRelease.licenseUri
+$dashboardSourceUri = $dashboardRelease.sourceUri
+$expectedDashboardArchiveUri = "https://github.com/MetaCubeX/metacubexd/releases/download/$dashboardVersion/compressed-dist.tgz"
+$expectedDashboardLicenseUri = "https://raw.githubusercontent.com/MetaCubeX/metacubexd/$dashboardVersion/LICENSE"
+$expectedDashboardSourceUri = "https://github.com/MetaCubeX/metacubexd/tree/$dashboardVersion"
+if (($dashboardVersion -notmatch '^v\d+\.\d+\.\d+$') -or ($dashboardArchiveUri -ne $expectedDashboardArchiveUri) -or ($dashboardLicenseUri -ne $expectedDashboardLicenseUri) -or ($dashboardSourceUri -ne $expectedDashboardSourceUri) -or ($dashboardArchiveSha256 -notmatch '^[a-fA-F0-9]{64}$')) {
+    throw 'Invalid pinned MetaCubeXD release metadata.'
+}
+$dashboardArchivePath = Join-Path $stageRoot "metacubexd-$dashboardVersion-compressed-dist.tgz"
+
+$appProject = Join-Path $repoRoot 'src\ClashTray.App\ClashTray.App.csproj'
+$serviceProject = Join-Path $repoRoot 'src\ClashTray.Service\ClashTray.Service.csproj'
+$innoScript = Join-Path $PSScriptRoot 'ClashTray.iss'
+
+function Invoke-Dotnet {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+
+    & $dotnet @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet command failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Copy-PublishTree {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination
+    )
+
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    $items = Get-ChildItem -LiteralPath $Source -Force
+    foreach ($item in $items) {
+        Copy-Item -LiteralPath $item.FullName -Destination $Destination -Recurse -Force
+    }
+}
+
+function Copy-AppXamlResources {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination
+    )
+
+    if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
+        throw "The app build output directory was not found: $Source"
+    }
+
+    $resources = @(Get-ChildItem -LiteralPath $Source -File -Recurse |
+        Where-Object { $_.Extension -in '.xbf', '.pri' })
+    if ((-not ($resources.Name -contains 'App.xbf')) -or (-not ($resources.Name -contains 'ClashTray.App.pri'))) {
+        throw 'The app build output is missing compiled WinUI XAML resources (App.xbf or ClashTray.App.pri).'
+    }
+
+    foreach ($resource in $resources) {
+        $relative = [IO.Path]::GetRelativePath($Source, $resource.FullName)
+        $target = Join-Path $Destination $relative
+        New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+        Copy-Item -LiteralPath $resource.FullName -Destination $target -Force
+    }
+}
+
+function Assert-WindowsAmd64Pe {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if (($bytes.Length -lt 0x40) -or ($bytes[0] -ne [byte][char]'M') -or ($bytes[1] -ne [byte][char]'Z')) {
+        throw "Mihomo core is not a Windows executable: $Path"
+    }
+
+    $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+    if (($peOffset -lt 0) -or ($peOffset + 6 -gt $bytes.Length)) {
+        throw "Mihomo core has an invalid PE header: $Path"
+    }
+
+    if (($bytes[$peOffset] -ne [byte][char]'P') -or ($bytes[$peOffset + 1] -ne [byte][char]'E') -or ($bytes[$peOffset + 2] -ne 0) -or ($bytes[$peOffset + 3] -ne 0) -or ([BitConverter]::ToUInt16($bytes, $peOffset + 4) -ne 0x8664)) {
+        throw "Mihomo core is not a Windows x64 executable: $Path"
+    }
+}
+
+function Prepare-MihomoPayload {
+    New-Item -ItemType Directory -Path $corePayload, $coreExtract -Force | Out-Null
+    Write-Host "Downloading official Mihomo $mihomoVersion core..."
+    Invoke-WebRequest -Uri $mihomoBinaryArchiveUri -OutFile $mihomoBinaryArchivePath
+
+    $actualHash = (Get-FileHash -LiteralPath $mihomoBinaryArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $mihomoBinaryArchiveSha256) {
+        throw "Mihomo binary archive SHA-256 mismatch. Expected $mihomoBinaryArchiveSha256, received $actualHash."
+    }
+
+    Expand-Archive -LiteralPath $mihomoBinaryArchivePath -DestinationPath $coreExtract -Force
+    $coreExecutables = @(Get-ChildItem -LiteralPath $coreExtract -Recurse -File |
+        Where-Object { $_.Name -eq 'mihomo-windows-amd64.exe' })
+    if ($coreExecutables.Count -ne 1) {
+        throw "The official Mihomo archive did not contain exactly one expected Windows x64 executable."
+    }
+
+    Assert-WindowsAmd64Pe -Path $coreExecutables[0].FullName
+    $coreExecutablePath = Join-Path $corePayload 'mihomo.exe'
+    Copy-Item -LiteralPath $coreExecutables[0].FullName -Destination $coreExecutablePath -Force
+    $coreExecutableHash = (Get-FileHash -LiteralPath $coreExecutablePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $coreMetadata = [ordered]@{
+        version = $mihomoVersion
+        downloadUri = $mihomoBinaryArchiveUri
+        archiveSha256 = $mihomoBinaryArchiveSha256
+        executableSha256 = $coreExecutableHash
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $corePayload 'mihomo.manifest.json'),
+        ($coreMetadata | ConvertTo-Json),
+        [Text.UTF8Encoding]::new($false))
+
+    Invoke-WebRequest -Uri $mihomoLicenseUri -OutFile (Join-Path $corePayload 'Mihomo-LICENSE.txt')
+    if (-not (Test-Path -LiteralPath (Join-Path $corePayload 'Mihomo-LICENSE.txt') -PathType Leaf)) {
+        throw 'The Mihomo license file was not downloaded.'
+    }
+
+    $releaseMetadataPath = Join-Path $corePayload 'Mihomo-Release.txt'
+    @(
+        "Mihomo version: $mihomoVersion"
+        'License: GNU General Public License v3.0'
+        ''
+        "Binary archive: $mihomoBinaryArchiveUri"
+        "Binary SHA-256: $mihomoBinaryArchiveSha256"
+        ''
+        "Corresponding Source: $mihomoSourceUri"
+        "Source archive: $mihomoSourceArchiveUri"
+        ''
+        'Upstream project: MetaCubeX/mihomo'
+        'Architecture: Windows x64 (amd64)'
+        ''
+        'This Mihomo binary is distributed unmodified by ClashTray.'
+        'Mihomo is licensed separately under GNU GPL v3.0.'
+        'ClashTray itself is licensed under the MIT License.'
+    ) | Set-Content -LiteralPath $releaseMetadataPath -Encoding ascii
+
+    $metadata = Get-Content -LiteralPath $releaseMetadataPath -Raw
+    foreach ($requiredLine in @(
+        'Mihomo version:'
+        'License: GNU General Public License v3.0'
+        'Binary archive:'
+        'Binary SHA-256:'
+        'Corresponding Source:'
+        'Source archive:'
+        'Upstream project:'
+    )) {
+        if ($metadata -notmatch [regex]::Escape($requiredLine)) {
+            throw "Mihomo release metadata is missing required entry: $requiredLine"
+        }
+    }
+}
+
+function Merge-PublishTree {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination
+    )
+
+    if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
+        throw "Publish directory was not found: $Source"
+    }
+
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    foreach ($item in Get-ChildItem -LiteralPath $Source -Force) {
+        $target = Join-Path $Destination $item.Name
+        if ($item.PSIsContainer) {
+            Merge-PublishTree -Source $item.FullName -Destination $target
+            continue
+        }
+
+        if (Test-Path -LiteralPath $target -PathType Leaf) {
+            $sourceHash = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
+            $targetHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+            if ($sourceHash -ne $targetHash) {
+                throw "App and Service publish outputs contain different files with the same name: $($item.Name)"
+            }
+
+            continue
+        }
+
+        Copy-Item -LiteralPath $item.FullName -Destination $target -Force
+    }
+}
+
+function Prepare-MetaCubeXdPayload {
+    New-Item -ItemType Directory -Path $dashboardPayload, $dashboardExtract -Force | Out-Null
+    Write-Host "Downloading official MetaCubeXD $dashboardVersion dashboard..."
+    Invoke-WebRequest -Uri $dashboardArchiveUri -OutFile $dashboardArchivePath
+
+    $actualHash = (Get-FileHash -LiteralPath $dashboardArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $dashboardArchiveSha256.ToLowerInvariant()) {
+        throw "MetaCubeXD archive SHA-256 mismatch. Expected $dashboardArchiveSha256, received $actualHash."
+    }
+
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($null -eq $tar) {
+        throw 'tar.exe is required to extract the pinned MetaCubeXD dashboard archive.'
+    }
+
+    & $tar.Source '-xzf' $dashboardArchivePath '-C' $dashboardExtract
+    if ($LASTEXITCODE -ne 0) {
+        throw "MetaCubeXD archive extraction failed with exit code $LASTEXITCODE."
+    }
+
+    $indexPath = Join-Path $dashboardExtract 'index.html'
+    $dashboardSourceRoot = $dashboardExtract
+    if (-not (Test-Path -LiteralPath $indexPath -PathType Leaf)) {
+        $indexCandidates = @(Get-ChildItem -LiteralPath $dashboardExtract -Recurse -File -Filter 'index.html')
+        if ($indexCandidates.Count -ne 1) {
+            throw 'The MetaCubeXD archive did not contain exactly one index.html entry.'
+        }
+
+        $dashboardSourceRoot = $indexCandidates[0].Directory.FullName
+    }
+
+    $dashboardFiles = @(Get-ChildItem -LiteralPath $dashboardSourceRoot -Recurse -File -Force)
+    if ($dashboardFiles.Count -eq 0 -or $dashboardFiles.Count -gt 4096) {
+        throw "MetaCubeXD dashboard file count is outside the allowed range: $($dashboardFiles.Count)."
+    }
+
+    $dashboardBytes = ($dashboardFiles | Measure-Object -Property Length -Sum).Sum
+    if ($dashboardBytes -gt 64MB) {
+        throw "MetaCubeXD dashboard payload is too large: $dashboardBytes bytes."
+    }
+
+    foreach ($file in $dashboardFiles) {
+        if ($file.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+            throw "MetaCubeXD dashboard contains an unsupported reparse point: $($file.FullName)"
+        }
+    }
+
+    Copy-PublishTree -Source $dashboardSourceRoot -Destination $dashboardPayload
+    Invoke-WebRequest -Uri $dashboardLicenseUri -OutFile (Join-Path $dashboardPayload 'MetaCubeXD-LICENSE.txt')
+    if (-not (Test-Path -LiteralPath (Join-Path $dashboardPayload 'MetaCubeXD-LICENSE.txt') -PathType Leaf)) {
+        throw 'The MetaCubeXD license file was not downloaded.'
+    }
+
+    $releaseMetadataPath = Join-Path $dashboardPayload 'MetaCubeXD-Release.txt'
+    @(
+        "MetaCubeXD version: $dashboardVersion"
+        'License: MIT'
+        ''
+        "Dashboard archive: $dashboardArchiveUri"
+        "Dashboard SHA-256: $dashboardArchiveSha256"
+        "Source: $dashboardSourceUri"
+        "License source: $dashboardLicenseUri"
+        ''
+        'Upstream project: MetaCubeX/metacubexd'
+        'This dashboard is distributed as an unmodified static release payload by ClashTray.'
+        'MetaCubeXD is licensed separately under the MIT License.'
+        'ClashTray itself is licensed under the MIT License.'
+    ) | Set-Content -LiteralPath $releaseMetadataPath -Encoding ascii
+
+    $metadata = Get-Content -LiteralPath $releaseMetadataPath -Raw
+    foreach ($requiredLine in @(
+        'MetaCubeXD version:'
+        'License: MIT'
+        'Dashboard archive:'
+        'Dashboard SHA-256:'
+        'Source:'
+        'License source:'
+        'Upstream project:'
+    )) {
+        if ($metadata -notmatch [regex]::Escape($requiredLine)) {
+            throw "MetaCubeXD release metadata is missing required entry: $requiredLine"
+        }
+    }
+}
+
+if (-not (Test-Path -LiteralPath $appProject -PathType Leaf)) {
+    throw "App project was not found: $appProject"
+}
+if (-not (Test-Path -LiteralPath $serviceProject -PathType Leaf)) {
+    throw "Service project was not found: $serviceProject"
+}
+if (-not (Test-Path -LiteralPath $innoScript -PathType Leaf)) {
+    throw "Inno Setup script was not found: $innoScript"
+}
+if (-not (Test-Path -LiteralPath (Join-Path $repoRoot 'LICENSE') -PathType Leaf)) {
+    throw 'The ClashTray MIT license file was not found.'
+}
+
+Write-Host "Publishing ClashTray Inno Setup installer ($Configuration, win-x64, version $PackageVersion)..."
+Write-Host "Variant: $Variant (self-contained, core bundled)"
+
+# This is a generated staging directory owned by this script.
+if (Test-Path -LiteralPath $stageRoot) {
+    Remove-Item -LiteralPath $stageRoot -Recurse -Force
+}
+New-Item -ItemType Directory -Path $stageRoot, $outputRoot -Force | Out-Null
+Prepare-MetaCubeXdPayload
+
+$appPublishArguments = @(
+    'publish', $appProject,
+    '--configuration', $Configuration,
+    '--framework', 'net10.0-windows10.0.19041.0',
+    '--runtime', 'win-x64',
+    '--self-contained', 'true',
+    '--output', $appPublish,
+    '--property:Platform=x64',
+    "--property:Version=$PackageVersion",
+    '--property:WindowsPackageType=None',
+    "--property:WindowsAppSDKSelfContained=true",
+    '--property:PublishReadyToRun=false'
+    '--property:RestoreLockedMode=true'
+)
+if ($disableCet) {
+    $appPublishArguments += '--property:CETCompat=false'
+}
+Invoke-Dotnet -Arguments $appPublishArguments
+
+# dotnet publish does not carry the WinUI-generated XBF/PRI files from the
+# regular build output into a custom publish directory. They are required at
+# runtime by Application.LoadComponent in an unpackaged WinUI application.
+Copy-AppXamlResources -Source $appBuildOutput -Destination $appPublish
+
+$servicePublishArguments = @(
+    'publish', $serviceProject,
+    '--configuration', $Configuration,
+    '--framework', 'net10.0-windows10.0.19041.0',
+    '--runtime', 'win-x64',
+    '--self-contained', 'true',
+    '--property:RestoreLockedMode=true',
+    '--output', $servicePublish,
+    '--property:Platform=x64',
+    "--property:Version=$PackageVersion"
+)
+if ($disableCet) {
+    $servicePublishArguments += '--property:CETCompat=false'
+}
+Invoke-Dotnet -Arguments $servicePublishArguments
+
+Copy-PublishTree -Source $appPublish -Destination $appPayload
+Merge-PublishTree -Source $servicePublish -Destination $appPayload
+$projectLicense = Join-Path $repoRoot 'LICENSE'
+if (Test-Path -LiteralPath $projectLicense -PathType Leaf) {
+    Copy-Item -LiteralPath $projectLicense -Destination (Join-Path $appPayload 'ClashTray-LICENSE.txt') -Force
+}
+Prepare-MihomoPayload
+
+$requiredPayloadFiles = @(
+    (Join-Path $appPayload 'ClashTray.App.exe'),
+    (Join-Path $appPayload 'ClashTray.Service.exe'),
+    (Join-Path $appPayload 'ClashTray-LICENSE.txt'),
+    (Join-Path $dashboardPayload 'index.html'),
+    (Join-Path $dashboardPayload 'MetaCubeXD-LICENSE.txt'),
+    (Join-Path $dashboardPayload 'MetaCubeXD-Release.txt')
+)
+$requiredPayloadFiles += @(
+    (Join-Path $corePayload 'mihomo.exe'),
+    (Join-Path $corePayload 'mihomo.manifest.json'),
+    (Join-Path $corePayload 'Mihomo-LICENSE.txt'),
+    (Join-Path $corePayload 'Mihomo-Release.txt')
+)
+foreach ($requiredFile in $requiredPayloadFiles) {
+    if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+        throw "Published payload is missing required file: $requiredFile"
+    }
+}
+
+$artifactStem = "ClashTray-$PackageVersion-win-x64-$Variant"
+$installerPath = Join-Path $outputRoot "$artifactStem.exe"
+$hashPath = Join-Path $outputRoot "$artifactStem.sha256"
+if (Test-Path -LiteralPath $installerPath) {
+    Remove-Item -LiteralPath $installerPath -Force
+}
+if (Test-Path -LiteralPath $hashPath) {
+    Remove-Item -LiteralPath $hashPath -Force
+}
+$innoArguments = @(
+    "/DPackageVersion=$PackageVersion",
+    "/DPackageFileVersion=$packageFileVersion",
+    "/DVariant=$Variant",
+    "/DPayloadRoot=$payloadRoot",
+    "/DOutputDirectory=$outputRoot",
+    "/DRepoRoot=$repoRoot",
+    $innoScript
+)
+& $inno @innoArguments
+if ($LASTEXITCODE -ne 0) {
+    throw "Inno Setup compilation failed with exit code $LASTEXITCODE."
+}
+
+if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
+    throw "Inno Setup did not create the expected installer: $installerPath"
+}
+
+$hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -LiteralPath $hashPath -Value "$hash *$artifactStem.exe" -Encoding ascii
+
+$installer = Get-Item -LiteralPath $installerPath
+$payloadBytes = (Get-ChildItem -LiteralPath $payloadRoot -Recurse -File | Measure-Object -Property Length -Sum).Sum
+Write-Host "Installer: $($installer.FullName)"
+Write-Host "Installer size: $([math]::Round($installer.Length / 1MB, 2)) MiB"
+Write-Host "Installer SHA-256: $hash"
+Write-Host "Uncompressed payload size: $([math]::Round($payloadBytes / 1MB, 2)) MiB"
+Write-Host "App and Service publish outputs share one runtime directory."

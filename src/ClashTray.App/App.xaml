@@ -1,0 +1,114 @@
+<Application
+    x:Class="ClashTray.App.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="ClashTrayCanvasBrush" Color="#F3F5F8"/>
+                    <SolidColorBrush x:Key="ClashTraySurfaceBrush" Color="#FFFFFF"/>
+                    <SolidColorBrush x:Key="ClashTrayStrokeBrush" Color="#E4E8EF"/>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="ClashTrayCanvasBrush" Color="#191C22"/>
+                    <SolidColorBrush x:Key="ClashTraySurfaceBrush" Color="#242830"/>
+                    <SolidColorBrush x:Key="ClashTrayStrokeBrush" Color="#363C46"/>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="ClashTrayCanvasBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+                    <SolidColorBrush x:Key="ClashTraySurfaceBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+                    <SolidColorBrush x:Key="ClashTrayStrokeBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+            <Style x:Key="ClashTrayAccentTextStyle" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+            </Style>
+            <Style x:Key="ClashTraySelectionIconStyle" TargetType="FontIcon">
+                <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                <Setter Property="FontSize" Value="12"/>
+            </Style>
+            <Style x:Key="ClashTrayGroupCardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource ClashTraySurfaceBrush}"/>
+                <Setter Property="BorderBrush" Value="{ThemeResource ClashTrayStrokeBrush}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="CornerRadius" Value="10"/>
+            </Style>
+            <Style x:Key="ClashTrayCardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource ClashTraySurfaceBrush}" />
+                <Setter Property="CornerRadius" Value="12" />
+                <Setter Property="Padding" Value="12" /><Setter Property="BorderBrush" Value="{ThemeResource ClashTrayStrokeBrush}"/><Setter Property="BorderThickness" Value="1"/>
+            </Style>
+
+            <Style x:Key="ClashTrayIconButtonStyle" TargetType="Button">
+                <Setter Property="Width" Value="34" />
+                <Setter Property="Height" Value="34" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="CornerRadius" Value="9" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+            </Style>
+
+            <Style x:Key="ClashTrayAccentIconButtonStyle" TargetType="Button" BasedOn="{StaticResource ClashTrayIconButtonStyle}">
+                <Setter Property="Background" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+            </Style>
+
+            <Style x:Key="ClashTraySegmentButtonStyle" TargetType="ToggleButton">
+                <Setter Property="MinHeight" Value="36" />
+                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                <Setter Property="Padding" Value="8,6" />
+                <Setter Property="CornerRadius" Value="10" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+            </Style>
+
+            <Style x:Key="ClashTrayNavButtonStyle" TargetType="ToggleButton">
+                <Setter Property="MinHeight" Value="34" />
+                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                <Setter Property="FontSize" Value="13" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="Padding" Value="4,2" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+            </Style>
+
+            <Style x:Key="ClashTrayCompactButtonStyle" TargetType="Button">
+                <Setter Property="MinHeight" Value="32" />
+                <Setter Property="Padding" Value="10,4" />
+                <Setter Property="CornerRadius" Value="8" />
+            </Style>
+
+            <Style x:Key="ClashTrayEndpointButtonStyle" TargetType="Button" BasedOn="{StaticResource ClashTrayCompactButtonStyle}">
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="Background" Value="{ThemeResource ControlFillColorSecondaryBrush}" />
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+            </Style>
+
+            <Style x:Key="ClashTrayRowButtonStyle" TargetType="Button">
+                <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Padding" Value="6,8"/>
+                <Setter Property="MinHeight" Value="42"/>
+                <Setter Property="CornerRadius" Value="6"/>
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

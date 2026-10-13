@@ -1,0 +1,46 @@
+# 发布与体积策略
+
+ClashTray 的当前发布入口是 `packaging/Build-EXE.ps1`。脚本先发布 App 和 Service，再把两者合并到同一个共享 `App` payload 目录，最后交给 Inno Setup 7 使用 LZMA2 solid compression 生成单个安装器。这样安装器只有一个下载入口，安装过程中不会依赖临时网络下载；Full 版本仍会在构建阶段从官方 Mihomo release 下载并校验核心。
+
+当前只发布 Windows x64 安装包；不提供 x86、ARM64、macOS 或 Linux 版本。App、Service 和 Inno Setup 安装器均按 x64 目标构建。
+
+## 版本矩阵
+
+| `-Variant` | App / Service | Mihomo | 运行时要求 | 产物 |
+| --- | --- | --- | --- | --- |
+| `Full` | self-contained | 内置，固定版本 + SHA-256 | Windows 10/11 x64 | `ClashTray-<version>-win-x64-Full.exe` |
+| `NoCET` | self-contained，CETCompat=false | 内置，固定版本 + SHA-256 | 补丁较旧的 Windows 10 22H2 x64 | `ClashTray-<version>-win-x64-NoCET.exe` |
+
+`Full` 是默认和推荐版本。`NoCET` 是为补丁较旧、无法启动 .NET 10 的 Windows 10 22H2 准备的自包含兼容包；它通过 `CETCompat=false` 关闭 .NET 进程的 CET 兼容标志，因此会减少一层硬件控制流防护。两种变体都内置同一份固定版本 MetaCubeXD 静态资源，安装到 `%PROGRAMDATA%\ClashTray\ui`，并由运行配置通过 `external-ui` 提供本机 `/ui/` 入口；构建脚本会校验 `packaging/metacubexd-release.json` 中的官方压缩包 SHA-256。所有变体的安装器由 Inno Setup 7 使用 LZMA2 solid compression 生成。
+
+正式或预发布版本都使用版本化文件名，例如 `ClashTray-0.3.6-win-x64-Full.exe`。`release.yml` 会在构建前读取仓库中固定的 Mihomo 与 MetaCubeXD 清单，生成随 Release 上传的 `release-manifest.json`；这样每次发布的第三方组件版本、下载来源和校验值都可追溯，不依赖运行时的 `latest`。
+
+Full 和 NoCET 的 App 与 Service 共用同一个 self-contained runtime 目录。Inno Setup 配置 `Compression=lzma2/max` 与 `SolidCompression=yes`，对合并后的 App payload 和 Core payload 做整体压缩。安装器旁生成 SHA-256 sidecar：
+
+```powershell
+.\packaging\Build-EXE.ps1 -Variant Full -PackageVersion 0.3.6 -OutputDirectory .\packaging\out\0.3.6\full
+Get-FileHash .\packaging\out\0.3.6\full\ClashTray-0.3.6-win-x64-Full.exe -Algorithm SHA256
+```
+
+## 发布前检查
+
+1. 在干净 Windows x64 环境运行 `dotnet restore ClashTray.sln --locked-mode`、`dotnet build ClashTray.sln -c Release -p:Platform=x64 --no-restore` 和带相同 `-p:Platform=x64` 的 `dotnet test --no-build`。解决方案的 x64 配置直接构建 x64 Core/Integration 测试产物；官方 Mihomo 门禁、CI 直接项目测试和 Release 解决方案测试使用同一平台，不依赖本机额外构建或遗留输出。
+2. 构建两种变体，检查文件存在、SHA-256 sidecar 和体积报告。
+3. 两种变体都验证官方 Mihomo archive 的版本、架构、PE 头和 SHA-256；同时保留 `Mihomo-LICENSE.txt` 与 `Mihomo-Release.txt`。两种变体都验证 MetaCubeXD `compressed-dist.tgz` 的固定版本和 SHA-256，并保留 `MetaCubeXD-LICENSE.txt` 与 `MetaCubeXD-Release.txt`。
+4. 验证首次安装、升级、卸载保留/删除数据、代理状态恢复、TUN 失败回滚和服务重启。
+5. 稳定发布完成上述机器验收后再创建 Release。用户授权的 alpha 在自动门禁通过后以 prerelease 发布，并在说明中逐项列出尚未完成的真实机器验收；不能把隔离测试记成正式服务/网络/安装通过。
+
+0.3.6 的本次发布由用户明确要求跳过暂不具备条件的 Windows 10/11 实机及虚拟机验收；发布决定以其余自动化门禁为依据。该验收范围例外仅适用于本次发布，未执行的场景仍需如实记录，见 [0.3.6 正式版验证记录](0.3.6-stable-readiness-2026-10-11.md)。
+
+交互式卸载继续提供保留数据、删除数据和取消三个选项。静默卸载（`/SILENT` 或 `/VERYSILENT`）默认保留配置、订阅和日志；无人值守调用建议同时传入 `/SUPPRESSMSGBOXES /NORESTART /LOG="绝对日志路径"`，检查退出代码和日志。正在运行的桌面应用仍会阻止卸载，服务停止或代理恢复失败仍会中止卸载。[Inno Setup 卸载参数](https://jrsoftware.org/ishelp/topic_uninstcmdline.htm)与[可抑制提示框](https://jrsoftware.org/ishelp/topic_isxfunc_suppressiblemsgbox.htm)说明了这些参数与提示框的行为。
+
+## GitHub Actions
+
+- `ci.yml` 在 push、Pull Request 和手动触发时运行 locked restore、build、官方核心/安全能力门禁、完整测试和覆盖率门禁。
+- `release.yml` 在 `v*.*.*` tag 或手动输入版本时运行 CI 检查，随后构建 Full / NoCET，下载同一 Mihomo tag 的 source archive，将其加入 `SHA256SUMS.txt`，并用仓库的 `GITHUB_TOKEN` 创建 Release。
+- Actions 不读取订阅、密钥或签名证书。签名证书若以后启用，应通过 GitHub Actions secret 注入，不能放进仓库。
+- tag 发布默认只创建 GitHub Release。Telegram 通知仅在手动运行 Release workflow 时显式选择 `notify_telegram` 才发送；默认关闭。多行发布说明写入临时文件并通过 `gh --notes-file` 提交。
+
+SDK 由 global.json 选择，八个项目的 NuGet 锁文件覆盖 win-x64 图；EXE self-contained publish 也强制 locked restore。Release 强制运行 Windows 安全能力门禁，类别数量与 Passed 结果逐项核对，跳过即失败。目录移动后 XBF/PRI 补拷贝保留 Pages/Shell 相对目录。
+
+当前 workflow 只发布 x64；ARM64、MSIX 和带企业签名的渠道保留在后续计划中。

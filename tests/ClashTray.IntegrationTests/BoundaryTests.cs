@@ -1,0 +1,195 @@
+using ClashTray.Contracts;
+using ClashTray.Core;
+using ClashTray.Service;
+using System.Text.Json;
+
+namespace ClashTray.IntegrationTests;
+
+[TestClass]
+public sealed class BoundaryTests
+{
+    private static ServiceRuntimeController CreateIsolatedController(AppPaths? paths = null) =>
+        new ServiceRuntimeController(
+            paths,
+            managedUserSid: null,
+            tunHealthProbe: null,
+            restoreOwnedProxyStates: static () => { });
+    [TestMethod]
+    public void CoreStateIncludesExplicitLifecycleStates()
+    {
+        Assert.IsTrue(Enum.IsDefined(CoreState.Starting));
+        Assert.IsTrue(Enum.IsDefined(CoreState.Restarting));
+        Assert.IsTrue(Enum.IsDefined(CoreState.Failed));
+    }
+
+    [TestMethod]
+    public async Task ServiceProtocolThreeRejectsOlderPeersAndReportsNoUnconfirmedBinding()
+    {
+        Assert.AreEqual(3, ServiceProtocol.CurrentVersion);
+        await using ServiceRuntimeController controller = CreateIsolatedController();
+
+        ServiceResponse oldPeer = await controller.HandleAsync(
+            new ServiceRequest(Guid.NewGuid(), ServiceCommand.GetStatus, ProtocolVersion: 2),
+            CancellationToken.None);
+        ServiceResponse stopped = await controller.HandleAsync(
+            new ServiceRequest(Guid.NewGuid(), ServiceCommand.GetStatus, ProtocolVersion: ServiceProtocol.CurrentVersion),
+            CancellationToken.None);
+
+        Assert.IsFalse(oldPeer.Succeeded);
+        Assert.AreEqual(ServiceProtocol.CurrentVersion, oldPeer.ProtocolVersion);
+        Assert.IsTrue(stopped.Succeeded);
+        Assert.IsNull(stopped.RuntimeBinding);
+    }
+
+    [TestMethod]
+    public async Task ServiceRequestIdJoinsSameObservationAndRejectsPayloadReuse()
+    {
+        await using ServiceRuntimeController controller = CreateIsolatedController();
+        Guid requestId = Guid.NewGuid();
+        ServiceRequest request = new(requestId, ServiceCommand.GetStatus, ProtocolVersion: ServiceProtocol.CurrentVersion);
+
+        Task<ServiceResponse> firstTask = controller.HandleAsync(request, CancellationToken.None);
+        Task<ServiceResponse> secondTask = controller.HandleAsync(request, CancellationToken.None);
+        ServiceResponse[] responses = await Task.WhenAll(firstTask, secondTask);
+
+        Assert.AreEqual(requestId, responses[0].RequestId);
+        Assert.AreEqual(requestId, responses[1].RequestId);
+        Assert.AreEqual(ServiceProtocol.CurrentVersion, responses[0].ProtocolVersion);
+        Assert.AreEqual(ServiceDispatchState.Completed, responses[0].DispatchState);
+        Assert.IsTrue(responses[0].Succeeded);
+
+        ServiceResponse conflict = await controller.HandleAsync(
+            new ServiceRequest(requestId, ServiceCommand.GetStatus, "{}", ProtocolVersion: ServiceProtocol.CurrentVersion),
+            CancellationToken.None);
+
+        Assert.IsFalse(conflict.Succeeded);
+        StringAssert.Contains(conflict.Error, "请求 ID 已用于不同的命令", StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ServiceRejectsRequestWithoutProtocolVersion()
+    {
+        await using ServiceRuntimeController controller = CreateIsolatedController();
+        // A legacy peer omits the version field, which deserializes to 0; the
+        // service must reject it explicitly instead of assuming compatibility.
+        ServiceResponse response = await controller.HandleAsync(
+            new ServiceRequest(Guid.NewGuid(), ServiceCommand.GetStatus),
+            CancellationToken.None);
+
+        Assert.IsFalse(response.Succeeded);
+        StringAssert.Contains(response.Error, "协议版本", StringComparison.Ordinal);
+        Assert.AreEqual(ServiceProtocol.CurrentVersion, response.ProtocolVersion);
+    }
+
+    [TestMethod]
+    public void ServiceCoreUpdateBoundaryRejectsUnapprovedReleaseUrl()
+    {
+        ServiceCoreUpdatePayload payload = new(
+            "v1.19.31",
+            new Uri("https://github.com/fake-owner/fake-repo/raw/MetaCubeX/mihomo/releases/download/v1.19.31/mihomo-windows-amd64-v1.19.31.zip"),
+            string.Empty);
+
+        Assert.ThrowsExactly<ArgumentException>(() => ServiceRuntimeController.ValidateCoreUpdatePayload(payload));
+    }
+    [TestMethod]
+    [DataRow("test-secret")]
+    [DataRow("")]
+    public async Task TunCommandCannotTargetControllerWithoutRunningCore(string secret)
+    {
+        await using ServiceRuntimeController controller = CreateIsolatedController();
+        ServiceRequest request = new ServiceRequest(
+            Guid.NewGuid(),
+            ServiceCommand.EnableTun,
+            JsonSerializer.Serialize(new ServiceTunPayload(9090, secret, true)),
+            ProtocolVersion: ServiceProtocol.CurrentVersion);
+
+        ServiceResponse response = await controller.HandleAsync(request, CancellationToken.None);
+
+        Assert.IsFalse(response.Succeeded);
+        Assert.AreEqual(CoreState.Stopped, response.Core);
+        StringAssert.Contains(response.Error, "核心尚未运行", StringComparison.Ordinal);
+    }
+
+    [TestMethod]
+    public async Task ServiceRejectsCoreOutsideManagedProgramDataLocation()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayIntegrationTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        string runtimeDirectory = Path.Combine(paths.RuntimeRoot, "mihomo");
+        Directory.CreateDirectory(runtimeDirectory);
+        string configurationPath = Path.Combine(runtimeDirectory, "active-config.yaml");
+        await File.WriteAllTextAsync(configurationPath, "proxies: []\n");
+        string localCore = Path.Combine(paths.LocalRoot, "core", "mihomo.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(localCore)!);
+        File.Copy(Environment.ProcessPath!, localCore);
+
+        try
+        {
+            await using ServiceRuntimeController controller = CreateIsolatedController(paths);
+            ServiceRequest request = new ServiceRequest(
+                Guid.NewGuid(),
+                ServiceCommand.StartCore,
+                JsonSerializer.Serialize(new ServiceCorePayload(
+                    configurationPath,
+                    runtimeDirectory,
+                    9090,
+                    string.Empty)),
+                ProtocolVersion: ServiceProtocol.CurrentVersion);
+
+            ServiceResponse response = await controller.HandleAsync(request, CancellationToken.None);
+
+            Assert.IsFalse(response.Succeeded);
+            StringAssert.Contains(response.Error, "受管 Mihomo 核心校验失败", StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ServiceRejectsManagedCoreWithUnapprovedSourceMetadata()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ClashTrayIntegrationTests", Guid.NewGuid().ToString("N"));
+        AppPaths paths = new AppPaths(Path.Combine(root, "local"), Path.Combine(root, "program"));
+        paths.EnsureDirectories();
+        string runtimeDirectory = Path.Combine(paths.RuntimeRoot, "mihomo");
+        Directory.CreateDirectory(runtimeDirectory);
+        string configurationPath = Path.Combine(runtimeDirectory, "active-config.yaml");
+        await File.WriteAllTextAsync(configurationPath, "proxies: []\n");
+        Directory.CreateDirectory(paths.CoreRoot);
+        File.Copy(Environment.ProcessPath!, paths.ManagedCoreExecutable);
+        ManagedCoreMetadata metadata = new(
+            "v0.0.0-test",
+            new Uri("https://example.com/mihomo.zip"),
+            new string('0', 64),
+            new string('0', 64));
+        await File.WriteAllTextAsync(
+            paths.ManagedCoreMetadata,
+            JsonSerializer.Serialize(metadata));
+
+        try
+        {
+            await using ServiceRuntimeController controller = CreateIsolatedController(paths);
+            ServiceRequest request = new ServiceRequest(
+                Guid.NewGuid(),
+                ServiceCommand.StartCore,
+                JsonSerializer.Serialize(new ServiceCorePayload(
+                    configurationPath,
+                    runtimeDirectory,
+                    9090,
+                    string.Empty)),
+                ProtocolVersion: ServiceProtocol.CurrentVersion);
+
+            ServiceResponse response = await controller.HandleAsync(request, CancellationToken.None);
+
+            Assert.IsFalse(response.Succeeded);
+            StringAssert.Contains(response.Error, "受管 Mihomo 核心校验失败", StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+}
