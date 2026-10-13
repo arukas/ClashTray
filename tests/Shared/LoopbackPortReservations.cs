@@ -1,12 +1,24 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 
 namespace ClashTray.Testing;
 
 internal static class LoopbackPortReservations
 {
     internal const int AttemptsPerPort = 32;
+
+    // Windows excluded port ranges (Hyper-V/WinNAT) are per protocol: an OS-assigned
+    // TCP port can sit inside a UDP-excluded block, and bind(0) keeps returning
+    // neighbours of the same blocked region until the retry budget is exhausted.
+    // Probe explicit candidates strided across the whole dynamic range instead.
+    private const int MinDynamicPort = 49152;
+    private const int DynamicPortSpan = 65535 - MinDynamicPort + 1;
+    private const int CandidateStride = 997; // Odd stride is coprime with the 2^14 span, so candidates never repeat within a batch.
+
+    internal static int CandidatePort(int startOffset, int attempt)
+        => MinDynamicPort + (int)(((long)startOffset + (long)attempt * CandidateStride) % DynamicPortSpan);
 
     [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope",
         Justification = "Reservation lists own all TCP and bound UDP sockets and release them in finally; rejected UDP sockets have a per-attempt finally.")]
@@ -19,6 +31,7 @@ internal static class LoopbackPortReservations
         List<int> ports = [];
         int attempts = 0;
         int lastPort = 0;
+        int startOffset = RandomNumberGenerator.GetInt32(DynamicPortSpan);
         SocketException? lastFailure = null;
         try
         {
@@ -29,7 +42,7 @@ internal static class LoopbackPortReservations
                 {
                     int attempt = attempts++;
                     lastPort = 0;
-                    TcpListener tcp = listenerFactory?.Invoke(attempt) ?? new(IPAddress.Loopback, 0);
+                    TcpListener tcp = listenerFactory?.Invoke(attempt) ?? new(IPAddress.Loopback, CandidatePort(startOffset, attempt));
                     tcpReservations.Add(tcp);
                     tcp.ExclusiveAddressUse = true;
                     tcp.Start();

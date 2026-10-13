@@ -71,6 +71,32 @@ public sealed class LoopbackPortReservationsTests
         }
     }
 
+    [TestMethod]
+    public void CandidatePortsCoverTheDynamicRangeWithoutRepeatingOrClumping()
+    {
+        const int startOffset = 12345;
+        int[] candidates = Enumerable.Range(0, 16384)
+            .Select(attempt => LoopbackPortReservations.CandidatePort(startOffset, attempt))
+            .ToArray();
+        Assert.AreEqual(candidates.Length, candidates.Distinct().Count(), "Candidates must never repeat within a batch.");
+        Assert.IsTrue(candidates.All(port => port is >= 49152 and <= 65535), "Candidates must stay inside the dynamic port range.");
+        int clumped = candidates.Zip(candidates.Skip(1), (a, b) => Math.Abs(a - b)).Count(gap => gap < 256);
+        Assert.AreEqual(0, clumped, "Consecutive candidates must jump clear of a locally blocked region.");
+    }
+
+    [TestMethod]
+    public void DefaultAllocationReservesPortsBindableForTcpAndUdpAfterRelease()
+    {
+        int[] ports = LoopbackPortReservations.Allocate(2);
+        Assert.AreEqual(2, ports.Distinct().Count());
+        foreach (int port in ports)
+        {
+            using TcpListener tcp = new(IPAddress.Loopback, port);
+            tcp.Start();
+            using UdpClient udp = new(new IPEndPoint(IPAddress.Loopback, port));
+        }
+    }
+
     private static UdpClient CreateUdpConflict()
     {
         for (int attempt = 0; attempt < 32; attempt++)
