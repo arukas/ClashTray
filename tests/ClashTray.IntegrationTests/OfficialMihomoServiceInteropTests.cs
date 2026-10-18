@@ -4,6 +4,9 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Security.Principal;
 using ClashTray.Contracts;
 using ClashTray.Core;
 using ClashTray.Testing;
@@ -14,6 +17,116 @@ namespace ClashTray.IntegrationTests;
 [TestClass]
 public sealed class OfficialMihomoServiceInteropTests
 {
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
+    public async Task ServiceStartAndRestartGrantBoundDesktopIdentityQueriesBeforePublishingReady()
+    {
+        string? executable = FindMihomoExecutable();
+        if (executable is null) { Assert.Inconclusive("Official pinned Mihomo is required for service process permissions."); return; }
+        (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executable);
+        await TestFixtureDirectory.RunAsync(root, async () =>
+        {
+            (_, ServiceCorePayload payload) = await WriteCleanupConfigurationAsync(runtimeDirectory);
+            using WindowsIdentity caller = WindowsIdentity.GetCurrent(TokenAccessLevels.Duplicate | TokenAccessLevels.Query);
+            using Microsoft.Win32.SafeHandles.SafeAccessTokenHandle desktop =
+                QueryLimitedProcessIdentityTests.CreateCallerWithoutPrivileges(caller.AccessToken);
+            int restrictedProcesses = 0;
+            await using ServiceRuntimeController controller = new(paths, caller.User!.Value,
+                new DisabledTunNetworkHealthProbe(), restoreOwnedProxyStates: static () => { },
+                afterCoreStartForTest: (_, _) =>
+                {
+                    RestrictFixtureCoreProcess(paths.ManagedCoreExecutable, caller.User);
+                    restrictedProcesses++;
+                    return Task.CompletedTask;
+                });
+            using HttpClient http = new();
+            CoreRuntimeBinding? previous = null;
+            foreach (ServiceCommand command in new[] { ServiceCommand.StartCore, ServiceCommand.RestartCore })
+            {
+                ServiceResponse response = await controller.HandleAsync(new(Guid.NewGuid(), command,
+                    JsonSerializer.Serialize(payload), ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None);
+                Assert.IsTrue(response.Succeeded, $"{command}: {response.Error}; controller={payload.ControllerPort}, mixed={payload.MixedPort}");
+                CoreRuntimeBinding binding = response.RuntimeBinding!;
+                Assert.IsNotNull(binding);
+                LocalCoreProcessIdentity identity = new(binding.ProcessId, binding.ProcessStartedUtcTicks, binding.ExecutablePath);
+                MihomoApiClient api = new(http, new Uri($"http://127.0.0.1:{binding.ControllerPort}/"), string.Empty,
+                    controllerOwnershipValidator: () => WindowsListenerOwnerTable.IsOwnedBy(
+                        IPAddress.Loopback, binding.ControllerPort, PortTransport.Tcp, identity));
+                WindowsIdentity.RunImpersonated(desktop, () =>
+                {
+                    using JsonDocument version = api.GetVersionAsync().GetAwaiter().GetResult();
+                    Assert.AreEqual(BundledMihomo.Version, MihomoDataParser.ParseVersion(version));
+                    api.SetModeAsync(ProxyMode.Direct).GetAwaiter().GetResult();
+                    using JsonDocument configuration = api.GetConfigurationAsync(false).GetAwaiter().GetResult();
+                    Assert.AreEqual(ProxyMode.Direct, MihomoDataParser.ParseMode(configuration));
+                    if (previous is not null)
+                    {
+                        Assert.AreNotEqual(previous.InstanceId, binding.InstanceId);
+                        Assert.IsFalse(WindowsListenerOwnerTable.IsCurrentProcessIdentity(new(
+                            previous.ProcessId, previous.ProcessStartedUtcTicks, previous.ExecutablePath)));
+                    }
+                });
+                previous = binding;
+            }
+            Assert.AreEqual(2, restrictedProcesses, "Every new service-owned process must receive its own query grant.");
+            Assert.IsTrue((await controller.HandleAsync(new(Guid.NewGuid(), ServiceCommand.StopCore,
+                ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None)).Succeeded);
+        });
+    }
+
+    [TestMethod]
+    [TestCategory("RequiresOfficialMihomo")]
+    public async Task FailedDesktopQueryGrantStopsTheUnpublishedCore()
+    {
+        string? executable = FindMihomoExecutable();
+        if (executable is null) { Assert.Inconclusive("Official pinned Mihomo is required for query-grant rollback."); return; }
+        (string root, AppPaths paths, string runtimeDirectory) = await CreateOfficialCoreFixtureAsync(executable);
+        await TestFixtureDirectory.RunAsync(root, async () =>
+        {
+            (_, ServiceCorePayload payload) = await WriteCleanupConfigurationAsync(runtimeDirectory);
+            using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+            LocalCoreProcessIdentity? launched = null;
+            await using ServiceRuntimeController controller = new(paths, "invalid-bound-user-sid",
+                new DisabledTunNetworkHealthProbe(), restoreOwnedProxyStates: static () => { },
+                afterCoreStartForTest: (_, _) =>
+                {
+                    launched = RestrictFixtureCoreProcess(paths.ManagedCoreExecutable, caller.User!);
+                    return Task.CompletedTask;
+                });
+            ServiceResponse response = await controller.HandleAsync(new(Guid.NewGuid(), ServiceCommand.StartCore,
+                JsonSerializer.Serialize(payload), ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None);
+            Assert.IsNotNull(launched, "The failure must occur after a real core was launched.");
+            Assert.IsFalse(response.Succeeded);
+            Assert.IsNull(response.RuntimeBinding);
+            ServiceResponse status = await controller.HandleAsync(new(Guid.NewGuid(), ServiceCommand.GetStatus,
+                ProtocolVersion: ServiceProtocol.CurrentVersion), CancellationToken.None);
+            Assert.AreEqual(CoreState.Stopped, status.Core);
+            Assert.IsNull(status.RuntimeBinding);
+            Process[] remaining = Process.GetProcessesByName("mihomo");
+            try { Assert.IsFalse(remaining.Any(process => process.Id == launched.ProcessId), "Rollback must actually exit the child, not merely make its identity unqueryable."); }
+            finally { foreach (Process process in remaining) { process.Dispose(); } }
+        });
+    }
+
+    private static LocalCoreProcessIdentity RestrictFixtureCoreProcess(string executablePath, SecurityIdentifier owner)
+    {
+        Process[] candidates = Process.GetProcessesByName("mihomo");
+        try
+        {
+            foreach (Process process in candidates)
+            {
+                LocalCoreProcessIdentity identity;
+                try { identity = WindowsListenerOwnerTable.CaptureProcessIdentity(process.Id); }
+                catch (Win32Exception) { continue; }
+                if (!string.Equals(identity.ExecutablePath, executablePath, StringComparison.OrdinalIgnoreCase)) { continue; }
+                QueryLimitedProcessIdentityTests.SetServiceOnlyDacl(process.SafeHandle, owner);
+                return identity;
+            }
+            throw new InvalidOperationException("The isolated fixture core process was not found.");
+        }
+        finally { foreach (Process process in candidates) { process.Dispose(); } }
+    }
+
     [TestMethod]
     [TestCategory("RequiresOfficialMihomo")]
     public async Task SaturatedObservationAndMutationQuotasStillConfirmTunOffAndStopTheOwnedOfficialProcess()

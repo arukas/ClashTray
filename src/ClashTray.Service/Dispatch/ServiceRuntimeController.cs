@@ -28,6 +28,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
     private readonly Action<ServiceRequest>? _requestExecutionObserved;
     public Guid ServiceInstanceId { get; } = Guid.NewGuid();
     private readonly AppPaths _paths;
+    private readonly string? _managedUserSid;
     private readonly MihomoProcessManager _processManager = new();
     private readonly HttpClient _httpClient = EndpointTransportPolicy.CreateControllerHttpClient();
     private readonly HttpClient _coreUpdateHttpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
@@ -82,6 +83,7 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
         Action<ServiceRequest>? requestExecutionObserved = null)
     {
         _paths = paths ?? new AppPaths();
+        _managedUserSid = managedUserSid;
         _requests = new ServiceRequestLedger(requestTimeProvider ?? TimeProvider.System, requestCacheCapacity);
         _requestExecutionObserved = requestExecutionObserved;
         _logger = loggerFactory?.CreateLogger<ServiceRuntimeController>() ?? NullLogger<ServiceRuntimeController>.Instance;
@@ -620,6 +622,14 @@ internal sealed class ServiceRuntimeController : IAsyncDisposable
                 if (_afterCoreStartForTest is not null)
                 {
                     await _afterCoreStartForTest(candidatePort, cancellationToken).ConfigureAwait(false);
+                }
+
+                // The non-elevated desktop verifies image/creation-time as well as PID.
+                // Bind this query-only grant to the installed user, never an IPC-supplied SID.
+                // A failure follows startup rollback and must not publish a ready binding.
+                if (_managedUserSid is not null)
+                {
+                    _processManager.GrantIdentityQueryAccess(_managedUserSid);
                 }
 
                 CoreRuntimeBinding binding = await WaitForReadyBindingAsync(

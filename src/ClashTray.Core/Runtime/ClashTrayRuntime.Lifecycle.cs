@@ -1355,6 +1355,7 @@ public sealed partial class ClashTrayRuntime
     {
         ServiceCommandException { ErrorCode: ServiceErrorCode.RuntimeBindingMetadataMissing or ServiceErrorCode.RuntimeBindingInvalid } bindingError
             => ErrorSanitizer.Sanitize(bindingError.Message),
+        ManagedCoreOwnershipException ownershipError => ErrorSanitizer.Sanitize(ownershipError.Message),
         HttpRequestException { StatusCode: { } statusCode } => $"HTTP {(int)statusCode}",
         MihomoStreamException streamException => $"{streamException.Path} {streamException.Kind}",
         TimeoutException => "首条记录超时",

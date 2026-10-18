@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Principal;
 using System.Text;
 using ClashTray.Contracts;
 
@@ -380,6 +381,20 @@ public sealed class MihomoProcessManager : IAsyncDisposable
             return HasExited(process) ? null : identity;
         }
     }
+    internal void GrantIdentityQueryAccess(string managedUserSid)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(managedUserSid);
+        lock (_processGate)
+        {
+            if (_process is null || HasExited(_process))
+            {
+                throw new InvalidOperationException("The managed Mihomo process exited before desktop query access was granted.");
+            }
+
+            WindowsProcessSecurity.GrantIdentityQueryAccess(_process.SafeHandle, new SecurityIdentifier(managedUserSid));
+        }
+    }
+
     private void StartProcess(
         string executablePath,
         string configurationPath,
