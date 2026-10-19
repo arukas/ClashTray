@@ -211,6 +211,7 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="CoreSha256Box.Header" xml:space="preserve"><value>ZIP SHA-256 (optional)</value></data>
   <data name="CoreSha256Box.PlaceholderText" xml:space="preserve"><value>64-digit hexadecimal checksum; leave empty to skip verification</value></data>
   <data name="InstallCoreButton.Content" xml:space="preserve"><value>Download and install core</value></data>
+  <data name="UseOfficialCoreUriButton.Content" xml:space="preserve"><value>Use official download URL</value></data>
   <data name="NetworkSwitchNoDefault" xml:space="preserve"><value>No default configuration</value></data>
   <data name="NetworkSwitchSsidHeader" xml:space="preserve"><value>Wi-Fi name</value></data>
   <data name="NetworkSwitchSsidPlaceholder" xml:space="preserve"><value>Exact SSID</value></data>

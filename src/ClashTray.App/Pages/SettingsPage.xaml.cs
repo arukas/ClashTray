@@ -757,6 +757,33 @@ public sealed partial class SettingsPage : UserControl
         CoreUpdateManifest manifest = new(CoreVersionBox.Text.Trim(), uri, sha256);
         await PresentMaintenanceAsync(() => _commands.InstallCoreAsync(manifest), LocalizationService.Get("CoreUpdateDone"));
     }
+
+    private void UseOfficialCoreUriButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(CoreVersionBox.Text))
+        {
+            CoreVersionBox.Text = CoreUpdatePresets.PinnedVersion;
+        }
+
+        string version = CoreVersionBox.Text.Trim();
+        Uri officialUri;
+        try
+        {
+            officialUri = CoreUpdatePresets.BuildOfficialDownloadUri(version);
+        }
+        catch (ArgumentException)
+        {
+            StatusText.Text = LocalizationService.Get("CoreUpdateFieldsRequired");
+            return;
+        }
+
+        CoreDownloadUriBox.Text = officialUri.OriginalString;
+        if (string.IsNullOrWhiteSpace(CoreSha256Box.Text)
+            && version.Equals(CoreUpdatePresets.PinnedVersion, StringComparison.Ordinal))
+        {
+            CoreSha256Box.Text = CoreUpdatePresets.PinnedSha256;
+        }
+    }
     private void LoadSettings(AppSettings settings)
     {
         if (StartWithWindowsSwitch is null) { return; }

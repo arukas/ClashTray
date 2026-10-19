@@ -6,7 +6,7 @@
 
 当前发布目标仅为 Windows x64；不提供 x86、ARM64、macOS 或 Linux 版本。
 
-当前正式版本为 **0.3.7**，见 [发布说明](docs/releases/0.3.7.md)。本次修复 Windows 服务启动的 Mihomo 可以被 Web 面板访问、普通用户托盘客户端却无法控制的问题：服务为安装绑定用户补上最小进程身份查询权限，保留控制器和监听所有权校验。升级时请同步更新桌面程序与服务，并重启核心。验证范围见 [修复验证记录](docs/0.3.7-service-query-access-2026-10-18.md)。
+当前正式版本为 **0.3.8**，见 [发布说明](docs/releases/0.3.8.md)。本次为设置页的核心更新加入官方下载地址预设：一键按版本号填入官方 GitHub 发布地址，钉版版本同时附带官方 SHA-256；来源白名单校验保持不变。
 
 [![CI](https://github.com/arukas/ClashTray/actions/workflows/ci.yml/badge.svg)](https://github.com/arukas/ClashTray/actions/workflows/ci.yml) [![Release](https://github.com/arukas/ClashTray/actions/workflows/release.yml/badge.svg)](https://github.com/arukas/ClashTray/actions/workflows/release.yml)
 
@@ -76,10 +76,10 @@ dotnet test ClashTray.sln --configuration Debug --property:Platform=x64 --no-bui
 
 ```powershell
 # 默认 Full：包含经过校验的 Mihomo 核心
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.7 -Variant Full
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.8 -Variant Full
 
 # 旧版 Windows 10 兼容包：自包含、包含核心、关闭 CET
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.7 -Variant NoCET
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.8 -Variant NoCET
 ```
 
 从 [文档索引](docs/README.md) 可直接找到 [开发环境](docs/setup.md)、[模块边界](docs/module-map.md)、[测试环境](docs/test-environment.md) 与 [发布流程](docs/release.md)。旧的 `Build-MSIX.ps1` 和 `packaging/ClashTray.Package` 保留作实验性 / 历史打包材料；当前发布路径是 Inno Setup LZMA2 solid 压缩的 EXE 安装器。
