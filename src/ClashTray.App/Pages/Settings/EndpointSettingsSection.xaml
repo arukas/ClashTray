@@ -1,0 +1,44 @@
+﻿<UserControl x:Class="ClashTray.App.EndpointSettingsSection" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:ClashTray.App">
+    <StackPanel Spacing="10">
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="EndpointManagementHeader" FontWeight="SemiBold" />
+                <TextBlock x:Uid="EndpointManagementHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <ListView x:Name="EndpointListView" x:Uid="EndpointListView" SelectionMode="Single" SelectionChanged="EndpointListView_SelectionChanged" HorizontalContentAlignment="Stretch">
+                    <ListView.ItemTemplate>
+                        <DataTemplate x:DataType="local:EndpointSettingsRow">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="1">
+                                    <TextBlock Text="{x:Bind Endpoint.DisplayName}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                    <TextBlock Text="{x:Bind Summary}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Content="{x:Bind TestLabel}" Tag="{x:Bind Endpoint}" Visibility="{x:Bind TestVisibility}" IsEnabled="{x:Bind TestEnabled}" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="TestEndpointButton_Click" />
+                                <Button Grid.Column="2" Content="{x:Bind SelectLabel}" Tag="{x:Bind Endpoint}" IsEnabled="{x:Bind SelectEnabled}" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SelectEndpointButton_Click" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+                <TextBox x:Name="EndpointNameBox" x:Uid="EndpointNameBox" />
+                <TextBox x:Name="EndpointUriBox" x:Uid="EndpointUriBox" />
+                <ComboBox x:Name="EndpointTransportBox" x:Uid="EndpointTransportBox" SelectionChanged="EndpointTransportBox_SelectionChanged" SelectedIndex="0">
+                    <ComboBoxItem x:Uid="EndpointHttpsSystemTrustItem" Tag="https-system" />
+                    <ComboBoxItem x:Uid="EndpointHttpsCustomItem" Tag="https-custom" />
+                    <ComboBoxItem x:Uid="EndpointHttpExplicitItem" Tag="http-explicit" />
+                </ComboBox>
+                <PasswordBox x:Name="EndpointSecretBox" x:Uid="EndpointSecretBox" />
+                <TextBox x:Name="EndpointCustomCaBox" x:Uid="EndpointCustomCaBox" AcceptsReturn="True" TextWrapping="Wrap" Height="96" IsEnabled="False" />
+                <CheckBox x:Name="EndpointHttpRiskCheckBox" x:Uid="EndpointHttpRiskCheckBox" IsEnabled="False" />
+                <TextBlock x:Uid="EndpointTrustHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Left">
+                    <Button x:Name="SaveEndpointButton" x:Uid="SaveEndpointButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveEndpointButton_Click" />
+                    <Button x:Name="RemoveEndpointButton" x:Uid="RemoveEndpointButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="RemoveEndpointButton_Click" IsEnabled="False" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

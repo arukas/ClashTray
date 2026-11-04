@@ -17,6 +17,17 @@ namespace ClashTray.App;
 
 public sealed partial class MainWindow
 {
+    private static object FindSettingsControl(SettingsPage page, string name)
+    {
+        if (page.FindName(name) is object direct) { return direct; }
+        string[] sections = ["EndpointSection", "ProviderSection", "CoreUpdateSection", "NetworkRuleSection"];
+        foreach (string section in sections)
+        {
+            if (page.FindName(section) is FrameworkElement element && element.FindName(name) is object control) { return control; }
+        }
+        throw new InvalidOperationException($"Settings control not found: {name}");
+    }
+
     private PanelSnapshotContext CreateLocalSmokeContext(RuntimeSnapshot snapshot) =>
         PanelSnapshotContext.Create(RuntimeSnapshotAdapter.ToAppSnapshot(snapshot, _runtime!.Settings));
 
@@ -142,6 +153,7 @@ public sealed partial class MainWindow
         await VerifyNetworkSwitchErrorPresentationAsync(directory);
         await VerifySsidFeatureScopeAsync(directory);
         await VerifySettingsDraftAsync(directory);
+        await VerifySettingsSectionsAsync(directory, sample);
         NativeMethods.GetWindowRect(_windowHandle, out NativeMethods.Rect actual);
         NativeMethods.Rect anchor = GetTrayRect();
         nint monitor = NativeMethods.MonitorFromRect(ref anchor, NativeMethods.MONITOR_DEFAULTTONEAREST);
@@ -700,13 +712,13 @@ public sealed partial class MainWindow
 
         NavigateTo(_settingsPage, PanelPage.Settings);
         await Task.Delay(50);
-        ListView remoteProviders = (ListView)_settingsPage!.FindName("ProvidersListView");
+        ListView remoteProviders = (ListView)FindSettingsControl(_settingsPage!, "ProvidersListView");
         remoteProviders.SelectedIndex = 0;
         await Task.Delay(20);
-        if (((Button)_settingsPage!.FindName("ClearDnsButton")).IsEnabled
-            || ((Button)_settingsPage.FindName("ClearFakeIpButton")).IsEnabled
-            || ((Button)_settingsPage.FindName("UpdateGeoButton")).IsEnabled
-            || ((Button)_settingsPage.FindName("RefreshProviderButton")).IsEnabled)
+        if (((Button)FindSettingsControl(_settingsPage!, "ClearDnsButton")).IsEnabled
+            || ((Button)FindSettingsControl(_settingsPage!, "ClearFakeIpButton")).IsEnabled
+            || ((Button)FindSettingsControl(_settingsPage!, "UpdateGeoButton")).IsEnabled
+            || ((Button)FindSettingsControl(_settingsPage!, "RefreshProviderButton")).IsEnabled)
         {
             throw new InvalidOperationException("Remote stale maintenance actions were not disabled.");
         }
@@ -773,10 +785,10 @@ public sealed partial class MainWindow
 
         NavigateTo(_settingsPage, PanelPage.Settings);
         await Task.Delay(50);
-        if (((Button)_settingsPage!.FindName("ClearDnsButton")).IsEnabled
-            || ((Button)_settingsPage.FindName("ClearFakeIpButton")).IsEnabled
-            || ((Button)_settingsPage.FindName("UpdateGeoButton")).IsEnabled
-            || ((Button)_settingsPage.FindName("RefreshProviderButton")).IsEnabled)
+        if (((Button)FindSettingsControl(_settingsPage!, "ClearDnsButton")).IsEnabled
+            || ((Button)FindSettingsControl(_settingsPage!, "ClearFakeIpButton")).IsEnabled
+            || ((Button)FindSettingsControl(_settingsPage!, "UpdateGeoButton")).IsEnabled
+            || ((Button)FindSettingsControl(_settingsPage!, "RefreshProviderButton")).IsEnabled)
         {
             throw new InvalidOperationException("Remote capability restrictions were not reflected in maintenance actions.");
         }
@@ -806,6 +818,53 @@ public sealed partial class MainWindow
             }, DiagnosticJsonOptions));
 
         UpdateAppSnapshot(local);
+    }
+
+    private async Task VerifySettingsSectionsAsync(string directory, RuntimeSnapshot sample)
+    {
+        SettingsPage page = _settingsPage!;
+        NavigateTo(page, PanelPage.Settings);
+        EndpointSettingsSection endpoints = (EndpointSettingsSection)page.FindName("EndpointSection");
+        EndpointDescriptor local = _runtime!.AppSnapshot.ActiveController.Endpoint;
+        EndpointDescriptor remote = new(new("smoke-settings"), EndpointKind.Remote, "Settings endpoint",
+            new Uri("https://settings.example.test/"), EndpointTransportSecurity.HttpsSystemTrust);
+        endpoints.UpdateEndpointList([local, remote]);
+        ListView endpointList = (ListView)FindSettingsControl(page, "EndpointListView");
+        endpointList.SelectedIndex = 1;
+        if (endpointList.SelectedItem is not EndpointSettingsRow { Endpoint.Kind: EndpointKind.Remote }
+            || ((TextBox)FindSettingsControl(page, "EndpointNameBox")).Text != remote.DisplayName
+            || !((Button)FindSettingsControl(page, "RemoveEndpointButton")).IsEnabled)
+        { throw new InvalidOperationException("Endpoint template selection did not populate its independent editor."); }
+        endpoints.StartBringIntoView();
+        await Task.Delay(100);
+        RootGrid.UpdateLayout();
+        if (!VisualDescendants<Button>(endpoints).Any(button => button.Tag is EndpointDescriptor))
+        { throw new InvalidOperationException("Endpoint data template buttons were not realized."); }
+        await SaveDiagnosticFrameAsync(directory, "settings-endpoints");
+
+        ProviderStatus provider = new("same-name", "Proxy", "HTTP", null, null, 3);
+        RuntimeSnapshot providers = sample with { Providers = [provider], RuleProviders = [provider with { Count = 7 }] };
+        page.UpdateSnapshot(CreateLocalSmokeContext(providers));
+        ListView list = (ListView)FindSettingsControl(page, "ProvidersListView");
+        list.SelectedIndex = 1;
+        page.UpdateSnapshot(CreateLocalSmokeContext(providers with { Providers = [provider with { Count = 4 }] }));
+        if (list.SelectedItem is not ProviderSettingsRow { IsRuleProvider: true, Provider.Count: 7 })
+        { throw new InvalidOperationException("Provider refresh selected a different provider kind sharing the same name."); }
+        page.UpdateSnapshot(CreateReadOnlySmokeContext(providers, "replacement", 2));
+        if (list.SelectedItem is not null || ((Button)FindSettingsControl(page, "RefreshProviderButton")).IsEnabled)
+        { throw new InvalidOperationException("Provider selection survived a controller replacement."); }
+
+        TextBox version = (TextBox)FindSettingsControl(page, "CoreVersionBox");
+        version.Text = "v9.8.7";
+        page.UpdateSnapshot(CreateLocalSmokeContext(sample));
+        if (version.Text != "v9.8.7")
+        { throw new InvalidOperationException("A parent snapshot overwrote the core update editor."); }
+        await File.WriteAllTextAsync(Path.Combine(directory, "settings-sections-checks.json"), JsonSerializer.Serialize(new
+        {
+            EndpointTemplateButtonsRealized = true, EndpointSelectionPopulatesEditor = true,
+            ProviderKindSelectionRetained = true, ControllerReplacementClearsSelection = true,
+            CoreUpdateDraftRetained = true, NetworkStateChanged = false
+        }, DiagnosticJsonOptions));
     }
 
     private async Task VerifySettingsDraftAsync(string directory)
@@ -967,7 +1026,7 @@ public sealed partial class MainWindow
             "NetworkSwitchStatusErrorFormat",
             LocalizationService.Format("NetworkSwitchStatusFormat", LocalizationService.Get("NetworkSwitchStateFailed"), "Office Wi-Fi"),
             LocalizationService.Get("NetworkSwitchErrorTargetMissing"));
-        if (((TextBlock)_settingsPage!.FindName("NetworkSwitchStateText")).Text != expectedMissingTarget)
+        if (((TextBlock)FindSettingsControl(_settingsPage!, "NetworkSwitchStateText")).Text != expectedMissingTarget)
         {
             throw new InvalidOperationException("Missing network-switch target error was not localized in the settings page.");
         }
@@ -984,7 +1043,7 @@ public sealed partial class MainWindow
             "NetworkSwitchStatusErrorFormat",
             LocalizationService.Format("NetworkSwitchStatusFormat", LocalizationService.Get("NetworkSwitchStateFailed"), "Office Wi-Fi"),
             LocalizationService.Get("NetworkSwitchErrorExecution"));
-        if (((TextBlock)_settingsPage.FindName("NetworkSwitchStateText")).Text != expectedExecutionFailure)
+        if (((TextBlock)FindSettingsControl(_settingsPage!, "NetworkSwitchStateText")).Text != expectedExecutionFailure)
         {
             throw new InvalidOperationException("Network-switch execution error was not localized in the settings page.");
         }
@@ -1008,9 +1067,9 @@ public sealed partial class MainWindow
         NavigateTo(_settingsPage!, PanelPage.Settings);
         RootGrid.UpdateLayout();
 
-        if (_settingsPage!.FindName("NetworkSwitchCard") is not Border networkSwitchCard
+        if (FindSettingsControl(_settingsPage!, "NetworkSwitchCard") is not Border networkSwitchCard
             || networkSwitchCard.Visibility != Visibility.Collapsed
-            || _settingsPage.FindName("NetworkSwitchRulesCard") is not Border networkSwitchRulesCard
+            || FindSettingsControl(_settingsPage!, "NetworkSwitchRulesCard") is not Border networkSwitchRulesCard
             || networkSwitchRulesCard.Visibility != Visibility.Collapsed)
         {
             throw new InvalidOperationException("SSID/Wi-Fi switching must remain hidden in the 0.3.0 Beta.");

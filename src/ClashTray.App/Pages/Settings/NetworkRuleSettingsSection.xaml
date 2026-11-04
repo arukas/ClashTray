@@ -1,0 +1,26 @@
+﻿<UserControl x:Class="ClashTray.App.NetworkRuleSettingsSection" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:ClashTray.App">
+    <StackPanel Spacing="10">
+        <Border x:Name="NetworkSwitchCard" Style="{StaticResource ClashTrayCardStyle}" Visibility="Collapsed">
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="NetworkSwitchHeader" FontWeight="SemiBold" />
+                <ToggleSwitch x:Name="NetworkSwitchEnabledSwitch" x:Uid="NetworkSwitchEnabledSwitch" />
+                <ComboBox x:Name="NetworkSwitchDefaultConfigurationBox" x:Uid="NetworkSwitchDefaultConfigurationBox" />
+                <TextBlock x:Name="NetworkSwitchStateText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                <TextBlock x:Uid="NetworkSwitchHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <Button x:Name="OpenNetworkPermissionButton" x:Uid="OpenNetworkPermissionButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="OpenNetworkPermissionButton_Click" Visibility="Collapsed" HorizontalAlignment="Left" />
+                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Left">
+                    <Button x:Name="SaveNetworkSwitchButton" x:Uid="SaveNetworkSwitchButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="SaveNetworkSwitchButton_Click" />
+                    <Button x:Name="ResumeNetworkSwitchButton" x:Uid="ResumeNetworkSwitchButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="ResumeNetworkSwitchButton_Click" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+        <Border x:Name="NetworkSwitchRulesCard" Style="{StaticResource ClashTrayCardStyle}" Visibility="Collapsed">
+            <StackPanel Spacing="8">
+                <TextBlock x:Uid="NetworkSwitchRulesHeader" FontWeight="SemiBold" />
+                <TextBlock x:Uid="NetworkSwitchRulesHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" FontSize="12" />
+                <ListView x:Name="NetworkSwitchRulesListView" x:Uid="NetworkSwitchRulesListView" SelectionMode="None" />
+                <Button x:Name="AddNetworkRuleButton" x:Uid="AddNetworkRuleButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="AddNetworkRuleButton_Click" HorizontalAlignment="Left" />
+            </StackPanel>
+        </Border>
+    </StackPanel>
+</UserControl>

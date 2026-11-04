@@ -41,3 +41,5 @@ Service 对 Core 的 friend 访问目前保留：生命周期确认和实际监�
 新增跨模块使用需要在对应事务中说明所有权、期限与代际判定；上述清单是维护入口，不替代服务自己的路径、ACL、协议及允许命令校验。Runtime 保留操作准入、轮询与最终状态提交；`ConfigurationStartupRecovery` 管理配置恢复重放和日志保留，`ServiceCoreReconciler` 管理已派发启动的限时观察和共用绑定准入。组件不另建操作锁，生命周期副作用仍由 Runtime 的既有门禁保护。
 
 WinUI XAML 位于 Pages/Shell 后，其 XBF 也保留相对目录。EXE 发布补拷贝生成资源时递归复制 XBF/PRI 并保留相对路径。Release 排除 Shell/MainWindow.SmokeTest.cs；Debug smoke 验证实际生成组件接线。
+
+五个主页面只接收由一次 AppSnapshot 生成的 PanelSnapshotContext；页面数据、可写状态、能力、身份和命令代际来自同一观察。SettingsPage 保留普通设置草稿与本机网络开关，Pages/Settings 中的 EndpointSettingsSection、ProviderSettingsSection、CoreUpdateSettingsSection、NetworkRuleSettingsSection 分别拥有自己的控件与编辑状态。各组件复用父页面的命令 runner 和页面代际，离开页面仍抑制迟到的提示；端点与 Provider 使用类型化行模型和 XAML DataTemplate。网络规则入口继续隐藏。

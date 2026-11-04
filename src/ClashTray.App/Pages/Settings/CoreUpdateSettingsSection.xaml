@@ -1,0 +1,17 @@
+﻿<UserControl x:Class="ClashTray.App.CoreUpdateSettingsSection" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:ClashTray.App">
+    <StackPanel Spacing="10">
+        <Border Style="{StaticResource ClashTrayCardStyle}">
+            <Expander x:Uid="CoreUpdateExpander">
+                <StackPanel Spacing="8" Padding="0,8,0,0">
+                    <TextBox x:Name="CoreVersionBox" x:Uid="CoreVersionBox" />
+                    <TextBox x:Name="CoreDownloadUriBox" x:Uid="CoreDownloadUriBox" />
+                    <TextBox x:Name="CoreSha256Box" x:Uid="CoreSha256Box" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Uid="UseOfficialCoreUriButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="UseOfficialCoreUriButton_Click" />
+                        <Button x:Uid="InstallCoreButton" Style="{StaticResource ClashTrayCompactButtonStyle}" Click="InstallCoreButton_Click" x:Name="InstallCoreButton" />
+                    </StackPanel>
+                </StackPanel>
+            </Expander>
+        </Border>
+    </StackPanel>
+</UserControl>
