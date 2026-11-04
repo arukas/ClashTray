@@ -14,6 +14,7 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
     private readonly CancellationTokenSource _runtimeCts = new();
     private readonly object _disposeGate = new();
     private readonly object _publishGate = new();
+    private readonly SnapshotPublicationQueue _publications;
     private readonly HttpClient _httpClient;
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "Released only after shutdown workers settle; timed out workers retain the runtime and its resources.")]
     private readonly SnapshotPublishThrottle _throttledPublisher;
@@ -104,6 +105,7 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
         HttpMessageHandler? controllerHttpMessageHandler = null,
         TimeProvider? shutdownTimeProvider = null)
     {
+        _publications = new SnapshotPublicationQueue(_publishGate);
         _settingsCommits = new SettingsCommitCoordinator(environment.Settings, new SettingsRecoveryJournal(environment.Paths));
         _httpClient = controllerHttpMessageHandler is null
             ? EndpointTransportPolicy.CreateControllerHttpClient()
@@ -282,40 +284,21 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
 
     public event EventHandler<AppSnapshot>? AppSnapshotChanged;
 
-    private void Publish()
+    private void Publish() => Publish(includeRuntime: true);
+
+    private void PublishAppSnapshot() => Publish(includeRuntime: false);
+
+    private void Publish(bool includeRuntime) => _publications.Publish(() =>
     {
-        RuntimeSnapshot snapshot;
-        AppSnapshot appSnapshot;
-        EventHandler<RuntimeSnapshot>? snapshotChanged;
-        EventHandler<AppSnapshot>? appSnapshotChanged;
-        lock (_publishGate)
-        {
-            _logs.FlushPendingLogs();
-            snapshot = Snapshot;
-            appSnapshot = ComposeAppSnapshot(snapshot);
-            snapshotChanged = SnapshotChanged;
-            appSnapshotChanged = AppSnapshotChanged;
-        }
-
-        // Subscriber callbacks run outside the gate: a slow or re-entrant
-        // subscriber must not extend the critical section for other publishers.
-        snapshotChanged?.Invoke(this, snapshot);
-        appSnapshotChanged?.Invoke(this, appSnapshot);
-    }
-
-    private void PublishAppSnapshot()
-    {
-        AppSnapshot appSnapshot;
-        EventHandler<AppSnapshot>? appSnapshotChanged;
-        lock (_publishGate)
-        {
-            _logs.FlushPendingLogs();
-            appSnapshot = ComposeAppSnapshot(Snapshot);
-            appSnapshotChanged = AppSnapshotChanged;
-        }
-
-        appSnapshotChanged?.Invoke(this, appSnapshot);
-    }
+        _logs.FlushPendingLogs();
+        RuntimeSnapshot snapshot = Snapshot;
+        AppSnapshot appSnapshot = ComposeAppSnapshot(snapshot);
+        EventHandler<RuntimeSnapshot>? snapshotChanged = SnapshotChanged;
+        EventHandler<AppSnapshot>? appSnapshotChanged = AppSnapshotChanged;
+        return new SnapshotPublication(
+            includeRuntime ? () => snapshotChanged?.Invoke(this, snapshot) : null,
+            () => appSnapshotChanged?.Invoke(this, appSnapshot));
+    });
 
     private void SetRuntimeBinding(CoreRuntimeBinding? binding)
     {
