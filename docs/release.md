@@ -32,6 +32,8 @@ Get-FileHash .\packaging\out\0.3.6\full\ClashTray-0.3.6-win-x64-Full.exe -Algori
 
 0.3.6 的本次发布由用户明确要求跳过暂不具备条件的 Windows 10/11 实机及虚拟机验收；发布决定以其余自动化门禁为依据。该验收范围例外仅适用于本次发布，未执行的场景仍需如实记录，见 [0.3.6 正式版验证记录](0.3.6-stable-readiness-2026-10-11.md)。
 
+0.3.9 发布时，用户明确要求跳过尚未完成的实机验收并直接发布正式版；本次以已通过的自动化门禁及 Release 流水线为依据。该例外仅适用于 0.3.9，不改变后续版本的默认发布要求；未执行的实机场景见 [0.3.9 发布验收记录](0.3.9-release-acceptance-2026-11-04.md)。
+
 交互式卸载继续提供保留数据、删除数据和取消三个选项。静默卸载（`/SILENT` 或 `/VERYSILENT`）默认保留配置、订阅和日志；无人值守调用建议同时传入 `/SUPPRESSMSGBOXES /NORESTART /LOG="绝对日志路径"`，检查退出代码和日志。正在运行的桌面应用仍会阻止卸载，服务停止或代理恢复失败仍会中止卸载。[Inno Setup 卸载参数](https://jrsoftware.org/ishelp/topic_uninstcmdline.htm)与[可抑制提示框](https://jrsoftware.org/ishelp/topic_isxfunc_suppressiblemsgbox.htm)说明了这些参数与提示框的行为。
 
 ## GitHub Actions

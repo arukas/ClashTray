@@ -6,7 +6,7 @@
 
 当前发布目标仅为 Windows x64；不提供 x86、ARM64、macOS 或 Linux 版本。
 
-当前正式版本为 **0.3.8**，见 [发布说明](docs/releases/0.3.8.md)。本次为设置页的核心更新加入官方下载地址预设：一键按版本号填入官方 GitHub 发布地址，钉版版本同时附带官方 SHA-256；来源白名单校验保持不变。
+当前正式版本为 **0.3.9**，见 [发布说明](docs/releases/0.3.9.md)。本次完成六项代码设计优化，修复状态快照的重入及并发发布顺序，拆分启动恢复、控制器上下文、设置页面和服务生命周期职责，并使用单调时钟限制快照更新。
 
 [![CI](https://github.com/arukas/ClashTray/actions/workflows/ci.yml/badge.svg)](https://github.com/arukas/ClashTray/actions/workflows/ci.yml) [![Release](https://github.com/arukas/ClashTray/actions/workflows/release.yml/badge.svg)](https://github.com/arukas/ClashTray/actions/workflows/release.yml)
 
@@ -25,7 +25,7 @@ ClashTray 是使用 C#、.NET 10 和 WinUI 3 独立实现的 Windows Mihomo 客�
 - 安全更新：核心来源固定为官方 MetaCubeX/Mihomo 发布，下载后校验 SHA-256，再以原子方式替换并支持回滚。
 - 语言与显示：简体中文 / English，系统、浅色、深色、高对比度和常见 DPI 缩放。
 
-> **本轮 alpha 范围：** 统一本地/服务启动确认、拆分请求台账与更新事务、明确设置/配置/退出所有权、提取展示逻辑、隔离测试组装、统一控制器资源采集并整理模块目录。Wi-Fi/SSID 自动切换及相关监听/编辑入口继续关闭。
+> Wi-Fi/SSID 自动切换及相关监听/编辑入口继续关闭。
 
 ## 体积与发布版本
 
@@ -76,10 +76,10 @@ dotnet test ClashTray.sln --configuration Debug --property:Platform=x64 --no-bui
 
 ```powershell
 # 默认 Full：包含经过校验的 Mihomo 核心
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.8 -Variant Full
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.9 -Variant Full
 
 # 旧版 Windows 10 兼容包：自包含、包含核心、关闭 CET
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.8 -Variant NoCET
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.9 -Variant NoCET
 ```
 
 从 [文档索引](docs/README.md) 可直接找到 [开发环境](docs/setup.md)、[模块边界](docs/module-map.md)、[测试环境](docs/test-environment.md) 与 [发布流程](docs/release.md)。旧的 `Build-MSIX.ps1` 和 `packaging/ClashTray.Package` 保留作实验性 / 历史打包材料；当前发布路径是 Inno Setup LZMA2 solid 压缩的 EXE 安装器。
