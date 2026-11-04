@@ -43,3 +43,5 @@ Service 对 Core 的 friend 访问目前保留：生命周期确认和实际监�
 WinUI XAML 位于 Pages/Shell 后，其 XBF 也保留相对目录。EXE 发布补拷贝生成资源时递归复制 XBF/PRI 并保留相对路径。Release 排除 Shell/MainWindow.SmokeTest.cs；Debug smoke 验证实际生成组件接线。
 
 五个主页面只接收由一次 AppSnapshot 生成的 PanelSnapshotContext；页面数据、可写状态、能力、身份和命令代际来自同一观察。SettingsPage 保留普通设置草稿与本机网络开关，Pages/Settings 中的 EndpointSettingsSection、ProviderSettingsSection、CoreUpdateSettingsSection、NetworkRuleSettingsSection 分别拥有自己的控件与编辑状态。各组件复用父页面的命令 runner 和页面代际，离开页面仍抑制迟到的提示；端点与 Provider 使用类型化行模型和 XAML DataTemplate。网络规则入口继续隐藏。
+
+ServiceCoreLifecycle 拥有服务子进程、控制器 API、运行绑定、进程身份和启动失败清理，返回不含 IPC 标识的 ServiceCoreStartResult。ServiceRuntimeController 保留协议/载荷反序列化、请求台账、门禁、TUN 状态与关闭确认，再将结果映射到协议 3 响应。启动和重启仍检查受管路径/参数；TUN 恢复重启通过同一个生命周期组件停止并清理会话，不新增操作锁。释放时只有已确认 TUN 安全才停止进程，传输资源始终清理。
