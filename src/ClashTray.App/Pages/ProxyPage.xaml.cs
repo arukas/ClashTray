@@ -13,8 +13,8 @@ public sealed partial class ProxyPage : UserControl
     private readonly DispatcherTimer _searchTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private RuntimeSnapshot? _snapshot;
     private string? _signature;
-    private bool _controllerWritable = true;
-    private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
+    private bool _controllerWritable;
+    private EndpointCapability _controllerCapabilities;
     private EndpointCommandTarget? _expectedCommandTarget;
 
     public ProxyPage(ClashTrayRuntime runtime)
@@ -33,32 +33,13 @@ public sealed partial class ProxyPage : UserControl
         Unloaded += (_, _) => _searchTimer.Stop();
     }
 
-    public void UpdateSnapshot(RuntimeSnapshot snapshot)
+    internal void UpdateSnapshot(PanelSnapshotContext context)
     {
-        UpdateSnapshot(snapshot, controllerWritable: true, EndpointCapabilityDefaults.Local);
-    }
-
-    public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
-    {
-        UpdateSnapshot(
-            snapshot,
-            controllerWritable,
-            controllerWritable ? EndpointCapabilityDefaults.Local : EndpointCapability.None);
-    }
-
-    public void UpdateSnapshot(
-        RuntimeSnapshot snapshot,
-        bool controllerWritable,
-        EndpointCapability capabilities) =>
-        UpdateSnapshot(snapshot, controllerWritable, capabilities, null);
-
-    public void UpdateSnapshot(
-        RuntimeSnapshot snapshot,
-        bool controllerWritable,
-        EndpointCapability capabilities,
-        EndpointCommandTarget? expectedCommandTarget)
-    {
-        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(context);
+        RuntimeSnapshot snapshot = context.Pages;
+        bool controllerWritable = context.ControllerWritable;
+        EndpointCapability capabilities = context.ControllerCapabilities;
+        EndpointCommandTarget expectedCommandTarget = context.CommandTarget;
         bool interactivityChanged = _controllerWritable != controllerWritable
             || _controllerCapabilities != capabilities
             || _expectedCommandTarget != expectedCommandTarget;

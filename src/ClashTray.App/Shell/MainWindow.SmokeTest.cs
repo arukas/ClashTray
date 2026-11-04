@@ -17,6 +17,25 @@ namespace ClashTray.App;
 
 public sealed partial class MainWindow
 {
+    private PanelSnapshotContext CreateLocalSmokeContext(RuntimeSnapshot snapshot) =>
+        PanelSnapshotContext.Create(RuntimeSnapshotAdapter.ToAppSnapshot(snapshot, _runtime!.Settings));
+
+    private PanelSnapshotContext CreateReadOnlySmokeContext(RuntimeSnapshot snapshot, string endpointId, long generation)
+    {
+        AppSnapshot app = RuntimeSnapshotAdapter.ToAppSnapshot(snapshot, _runtime!.Settings);
+        EndpointDescriptor remote = new(new(endpointId), EndpointKind.Remote, endpointId,
+            new Uri("https://smoke.invalid/"), EndpointTransportSecurity.HttpsSystemTrust);
+        return PanelSnapshotContext.Create(app with
+        {
+            ActiveController = app.ActiveController with
+            {
+                Endpoint = remote, Generation = generation,
+                State = EndpointSessionState.Reconnecting, Capabilities = EndpointCapability.None
+            }
+        });
+    }
+
+    private void UpdateSnapshot(RuntimeSnapshot snapshot) => RenderSnapshot(CreateLocalSmokeContext(snapshot));
     private static readonly JsonSerializerOptions DiagnosticJsonOptions = new() { WriteIndented = true };
     private bool _capturingSyntheticSmoke;
     // Explicit developer-only smoke mode. Uses synthetic data, isolated storage,
@@ -319,10 +338,7 @@ public sealed partial class MainWindow
         NavigateTo(_connectionsPage!, PanelPage.Connections);
         System.Diagnostics.Stopwatch connectionUpdate = System.Diagnostics.Stopwatch.StartNew();
         _connectionsPage!.UpdateSnapshot(
-            sample with { Connections = connections },
-            false,
-            EndpointCapability.None,
-            "smoke-controller:generation-1");
+            CreateReadOnlySmokeContext(sample with { Connections = connections }, "smoke-controller", 1));
         connectionUpdate.Stop();
         RootGrid.UpdateLayout();
         ListView connectionList = (ListView)_connectionsPage.FindName("ConnectionsListView");
@@ -386,10 +402,7 @@ public sealed partial class MainWindow
             .ToArray();
         System.Diagnostics.Stopwatch connectionGeneration = System.Diagnostics.Stopwatch.StartNew();
         _connectionsPage.UpdateSnapshot(
-            sample with { Connections = nextGenerationConnections },
-            false,
-            EndpointCapability.None,
-            "smoke-controller:generation-2");
+            CreateReadOnlySmokeContext(sample with { Connections = nextGenerationConnections }, "smoke-controller", 2));
         connectionGeneration.Stop();
         ConnectionRowViewModel regeneratedConnection = connectionList.Items
             .Cast<ConnectionRowViewModel>()
@@ -432,10 +445,7 @@ public sealed partial class MainWindow
         NavigateTo(_logsPage!, PanelPage.Logs);
         System.Diagnostics.Stopwatch logUpdate = System.Diagnostics.Stopwatch.StartNew();
         _logsPage!.UpdateSnapshot(
-            sample with { Logs = logs },
-            false,
-            EndpointCapability.None,
-            "smoke-logs:generation-1");
+            CreateReadOnlySmokeContext(sample with { Logs = logs }, "smoke-logs", 1));
         logUpdate.Stop();
         RootGrid.UpdateLayout();
         ListView logList = (ListView)_logsPage.FindName("LogsListView");
@@ -507,10 +517,7 @@ public sealed partial class MainWindow
             .ToArray();
         System.Diagnostics.Stopwatch logGeneration = System.Diagnostics.Stopwatch.StartNew();
         _logsPage.UpdateSnapshot(
-            sample with { Logs = nextGenerationLogs },
-            false,
-            EndpointCapability.None,
-            "smoke-logs:generation-2");
+            CreateReadOnlySmokeContext(sample with { Logs = nextGenerationLogs }, "smoke-logs", 2));
         logGeneration.Stop();
         LogRowViewModel regeneratedLog = logList.Items
             .Cast<LogRowViewModel>()
@@ -531,10 +538,7 @@ public sealed partial class MainWindow
             .ToArray();
         System.Diagnostics.Stopwatch logEviction = System.Diagnostics.Stopwatch.StartNew();
         _logsPage.UpdateSnapshot(
-            sample with { Logs = latestBoundedLogs },
-            false,
-            EndpointCapability.None,
-            "smoke-logs:generation-2");
+            CreateReadOnlySmokeContext(sample with { Logs = latestBoundedLogs }, "smoke-logs", 2));
         logEviction.Stop();
         if (logList.Items.Count != logCapacity
             || logList.Items.Cast<LogRowViewModel>().Min(row => row.Sequence) != logCapacity + 1
@@ -844,7 +848,7 @@ public sealed partial class MainWindow
         { throw new InvalidOperationException("A snapshot changed the focused uncommitted NumberBox text."); }
 
         await _runtime.UpdateSettingsAsync(new AppSettingsPatch(Theme: SettingPatchValue.Set("dark")));
-        page.UpdateSnapshot(_runtime.Snapshot);
+        page.UpdateSnapshot(CreateLocalSmokeContext(_runtime.Snapshot));
         if (!windows.IsOn || !core.IsOn || input.Text != pendingText
             || (theme.SelectedItem as ComboBoxItem)?.Tag?.ToString() != "dark")
         {
@@ -1084,7 +1088,7 @@ public sealed partial class MainWindow
         }
 
         state = state with { ProxyGroups = state.ProxyGroups.Select(group => group with { Current = "C" }).ToArray() };
-        proxyPage.UpdateSnapshot(state);
+        proxyPage.UpdateSnapshot(CreateLocalSmokeContext(state));
         await Task.Delay(150);
         RootGrid.UpdateLayout();
         foreach (ListView list in VisualDescendants<ListView>(proxyPage).Where(list => list.Items.Count > 0))

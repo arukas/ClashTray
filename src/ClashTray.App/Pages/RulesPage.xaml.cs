@@ -13,8 +13,8 @@ public sealed partial class RulesPage : UserControl, IDisposable
     private readonly DebouncedAction _searchDebounce;
     private IReadOnlyList<(RuleInfo Rule, string SearchText, string DisplayText)> _ruleRows = [];
     private bool _refreshing;
-    private bool _controllerWritable = true;
-    private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
+    private bool _controllerWritable;
+    private EndpointCapability _controllerCapabilities;
 
     public RulesPage(ClashTrayRuntime runtime)
     {
@@ -28,25 +28,12 @@ public sealed partial class RulesPage : UserControl, IDisposable
 
     public void Dispose() { _searchDebounce.Dispose(); GC.SuppressFinalize(this); }
 
-    public void UpdateSnapshot(RuntimeSnapshot snapshot)
+    internal void UpdateSnapshot(PanelSnapshotContext context)
     {
-        UpdateSnapshot(snapshot, controllerWritable: true, EndpointCapabilityDefaults.Local);
-    }
-
-    public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
-    {
-        UpdateSnapshot(
-            snapshot,
-            controllerWritable,
-            controllerWritable ? EndpointCapabilityDefaults.Local : EndpointCapability.None);
-    }
-
-    public void UpdateSnapshot(
-        RuntimeSnapshot snapshot,
-        bool controllerWritable,
-        EndpointCapability capabilities)
-    {
-        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(context);
+        RuntimeSnapshot snapshot = context.Pages;
+        bool controllerWritable = context.ControllerWritable;
+        EndpointCapability capabilities = context.ControllerCapabilities;
         bool interactivityChanged = _controllerWritable != controllerWritable
             || _controllerCapabilities != capabilities;
         _controllerWritable = controllerWritable;

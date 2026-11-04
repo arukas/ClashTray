@@ -15,7 +15,7 @@ public sealed partial class LogsPage : UserControl, IDisposable
     private readonly StableRowReconciler<LogRowIdentity, LogEntry, LogRowViewModel> _rows;
     private IReadOnlyList<LogEntry> _logs = [];
     private string _controllerIdentity = EndpointId.Local.Value;
-    private bool _controllerWritable = true;
+    private bool _controllerWritable;
     private readonly DebouncedAction _searchDebounce;
     private long _viewRevision;
 
@@ -33,33 +33,12 @@ public sealed partial class LogsPage : UserControl, IDisposable
 
     public void Dispose() { _searchDebounce.Dispose(); GC.SuppressFinalize(this); }
 
-    public void UpdateSnapshot(RuntimeSnapshot snapshot)
+    internal void UpdateSnapshot(PanelSnapshotContext context)
     {
-        UpdateSnapshot(snapshot, controllerWritable: true, EndpointCapabilityDefaults.Local, EndpointId.Local.Value);
-    }
-
-    public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
-    {
-        UpdateSnapshot(
-            snapshot,
-            controllerWritable,
-            controllerWritable ? EndpointCapabilityDefaults.Local : EndpointCapability.None,
-            EndpointId.Local.Value);
-    }
-
-    public void UpdateSnapshot(
-        RuntimeSnapshot snapshot,
-        bool controllerWritable,
-        EndpointCapability capabilities) =>
-        UpdateSnapshot(snapshot, controllerWritable, capabilities, EndpointId.Local.Value);
-
-    public void UpdateSnapshot(
-        RuntimeSnapshot snapshot,
-        bool controllerWritable,
-        EndpointCapability capabilities,
-        string controllerIdentity)
-    {
-        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(context);
+        RuntimeSnapshot snapshot = context.Pages;
+        bool controllerWritable = context.ControllerWritable;
+        string controllerIdentity = context.ControllerIdentity;
         ArgumentException.ThrowIfNullOrWhiteSpace(controllerIdentity);
         bool controllerChanged = !string.Equals(
             _controllerIdentity,

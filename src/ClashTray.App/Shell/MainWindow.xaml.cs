@@ -47,22 +47,18 @@ public sealed partial class MainWindow : Window
     private long _pageRefreshRevision;
     private bool _configurationSelectionInProgress;
     private PanelPage _activePage = PanelPage.Proxy;
-    private RuntimeSnapshot? _latestDisplayedSnapshot;
     private PanelSnapshotContext? _snapshotContext;
     private EndpointKind _activeEndpointKind => _snapshotContext?.Controller.Endpoint.Kind ?? EndpointKind.Local;
-    private string _activeControllerIdentity => _snapshotContext?.ControllerIdentity ?? EndpointId.Local.Value;
     private EndpointCommandTarget? _activeCommandTarget => _snapshotContext?.CommandTarget;
     private readonly Queue<(double Up, double Down)> _trafficHistory = new();
     private DateTime _lastTrafficSample;
     private EndpointSessionState _activeEndpointState => _snapshotContext?.Controller.State ?? EndpointSessionState.Disconnected;
     private DateTimeOffset? _activeControllerLastConfirmedAt => _snapshotContext?.Controller.LastConfirmedAt;
     private string _activeEndpointDisplayName => _snapshotContext?.Controller.Endpoint.DisplayName ?? EndpointId.Local.Value;
-    private EndpointCapability _activeEndpointCapabilities => _snapshotContext?.Controller.Capabilities ?? EndpointCapabilityDefaults.Local;
+    private EndpointCapability _activeEndpointCapabilities => _snapshotContext?.ControllerCapabilities ?? EndpointCapability.None;
     private ErrorCode _activeControllerErrorCode => _snapshotContext?.Controller.ErrorCode ?? ErrorCode.None;
 
-    private bool ActiveControllerWritable =>
-        _activeEndpointKind == EndpointKind.Local
-        || _activeEndpointState == EndpointSessionState.Connected;
+    private bool ActiveControllerWritable => _snapshotContext?.ControllerWritable == true;
 
     public MainWindow(App app)
     {
@@ -194,14 +190,13 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        _snapshotContext = PanelSnapshotContext.Create(snapshot);
-        UpdateSnapshot(_snapshotContext.Pages);
+        RenderSnapshot(PanelSnapshotContext.Create(snapshot));
     }
 
-    public void UpdateSnapshot(RuntimeSnapshot snapshot)
+    private void RenderSnapshot(PanelSnapshotContext context)
     {
-        ArgumentNullException.ThrowIfNull(snapshot);
-        _latestDisplayedSnapshot = snapshot;
+        _snapshotContext = context;
+        RuntimeSnapshot snapshot = context.Pages;
         ApplyTheme(_runtime?.Settings.Theme ?? "system");
         CoreStatus core = snapshot.Core;
         bool localController = _activeEndpointKind == EndpointKind.Local;
@@ -399,42 +394,18 @@ public sealed partial class MainWindow : Window
             }
         }
 
-        UpdateActivePage(snapshot, controllerWritable, _activeEndpointCapabilities);
+        UpdateActivePage(context);
     }
 
-    private void UpdateActivePage(
-        RuntimeSnapshot snapshot,
-        bool? controllerWritable = null,
-        EndpointCapability? capabilities = null)
+    private void UpdateActivePage(PanelSnapshotContext context)
     {
-        bool writable = controllerWritable ?? ActiveControllerWritable;
-        EndpointCapability activeCapabilities = capabilities ?? _activeEndpointCapabilities;
         switch (_activePage)
         {
-            case PanelPage.Proxy:
-                _proxyPage?.UpdateSnapshot(snapshot, writable, activeCapabilities, _activeCommandTarget);
-                break;
-            case PanelPage.Rules:
-                _rulesPage?.UpdateSnapshot(snapshot, writable, activeCapabilities);
-                break;
-            case PanelPage.Connections:
-                _connectionsPage?.UpdateSnapshot(
-                    snapshot,
-                    writable,
-                    activeCapabilities,
-                    _activeControllerIdentity,
-                    _activeCommandTarget);
-                break;
-            case PanelPage.Logs:
-                _logsPage?.UpdateSnapshot(
-                    snapshot,
-                    writable,
-                    activeCapabilities,
-                    _activeControllerIdentity);
-                break;
-            case PanelPage.Settings:
-                _settingsPage?.UpdateSnapshot(snapshot, writable, activeCapabilities, _activeCommandTarget);
-                break;
+            case PanelPage.Proxy: _proxyPage?.UpdateSnapshot(context); break;
+            case PanelPage.Rules: _rulesPage?.UpdateSnapshot(context); break;
+            case PanelPage.Connections: _connectionsPage?.UpdateSnapshot(context); break;
+            case PanelPage.Logs: _logsPage?.UpdateSnapshot(context); break;
+            case PanelPage.Settings: _settingsPage?.UpdateSnapshot(context); break;
         }
     }
 
@@ -826,12 +797,12 @@ public sealed partial class MainWindow : Window
         SettingsPageButton.IsChecked = target == PanelPage.Settings;
         UpdatePanelRefreshContext();
 
-        if (CanRenderPanel && _latestDisplayedSnapshot is not null)
+        if (CanRenderPanel && _snapshotContext is not null)
         {
             // Keep the currently projected endpoint when navigating. Using
             // _runtime.Snapshot here would replace a remote projection with
             // the local device snapshot until the next remote refresh.
-            UpdateActivePage(_latestDisplayedSnapshot, ActiveControllerWritable, _activeEndpointCapabilities);
+            UpdateActivePage(_snapshotContext);
         }
     }
 

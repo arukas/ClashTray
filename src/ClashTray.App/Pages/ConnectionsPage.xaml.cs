@@ -14,8 +14,8 @@ public sealed partial class ConnectionsPage : UserControl, IDisposable
     private IReadOnlyList<ConnectionInfo> _connections = [];
     private ControllerListSummary? _listSummary;
     private string _controllerIdentity = EndpointId.Local.Value;
-    private bool _controllerWritable = true;
-    private EndpointCapability _controllerCapabilities = EndpointCapabilityDefaults.Local;
+    private bool _controllerWritable;
+    private EndpointCapability _controllerCapabilities;
     private EndpointCommandTarget? _expectedCommandTarget;
     private string? _selectedConnectionId;
     private bool _synchronizingSelection;
@@ -36,41 +36,14 @@ public sealed partial class ConnectionsPage : UserControl, IDisposable
 
     public void Dispose() { _searchDebounce.Dispose(); GC.SuppressFinalize(this); }
 
-    public void UpdateSnapshot(RuntimeSnapshot snapshot)
+    internal void UpdateSnapshot(PanelSnapshotContext context)
     {
-        UpdateSnapshot(snapshot, controllerWritable: true, EndpointCapabilityDefaults.Local, EndpointId.Local.Value);
-    }
-
-    public void UpdateSnapshot(RuntimeSnapshot snapshot, bool controllerWritable)
-    {
-        UpdateSnapshot(
-            snapshot,
-            controllerWritable,
-            controllerWritable ? EndpointCapabilityDefaults.Local : EndpointCapability.None,
-            EndpointId.Local.Value);
-    }
-
-    public void UpdateSnapshot(
-        RuntimeSnapshot snapshot,
-        bool controllerWritable,
-        EndpointCapability capabilities) =>
-        UpdateSnapshot(snapshot, controllerWritable, capabilities, EndpointId.Local.Value);
-
-    public void UpdateSnapshot(
-        RuntimeSnapshot snapshot,
-        bool controllerWritable,
-        EndpointCapability capabilities,
-        string controllerIdentity) =>
-        UpdateSnapshot(snapshot, controllerWritable, capabilities, controllerIdentity, null);
-
-    public void UpdateSnapshot(
-        RuntimeSnapshot snapshot,
-        bool controllerWritable,
-        EndpointCapability capabilities,
-        string controllerIdentity,
-        EndpointCommandTarget? expectedCommandTarget)
-    {
-        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(context);
+        RuntimeSnapshot snapshot = context.Pages;
+        bool controllerWritable = context.ControllerWritable;
+        EndpointCapability capabilities = context.ControllerCapabilities;
+        EndpointCommandTarget expectedCommandTarget = context.CommandTarget;
+        string controllerIdentity = context.ControllerIdentity;
         ArgumentException.ThrowIfNullOrWhiteSpace(controllerIdentity);
         bool controllerChanged = !string.Equals(
             _controllerIdentity,
