@@ -17,72 +17,10 @@ public sealed partial class ClashTrayRuntime
         _settings = settingsLoad.Settings;
         await RecoverPendingSettingsAsync(cancellationToken, initializing: true);
         await LoadEndpointCatalogAsync(cancellationToken);
-        ConfigurationSwitchJournalLoadResult journalLoad =
-            await _configurationSwitchJournalStore.LoadAsync(cancellationToken);
-        ConfigurationSwitchJournal? recoveryJournal = journalLoad.Journal;
-        string? journalRecoveryMessage = journalLoad.Message;
-        bool journalContentRestored = true;
-        bool journalSelectionRestored = true;
-        if (recoveryJournal is { Stage: ConfigurationSwitchStage.Committed })
-        {
-            try
-            {
-                await ClearRecoveredConfigurationSwitchArtifactsAsync(recoveryJournal);
-                recoveryJournal = null;
-            }
-            catch (Exception exception)
-            {
-                journalRecoveryMessage = $"配置切换已完成，但无法清理恢复记录：{ErrorSanitizer.Sanitize(exception)}";
-                recoveryJournal = null;
-            }
-        }
-        else if (recoveryJournal is not null)
-        {
-            if (recoveryJournal.ContentBackupId is Guid backupId)
-            {
-                try
-                {
-                    journalContentRestored = await _configurationStore.RestorePersistentBackupAsync(
-                        backupId,
-                        recoveryJournal.CandidateConfigurationId,
-                        cancellationToken);
-                    if (!journalContentRestored)
-                    {
-                        journalRecoveryMessage = "配置切换恢复记录缺少旧配置备份，无法恢复订阅内容。";
-                    }
-                }
-                catch (Exception exception)
-                {
-                    journalContentRestored = false;
-                    journalRecoveryMessage = $"订阅配置备份恢复失败：{ErrorSanitizer.Sanitize(exception)}";
-                }
-            }
-
-            try
-            {
-                IReadOnlyList<ConfigurationProfile> configurationsBeforeRestore =
-                    await _configurationStore.ListAsync(cancellationToken);
-                string? restoreMessage = await RestoreConfigurationFromJournalAsync(
-                    recoveryJournal,
-                    configurationsBeforeRestore,
-                    cancellationToken);
-                if (!string.IsNullOrWhiteSpace(restoreMessage))
-                {
-                    journalRecoveryMessage = restoreMessage;
-                }
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch (Exception exception)
-            {
-                // A pending selection must not prevent observing and taking
-                // control of the existing service or restoring owned proxy state.
-                // Retain both journals and suppress automatic network enables.
-                journalSelectionRestored = false;
-                _settingsCommits.RecordFailure(exception);
-                journalRecoveryMessage = $"配置切换恢复未完成，已保留恢复记录：{ErrorSanitizer.Sanitize(exception)}";
-            }
-        }
-
+        ConfigurationStartupRecovery recovery = new(
+            _configurationStore, _configurationSwitchJournalStore, _settingsCommits,
+            new ConfigurationRecoveryCoreOperations(StartCoreAsync, StopCoreAsync, RestartCoreAsync, IsCoreHealthy));
+        ConfigurationRecoveryState recoveryState = await recovery.PrepareAsync(cancellationToken);
         IReadOnlyList<ConfigurationProfile> storedConfigurations =
             await _configurationStore.ListAsync(cancellationToken);
 
@@ -150,94 +88,19 @@ public sealed partial class ClashTrayRuntime
                     StartPolling();
                     StartOptionalRefreshInBackground(_api);
                 }
-
-                if (recoveryJournal is not null && journalSelectionRestored)
-                {
-                    (bool completed, string? message) = await CompleteConfigurationSwitchRecoveryAsync(
-                        recoveryJournal,
-                        serviceStatus.Core,
-                        journalContentRestored,
-                        cancellationToken);
-                    if (!completed)
-                    {
-                        journalRecoveryMessage = message;
-                    }
-                    else
-                    {
-                        recoveryJournal = null;
-                    }
-                }
             }
-            else if (recoveryJournal is not null && journalSelectionRestored)
-            {
-                (bool completed, string? message) = await CompleteConfigurationSwitchRecoveryAsync(
-                    recoveryJournal,
-                    serviceStatus.Core,
-                    journalContentRestored,
-                    cancellationToken);
-                if (!completed)
-                {
-                    journalRecoveryMessage = message;
-                }
-                else
-                {
-                    recoveryJournal = null;
-                }
-            }
+            recoveryState = await recovery.CompleteAsync(recoveryState, serviceStatus.Core, cancellationToken);
         }
-        catch (TimeoutException)
+        catch (Exception exception) when (exception is TimeoutException or IOException or UnauthorizedAccessException)
         {
             _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
-            if (recoveryJournal is not null)
-            {
-                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored && journalSelectionRestored)
-                {
-                    await ClearRecoveredConfigurationSwitchArtifactsAsync(recoveryJournal);
-                    recoveryJournal = null;
-                }
-                else
-                {
-                    journalRecoveryMessage = "配置切换恢复记录仍未完成，服务状态暂时无法确认。";
-                }
-            }
-        }
-        catch (IOException)
-        {
-            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
-            if (recoveryJournal is not null)
-            {
-                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored && journalSelectionRestored)
-                {
-                    await ClearRecoveredConfigurationSwitchArtifactsAsync(recoveryJournal);
-                    recoveryJournal = null;
-                }
-                else
-                {
-                    journalRecoveryMessage = "配置切换恢复记录仍未完成，服务状态暂时无法确认。";
-                }
-            }
-        }
-        catch (UnauthorizedAccessException)
-        {
-            _stateStore.Update(snapshot => snapshot with { Tun = TunState.Unavailable });
-            if (recoveryJournal is not null)
-            {
-                if (!recoveryJournal.PreviousCoreWasRunning && journalContentRestored && journalSelectionRestored)
-                {
-                    await ClearRecoveredConfigurationSwitchArtifactsAsync(recoveryJournal);
-                    recoveryJournal = null;
-                }
-                else
-                {
-                    journalRecoveryMessage = "配置切换恢复记录仍未完成，服务状态暂时无法确认。";
-                }
-            }
+            recoveryState = await recovery.DeferAsync(recoveryState);
         }
         Publish();
         _subscriptionScheduler.Start();
 
         if (localCoreRecovery.Succeeded
-            && recoveryJournal is null
+            && recoveryState.Journal is null
             && ShouldAutomaticallyStartCore(
                 _settings,
                 configurations.Any(configuration => configuration.IsActive),
@@ -263,9 +126,9 @@ public sealed partial class ClashTrayRuntime
             Publish();
         }
 
-        if (!string.IsNullOrWhiteSpace(journalRecoveryMessage))
+        if (!string.IsNullOrWhiteSpace(recoveryState.Message))
         {
-            _stateStore.Update(snapshot => snapshot with { ErrorMessage = journalRecoveryMessage });
+            _stateStore.Update(snapshot => snapshot with { ErrorMessage = recoveryState.Message });
             Publish();
         }
     }
@@ -675,61 +538,29 @@ public sealed partial class ClashTrayRuntime
         }
     }
 
-    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The start request was already dispatched; the status probe only refines the failure message and must never throw.")]
     private async Task<ServiceResponse?> ReconcileUnknownServiceStartAsync(Exception startException)
     {
-        // Once StartCore was dispatched, conservatively retain ownership even
-        // when the response was lost. This prevents a local fallback from
-        // starting a second core and guarantees shutdown will still issue the
-        // matching service StopCore request.
+        // Retain cleanup ownership before observing an already dispatched start.
         _usingServiceCore = true;
-        ServiceResponse? status = null;
-        Exception? statusException = null;
-        try
+        ServiceStartReconciliation result = await _serviceReconciler.ObserveDispatchedStartAsync(startException, _runtimeCts.Token);
+        if (result.Status is { } status)
         {
-            using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(
-                _runtimeCts.Token);
-            timeout.CancelAfter(TimeSpan.FromSeconds(5));
-            status = await _localDevice.GetStatusAsync(timeout.Token).ConfigureAwait(false);
-        }
-        catch (Exception exception)
-        {
-            statusException = exception;
-        }
-
-        if (status?.Core == CoreState.Running)
-        {
-            RuntimeBindingValidationResult validation = RuntimeBindingValidator.Validate(status.RuntimeBinding);
-            if (!validation.IsValid)
+            if (result.BindingError is { } error)
             {
-                ServiceCommandException rejection = RuntimeBindingValidator.CreateAdmissionException(validation);
-                UpdateCoreState(CoreState.Failed, rejection.Message);
+                UpdateCoreState(CoreState.Failed, error.Message);
                 StartPolling();
-                return status with
-                {
-                    Succeeded = false, Error = rejection.Message, ErrorCode = rejection.ErrorCode,
-                    DispatchState = ServiceDispatchState.DispatchedAwaitingResult
-                };
             }
-
-            SetRuntimeBinding(status.RuntimeBinding);
-            _stateStore.Update(snapshot => snapshot with
+            else
             {
-                Tun = AdoptServiceTunState(status.Tun)
-            });
-            return status with { Succeeded = true, Error = null };
+                SetRuntimeBinding(status.RuntimeBinding);
+                _stateStore.Update(snapshot => snapshot with { Tun = AdoptServiceTunState(status.Tun) });
+            }
+            return status;
         }
-
-        string statusDetail = status is null
-            ? $"状态查询失败：{ErrorSanitizer.Sanitize(statusException ?? startException)}"
-            : $"服务当前报告 {status.Core}";
-        UpdateCoreState(
-            CoreState.Failed,
-            $"ClashTray 服务启动请求已发送，但结果尚未确认（{statusDetail}）。程序将继续后台核对，并在退出时保守停止服务核心。");
+        UpdateCoreState(CoreState.Failed, result.PendingMessage);
         StartPolling();
         return null;
     }
-
     public Task StopCoreAsync(CancellationToken cancellationToken = default) =>
         AdmitCoreLifecycleAsync(
             "核心",
@@ -1253,13 +1084,13 @@ public sealed partial class ClashTrayRuntime
 
     private bool TryAdoptServiceController(ServiceResponse status, out ServiceCommandException? error)
     {
-        CoreRuntimeBinding? binding = status.RuntimeBinding;
-        RuntimeBindingValidationResult validation = RuntimeBindingValidator.Validate(binding);
-        if (binding is null || !validation.IsValid)
+        ServiceBindingAdmission admission = ServiceCoreReconciler.Admit(status);
+        CoreRuntimeBinding? binding = admission.Binding;
+        if (admission.Error is not null)
         {
             SetController(null);
             SetRuntimeBinding(null);
-            error = RuntimeBindingValidator.CreateAdmissionException(validation);
+            error = admission.Error;
             return false;
         }
 

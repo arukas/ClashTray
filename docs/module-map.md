@@ -38,6 +38,6 @@ Service 对 Core 的 friend 访问目前保留：生命周期确认和实际监�
 | 控制器、配置、TUN | MihomoApiClient、MihomoDataParser、MihomoStreamException、EndpointTransportPolicy、RuntimeConfigBuilder、MihomoTunConfiguration |
 | 准入、IPC、恢复 | BooleanSingleFlight、OperationBusyException、ServiceCommandException、ServicePipeClient、SystemProxyRecovery、ErrorSanitizer |
 
-新增跨模块使用需要在对应事务中说明所有权、期限与代际判定；上述清单是维护入口，不替代服务自己的路径、ACL、协议及允许命令校验。Runtime 仍承担服务接管、轮询与最终用例编排，这些事务跨越多个事实来源，本轮没有为压低行数继续拆分。
+新增跨模块使用需要在对应事务中说明所有权、期限与代际判定；上述清单是维护入口，不替代服务自己的路径、ACL、协议及允许命令校验。Runtime 保留操作准入、轮询与最终状态提交；`ConfigurationStartupRecovery` 管理配置恢复重放和日志保留，`ServiceCoreReconciler` 管理已派发启动的限时观察和共用绑定准入。组件不另建操作锁，生命周期副作用仍由 Runtime 的既有门禁保护。
 
 WinUI XAML 位于 Pages/Shell 后，其 XBF 也保留相对目录。EXE 发布补拷贝生成资源时递归复制 XBF/PRI 并保留相对路径。Release 排除 Shell/MainWindow.SmokeTest.cs；Debug smoke 验证实际生成组件接线。

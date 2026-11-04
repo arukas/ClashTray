@@ -35,6 +35,7 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
     private readonly SettingsCommitCoordinator _settingsCommits;
     private readonly CoreDiscovery _coreDiscovery;
     private readonly LocalDeviceCoordinator _localDevice;
+    private readonly ServiceCoreReconciler _serviceReconciler;
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "Disposed by the bounded shutdown sequence; an incomplete dispose retains the runtime.")]
     private readonly SubscriptionScheduler _subscriptionScheduler;
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "The process manager is released only after shutdown actions settle; an unresponsive shutdown intentionally retains it.")]
@@ -168,6 +169,7 @@ public sealed partial class ClashTrayRuntime : IAsyncDisposable
             resolvedServicePipeClient,
             resolvedSystemProxy);
         _coreLifecycle = new CoreLifecycleCoordinator(_localDevice, environment.Ownership);
+        _serviceReconciler = new ServiceCoreReconciler(_localDevice);
         _subscriptionScheduler = new SubscriptionScheduler(
             cancellation => _configurationStore.ListAsync(cancellation),
             (profile, cancellation) => RefreshSubscriptionAsync(profile, cancellation),
