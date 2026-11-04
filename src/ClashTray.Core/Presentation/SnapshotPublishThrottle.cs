@@ -7,30 +7,35 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
     private readonly object _gate = new();
     private readonly Action _publish;
     private readonly CancellationTokenSource _stopCts;
+    private readonly CancellationToken _stopToken;
     private readonly SemaphoreSlim _signal = new(0);
     private readonly TimeSpan _interval;
+    private readonly TimeProvider _timeProvider;
     private readonly Task _workerTask;
     private bool _pending;
     private bool _disposed;
     private TaskCompletionSource? _pendingCompletion;
     private Task? _disposeTask;
     private Exception? _fault;
-    private DateTimeOffset _lastPublished = DateTimeOffset.MinValue;
+    private long? _lastPublishedTimestamp;
 
     public SnapshotPublishThrottle(
         Action publish,
         CancellationToken cancellationToken,
-        TimeSpan? interval = null)
+        TimeSpan? interval = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(publish);
         _publish = publish;
         _interval = interval ?? DefaultInterval;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         if (_interval <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(interval));
         }
 
         _stopCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _stopToken = _stopCts.Token;
         _workerTask = RunAsync();
     }
 
@@ -72,7 +77,7 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
 
             if (_disposed || _stopCts.IsCancellationRequested)
             {
-                return Task.FromCanceled(_stopCts.Token);
+                return Task.FromCanceled(_stopToken);
             }
 
             _pendingCompletion ??= new TaskCompletionSource(
@@ -112,7 +117,7 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
             _pending = false;
         }
 
-        pendingCompletion?.TrySetCanceled(_stopCts.Token);
+        pendingCompletion?.TrySetCanceled(_stopToken);
         _signal.Release();
         try
         {
@@ -135,7 +140,7 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
         {
             while (true)
             {
-                await _signal.WaitAsync(_stopCts.Token).ConfigureAwait(false);
+                await _signal.WaitAsync(_stopToken).ConfigureAwait(false);
                 while (true)
                 {
                     TimeSpan delay;
@@ -147,12 +152,14 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
                             break;
                         }
 
-                        DateTimeOffset now = DateTimeOffset.UtcNow;
-                        delay = _lastPublished + _interval - now;
+                        long now = _timeProvider.GetTimestamp();
+                        delay = _lastPublishedTimestamp is long previous
+                            ? _interval - _timeProvider.GetElapsedTime(previous, now)
+                            : TimeSpan.Zero;
                         if (delay <= TimeSpan.Zero)
                         {
                             _pending = false;
-                            _lastPublished = now;
+                            _lastPublishedTimestamp = now;
                             completion = _pendingCompletion;
                             _pendingCompletion = null;
                         }
@@ -160,7 +167,7 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
 
                     if (delay > TimeSpan.Zero)
                     {
-                        await Task.Delay(delay, _stopCts.Token).ConfigureAwait(false);
+                        await Task.Delay(delay, _timeProvider, _stopToken).ConfigureAwait(false);
                         continue;
                     }
 
@@ -212,6 +219,6 @@ internal sealed class SnapshotPublishThrottle : IAsyncDisposable
             _pending = false;
         }
 
-        pendingCompletion?.TrySetCanceled(_stopCts.Token);
+        pendingCompletion?.TrySetCanceled(_stopToken);
     }
 }

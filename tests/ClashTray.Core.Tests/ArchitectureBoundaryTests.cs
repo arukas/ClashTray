@@ -1,7 +1,9 @@
 using System.Reflection;
+using System.Text.Json;
 using System.Xml.Linq;
 using ClashTray.App;
 using ClashTray.Contracts;
+using ClashTray.Testing;
 
 namespace ClashTray.Core.Tests;
 
@@ -43,12 +45,63 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [TestMethod]
-    public void ProductionRuntimeContainsNoOwnedFixtureObserverOrImplicitCompatibilityConstructor()
+    public void ProductionAssemblyContainsNoOwnedFixtureObserver()
     {
         Assembly core = typeof(ClashTrayRuntime).Assembly;
         Assert.IsNull(core.GetType("ClashTray.Core.FixtureCoreOwnershipObservationSource"));
-        ConstructorInfo composition = typeof(ClashTrayRuntime).GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic).Single();
-        Assert.AreEqual(typeof(RuntimeEnvironmentDependencies), composition.GetParameters()[0].ParameterType);
+    }
+
+    [TestMethod]
+    [DataRow("production")]
+    [DataRow("isolated-fixture-tests")]
+    public async Task RelocatingStorageNeverTurnsReportedPortsOrForgedProcessesIntoOwnership(string directoryName)
+    {
+        string root = TestFixtureDirectory.Create();
+        await TestFixtureDirectory.RunAsync(root, () =>
+        {
+            AppPaths paths = new(Path.Combine(root, directoryName, "user"), Path.Combine(root, directoryName, "service"));
+            RuntimeEnvironmentDependencies[] environments =
+                [RuntimeEnvironmentDependencies.Production(paths), RuntimeEnvironmentDependencies.Isolated(paths)];
+            CoreRuntimeBinding advertised = RuntimeTestHelpers.CreateRuntimeBinding(new());
+            using JsonDocument actual = JsonDocument.Parse("{\"port\":18101,\"socks-port\":18102,\"mixed-port\":18103}");
+            LocalCoreProcessIdentity forged = new(int.MaxValue, 1, paths.ManagedCoreExecutable);
+            foreach (RuntimeEnvironmentDependencies environment in environments)
+            {
+                MihomoListenerPorts parsed = environment.Ownership.ReadControllerPorts(actual, advertised);
+                Assert.AreEqual(18101, parsed.Http);
+                Assert.AreEqual(18102, parsed.Socks);
+                Assert.AreEqual(18103, parsed.Mixed);
+                Assert.IsFalse(environment.Ownership.IsProcessCurrent(forged));
+            }
+            return Task.CompletedTask;
+        });
+    }
+
+    [TestMethod]
+    public async Task ExplicitIsolationCannotReachTheServiceOrChangeWindowsStartupAndProxyState()
+    {
+        string root = TestFixtureDirectory.Create();
+        await TestFixtureDirectory.RunAsync(root, async () =>
+        {
+            AppPaths paths = new(Path.Combine(root, "user"), Path.Combine(root, "service"));
+            RuntimeEnvironmentDependencies isolated = RuntimeEnvironmentDependencies.Isolated(paths);
+            WindowsSystemProxyRegistry registry = WindowsSystemProxyRegistry.ForCurrentUser();
+            ProxyRegistryState originalProxy = registry.ReadCurrentState();
+            StartupManager windowsStartup = new();
+            StartupRegistrationStatus originalStartup = windowsStartup.GetStatus();
+            await Assert.ThrowsExactlyAsync<ServiceUnavailableException>(() => isolated.Service.SendAsync(ServiceCommand.GetStatus));
+            StartupRegistrationChange change = isolated.Startup.Ensure(true, Environment.ProcessPath);
+            Assert.IsTrue(isolated.Startup.GetStatus().IsEnabled);
+            isolated.Startup.Rollback(change);
+            Assert.IsFalse(isolated.Startup.GetStatus().IsRegistered);
+            await isolated.SystemProxy.EnableAsync(51999, "<local>");
+            Assert.AreEqual(SystemProxyState.On, isolated.SystemProxy.DetectState());
+            await isolated.SystemProxy.DisableAsync();
+            Assert.AreEqual(SystemProxyState.Off, isolated.SystemProxy.DetectState());
+            Assert.AreEqual(originalProxy, registry.ReadCurrentState());
+            Assert.AreEqual(originalStartup, windowsStartup.GetStatus());
+            Assert.IsFalse(File.Exists(paths.ProxyBackupFile));
+        });
     }
 
     private static string RepositoryRoot

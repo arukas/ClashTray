@@ -27,7 +27,7 @@ flowchart LR
 | Service | Hosting / Dispatch / Updates / Tun | 服务/管道、请求台账与统一串行化、核心更新事务、TUN 事务 |
 | Contracts | Models / Snapshots / Service | 稳定状态/数据、展示快照、协议 3 与 IPC 载荷 |
 
-`ArchitectureBoundaryTests` 验证项目引用方向、Core/Contracts/Presentation 不引用 App/Service/WinUI，以及生产不包含 Owned fixture 观察源或隐式路径兼容构造。`ServiceArchitectureTests` 禁止服务引用 App/Presentation 和桌面订阅、设置编辑、端点目录等用例。
+`ArchitectureBoundaryTests` 验证项目引用方向、Core/Contracts/Presentation 不引用 App/Service/WinUI，以及生产不包含 Owned fixture 观察源。行为回归验证不同存储路径仍解析真实控制器端口并拒绝伪造进程身份，显式隔离环境不能访问正式服务、修改 Windows 代理或启动项；不限制合法构造函数的数量。`ServiceArchitectureTests` 禁止服务引用 App/Presentation 和桌面订阅、设置编辑、端点目录等用例。
 
 Service 对 Core 的 friend 访问目前保留：生命周期确认和实际监听策略使用内部类型，共享它们无需公开整个基础设施 API。下面是当前服务源码引用的 Core 类型清单（Contracts 不计入）：
 
@@ -45,3 +45,5 @@ WinUI XAML 位于 Pages/Shell 后，其 XBF 也保留相对目录。EXE 发布�
 五个主页面只接收由一次 AppSnapshot 生成的 PanelSnapshotContext；页面数据、可写状态、能力、身份和命令代际来自同一观察。SettingsPage 保留普通设置草稿与本机网络开关，Pages/Settings 中的 EndpointSettingsSection、ProviderSettingsSection、CoreUpdateSettingsSection、NetworkRuleSettingsSection 分别拥有自己的控件与编辑状态。各组件复用父页面的命令 runner 和页面代际，离开页面仍抑制迟到的提示；端点与 Provider 使用类型化行模型和 XAML DataTemplate。网络规则入口继续隐藏。
 
 ServiceCoreLifecycle 拥有服务子进程、控制器 API、运行绑定、进程身份和启动失败清理，返回不含 IPC 标识的 ServiceCoreStartResult。ServiceRuntimeController 保留协议/载荷反序列化、请求台账、门禁、TUN 状态与关闭确认，再将结果映射到协议 3 响应。启动和重启仍检查受管路径/参数；TUN 恢复重启通过同一个生命周期组件停止并清理会话，不新增操作锁。释放时只有已确认 TUN 安全才停止进程，传输资源始终清理。
+
+SnapshotPublishThrottle 的发布间隔和延时均使用可注入 TimeProvider 的单调时间，UTC 只用于日志/业务时间。节流回归使用手动时钟推进，验证突发合并、系统时间前拨/回拨、取消、故障和释放后请求，不依赖实际睡眠长度。
