@@ -406,7 +406,7 @@ public sealed partial class MainWindow : Window
     }
 
     private bool HasActiveEndpointCapability(EndpointCapability capability) =>
-        (_activeEndpointCapabilities & capability) == capability;
+        EndpointCapabilityPolicy.Allows(ActiveControllerWritable, _activeEndpointCapabilities, capability);
 
     public void ShowError(string message)
     {

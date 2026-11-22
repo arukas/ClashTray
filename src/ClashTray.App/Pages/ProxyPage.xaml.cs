@@ -395,7 +395,7 @@ public sealed partial class ProxyPage : UserControl
                 refresh.IsEnabled = false;
                 try { await _runtime.RefreshProviderAsync(provider.Name, false, expectedTarget: _expectedCommandTarget); }
                 catch (Exception exception) { DelayText.Text = ErrorSanitizer.Sanitize(exception); }
-                finally { refresh.IsEnabled = _controllerWritable; }
+                finally { refresh.IsEnabled = HasCapability(EndpointCapability.RefreshProvider); }
             };
             Grid.SetColumn(refresh, 1);
             row.Children.Add(refresh);
@@ -410,7 +410,7 @@ public sealed partial class ProxyPage : UserControl
     private Style SecondaryTextStyle => (Style)Resources["ProxySecondaryText"];
 
     private bool HasCapability(EndpointCapability capability) =>
-        _controllerWritable && (_controllerCapabilities & capability) == capability;
+        EndpointCapabilityPolicy.Allows(_controllerWritable, _controllerCapabilities, capability);
 
     private string GetActionTooltip(
         string resourceKey,

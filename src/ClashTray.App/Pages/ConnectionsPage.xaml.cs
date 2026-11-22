@@ -219,7 +219,7 @@ public sealed partial class ConnectionsPage : UserControl, IDisposable
     }
 
     private bool HasCapability(EndpointCapability capability) =>
-        _controllerWritable && (_controllerCapabilities & capability) == capability;
+        EndpointCapabilityPolicy.Allows(_controllerWritable, _controllerCapabilities, capability);
 }
 
 internal readonly record struct ConnectionRowIdentity(string ControllerIdentity, string ConnectionId);

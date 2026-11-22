@@ -131,10 +131,10 @@ public sealed partial class RulesPage : UserControl, IDisposable
             + (_listSummary?.IsTruncated == true ? LocalizationService.Get("ControllerListTruncated") : string.Empty);
     }
 
-    private bool CanRefreshRules =>
-        _controllerWritable
-        && (_controllerCapabilities & (EndpointCapability.ObserveRules | EndpointCapability.ObserveProviders))
-            == (EndpointCapability.ObserveRules | EndpointCapability.ObserveProviders);
+    private bool CanRefreshRules => EndpointCapabilityPolicy.Allows(
+        _controllerWritable,
+        _controllerCapabilities,
+        EndpointCapability.ObserveRules | EndpointCapability.ObserveProviders);
 
     private string? GetRefreshTooltip()
     {
