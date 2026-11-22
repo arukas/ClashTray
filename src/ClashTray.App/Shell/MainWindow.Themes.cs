@@ -12,6 +12,7 @@ namespace ClashTray.App;
 public sealed partial class MainWindow
 {
     private readonly LogoUnlockSequence _logoUnlock = new();
+    private readonly ThemeApplicationState _themeApplicationState = new();
     private readonly UISettings _themeUiSettings = new();
     private readonly AccessibilitySettings _accessibilitySettings = new();
     private string _themeName = "system";
@@ -46,10 +47,12 @@ public sealed partial class MainWindow
 
     private void ApplyTheme(string theme)
     {
-        string normalizedTheme = theme.Trim().ToLowerInvariant();
-        if (normalizedTheme == "nakhimov" && _runtime?.Settings.NakhimovUnlocked != true)
+        string? normalizedTheme = _themeApplicationState.GetThemeToApply(
+            theme,
+            _runtime?.Settings.NakhimovUnlocked == true);
+        if (normalizedTheme is null)
         {
-            normalizedTheme = "system";
+            return;
         }
 
         _themeName = normalizedTheme;
