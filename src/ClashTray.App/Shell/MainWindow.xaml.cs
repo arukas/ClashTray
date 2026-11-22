@@ -294,9 +294,14 @@ public sealed partial class MainWindow : Window
                     ? LocalizationService.Get("AutomationOpenDashboard")
                     : LocalizationService.Get("AutomationOpenOrCopyController"));
         ConnectionCountText.Text = core.ConnectionCount.ToString(CultureInfo.InvariantCulture);
-        TrafficText.Text = core.TrafficAvailable
-            ? $"↑ {FormatRate(core.UploadBytesPerSecond)}  ↓ {FormatRate(core.DownloadBytesPerSecond)}"
-            : LocalizationService.Get("TrafficUnavailable");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(
+            TrafficGraph,
+            core.TrafficAvailable
+                ? LocalizationService.Format(
+                    "TrafficGraphSummaryFormat",
+                    FormatRate(core.UploadBytesPerSecond),
+                    FormatRate(core.DownloadBytesPerSecond))
+                : LocalizationService.Get("TrafficUnavailable"));
         MemoryText.Text = core.MemoryAvailable ? FormatBytes(core.MemoryBytes) : LocalizationService.Get("MemoryUnavailable");
         ConfigurationText.Text = core.ConfigurationName ?? snapshot.Configurations.FirstOrDefault(c => c.IsActive)?.Name ?? LocalizationService.Get("ConfigImportPrompt");
         ErrorBanner.Message = FormatDisplayedError(

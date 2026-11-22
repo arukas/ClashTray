@@ -68,24 +68,45 @@
             <ToggleButton x:Name="LogsPageButton" x:Uid="LogsPageButton" Grid.Column="3" Style="{StaticResource ClashTrayNavButtonStyle}" Click="LogsPageButton_Click"/>
             <ToggleButton x:Name="SettingsPageButton" x:Uid="SettingsPageButton" Grid.Column="4" Style="{StaticResource ClashTrayNavButtonStyle}" Click="SettingsPageButton_Click"/>
         </Grid>
-        <Border Grid.Row="3" Style="{StaticResource ClashTrayCardStyle}" Padding="12,8" Margin="0,0,0,8"><StackPanel Spacing="4">
-            <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE71B;" FontSize="13" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><TextBlock x:Name="ConnectionCountText" Text="0"/><TextBlock x:Uid="ConnectionsUnitText" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE74A;" FontSize="12" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><TextBlock x:Name="UploadText" Text="0 B/s" FontWeight="SemiBold" FontSize="13"/><FontIcon Glyph="&#xE74B;" FontSize="12" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/><TextBlock x:Name="DownloadText" Text="0 B/s" FontWeight="SemiBold" FontSize="13"/></StackPanel>
-            </Grid>
-            <Grid x:Name="TrafficGraph" Height="18" SizeChanged="TrafficGraph_SizeChanged" x:Uid="TrafficGraph">
-                <Border BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" VerticalAlignment="Bottom"/>
-                <Polyline x:Name="UploadLine" Stroke="{ThemeResource AccentTextFillColorSecondaryBrush}" StrokeThickness="1.5"/>
-                <Polyline x:Name="DownloadLine" Stroke="{ThemeResource AccentTextFillColorPrimaryBrush}" StrokeThickness="1.8"/>
-            </Grid>
-            <Grid>
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                <StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE950;" FontSize="13"/><TextBlock x:Name="MemoryText" Text="0 KB" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/></StackPanel>
-                <TextBlock Grid.Column="1" x:Name="TotalTrafficText" Text="0 KB" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            </Grid>
-            <TextBlock x:Name="TrafficText" Visibility="Collapsed"/>
-        </StackPanel></Border>
+        <Border Grid.Row="3" Style="{StaticResource ClashTrayCardStyle}" Padding="10,6" Margin="0,0,0,8">
+            <StackPanel Spacing="4">
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <FontIcon Glyph="&#xE71B;" FontSize="13" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                        <TextBlock x:Name="ConnectionCountText" Text="0"/>
+                        <TextBlock x:Uid="ConnectionsUnitText" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+                        <FontIcon Glyph="&#xE74A;" FontSize="12" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                        <TextBlock x:Name="UploadText" Text="0 B/s" Width="72" TextAlignment="Right" FontWeight="SemiBold" FontSize="13"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+                        <FontIcon Glyph="&#xE74B;" FontSize="12" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                        <TextBlock x:Name="DownloadText" Text="0 B/s" Width="78" TextAlignment="Right" FontWeight="SemiBold" FontSize="13"/>
+                    </StackPanel>
+                </Grid>
+                <Grid x:Name="TrafficGraph" Height="18" SizeChanged="TrafficGraph_SizeChanged" x:Uid="TrafficGraph"
+                      AutomationProperties.LiveSetting="Off">
+                    <Border BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}" BorderThickness="0,0,0,1" VerticalAlignment="Bottom"/>
+                    <Polyline x:Name="UploadLine" Stroke="{ThemeResource AccentTextFillColorSecondaryBrush}" StrokeThickness="1.5"/>
+                    <Polyline x:Name="DownloadLine" Stroke="{ThemeResource AccentTextFillColorPrimaryBrush}" StrokeThickness="1.8"/>
+                </Grid>
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE950;" FontSize="13"/>
+                        <TextBlock x:Name="MemoryText" Text="0 KB" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="1" x:Name="TotalTrafficText" Text="0 KB" TextAlignment="Right" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </Grid>
+            </StackPanel>
+        </Border>
         <Grid Grid.Row="4">
             <ScrollViewer x:Name="DashboardScrollViewer" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
                 <StackPanel Spacing="10" Padding="0,0,10,10">

@@ -274,6 +274,7 @@ Start the core to see proxy groups and nodes here.</value></data>
   <data name="AutomationOpenDashboard" xml:space="preserve"><value>Open MetaCubeXD</value></data>
   <data name="AutomationOpenOrCopyController" xml:space="preserve"><value>Open or copy the local controller address</value></data>
   <data name="TrafficUnavailable" xml:space="preserve"><value>↑ unavailable  ↓ unavailable</value></data>
+  <data name="TrafficGraphSummaryFormat" xml:space="preserve"><value>Current upload {0}; download {1}</value></data>
   <data name="MemoryUnavailable" xml:space="preserve"><value>Unavailable</value></data>
   <data name="TotalTrafficFormat" xml:space="preserve"><value>Total ↑ {0}  ↓ {1}</value></data>
   <data name="TotalTrafficUnavailable" xml:space="preserve"><value>Total traffic unavailable</value></data>

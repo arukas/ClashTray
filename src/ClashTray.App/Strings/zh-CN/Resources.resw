@@ -274,6 +274,7 @@
   <data name="AutomationOpenDashboard" xml:space="preserve"><value>打开 MetaCubeXD</value></data>
   <data name="AutomationOpenOrCopyController" xml:space="preserve"><value>打开或复制本机控制器地址</value></data>
   <data name="TrafficUnavailable" xml:space="preserve"><value>↑ 暂不可用  ↓ 暂不可用</value></data>
+  <data name="TrafficGraphSummaryFormat" xml:space="preserve"><value>当前上传 {0}，下载 {1}</value></data>
   <data name="MemoryUnavailable" xml:space="preserve"><value>暂不可用</value></data>
   <data name="TotalTrafficFormat" xml:space="preserve"><value>累计 ↑ {0}  ↓ {1}</value></data>
   <data name="TotalTrafficUnavailable" xml:space="preserve"><value>累计流量暂不可用</value></data>
