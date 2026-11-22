@@ -257,11 +257,12 @@ public sealed partial class MainWindow : Window
                     or EndpointSessionState.Failed => Colors.Red,
                 _ => Colors.Gray
             });
-        string appVersion = typeof(MainWindow)
-            .Assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion
-            ?? "0.0.0-dev";
+        string appVersion = PanelDisplayFormatting.NormalizeInformationalVersion(
+            typeof(MainWindow)
+                .Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                .InformationalVersion
+                ?? "0.0.0-dev");
         CoreVersionText.Text = string.IsNullOrWhiteSpace(core.Version)
             ? LocalizationService.Format("CoreVersionIdleFormat", appVersion)
             : LocalizationService.Format("CoreVersionRunningFormat", core.Version, appVersion);

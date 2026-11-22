@@ -38,6 +38,12 @@ internal static class PanelDisplayFormatting
         _ => null
     };
 
+    public static string NormalizeInformationalVersion(string version)
+    {
+        int metadataIndex = version.IndexOf('+', StringComparison.Ordinal);
+        return metadataIndex < 0 ? version : version[..metadataIndex];
+    }
+
     public static string FormatRate(double bytesPerSecond)
     {
         double value = bytesPerSecond;
