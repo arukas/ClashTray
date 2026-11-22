@@ -52,7 +52,7 @@
                           ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                     <ListView.ItemTemplate>
                         <DataTemplate>
-                            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding DisplayText}" TextWrapping="Wrap" />
                         </DataTemplate>
                     </ListView.ItemTemplate>
                 </ListView>
