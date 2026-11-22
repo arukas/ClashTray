@@ -7,9 +7,9 @@
             </Grid.ColumnDefinitions>
             <FontIcon Glyph="" FontSize="20" Foreground="{ThemeResource AccentFillColorDefaultBrush}" VerticalAlignment="Center" />
             <StackPanel Grid.Column="1" Margin="10,0,0,0" Spacing="1">
-                <TextBlock x:Uid="SettingsTitle" FontSize="20" FontWeight="SemiBold" />
-                <TextBlock x:Uid="SettingsSubtitle" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" />
-                <TextBlock x:Uid="SettingsSaveHint" Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" />
+                <TextBlock x:Uid="SettingsTitle" Style="{StaticResource ClashTrayPageTitleStyle}" />
+                <TextBlock x:Uid="SettingsSubtitle" Style="{StaticResource ClashTrayPageSubtitleStyle}" />
+                <TextBlock x:Uid="SettingsSaveHint" Style="{StaticResource ClashTrayPageSubtitleStyle}" />
             </StackPanel>
         </Grid>
         <Border Style="{StaticResource ClashTrayCardStyle}">
