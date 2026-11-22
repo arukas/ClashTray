@@ -12,7 +12,6 @@ public sealed partial class ProxyPage : UserControl
     private readonly HashSet<string> _testingGroups = new(StringComparer.Ordinal);
     private readonly DispatcherTimer _searchTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private RuntimeSnapshot? _snapshot;
-    private string? _signature;
     private bool _controllerWritable;
     private EndpointCapability _controllerCapabilities;
     private EndpointCommandTarget? _expectedCommandTarget;
@@ -46,10 +45,7 @@ public sealed partial class ProxyPage : UserControl
         _controllerWritable = controllerWritable;
         _controllerCapabilities = capabilities;
         _expectedCommandTarget = expectedCommandTarget;
-        bool proxyDataUnchanged = _snapshot is not null
-            && ReferenceEquals(_snapshot.ProxyGroups, snapshot.ProxyGroups)
-            && ReferenceEquals(_snapshot.ProxyNodes, snapshot.ProxyNodes)
-            && ReferenceEquals(_snapshot.Providers, snapshot.Providers);
+        bool proxyDataUnchanged = ProxyPanelDataComparer.Equals(_snapshot, snapshot);
         _snapshot = snapshot;
         // Traffic updates should not recreate controls or disturb keyboard focus.
         EmptyTitle.Text = snapshot.Core.State == CoreState.Running
@@ -60,13 +56,6 @@ public sealed partial class ProxyPage : UserControl
             return;
         }
 
-        string signature = System.Text.Json.JsonSerializer.Serialize(new { snapshot.ProxyGroups, snapshot.ProxyNodes, snapshot.Providers });
-        if (_signature == signature && !interactivityChanged)
-        {
-            return;
-        }
-
-        _signature = signature;
         _expanded.IntersectWith(snapshot.ProxyGroups.Select(group => group.Name));
         RenderGroups(snapshot);
         RenderProviders(snapshot);
