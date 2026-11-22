@@ -16,7 +16,7 @@
             </StackPanel>
             <TextBox Grid.Column="1" x:Name="NodeSearchBox" x:Uid="NodeSearchBox" TextChanged="NodeSearchBox_TextChanged" FontSize="12" MinHeight="32"/>
         </Grid>
-        <StackPanel x:Name="GroupsPanel" Spacing="8"/>
+        <StackPanel x:Name="GroupsPanel" Spacing="6"/>
         <StackPanel x:Name="ProviderSection" Visibility="Collapsed">
             <Button Style="{StaticResource ClashTrayRowButtonStyle}" MinHeight="34" Padding="6,4" Click="ToggleProviders_Click">
                 <Grid>

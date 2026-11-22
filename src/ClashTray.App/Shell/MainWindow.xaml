@@ -8,7 +8,7 @@
         </Grid.RowDefinitions>
         <Grid Margin="0,0,0,8" ColumnSpacing="10">
             <Grid.ColumnDefinitions><ColumnDefinition Width="40"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <Button x:Name="LogoButton" x:Uid="LogoButton" CornerRadius="10" Background="{ThemeResource ControlFillColorSecondaryBrush}"
+            <Button x:Name="LogoButton" x:Uid="LogoButton" CornerRadius="8" Background="{ThemeResource ControlFillColorSecondaryBrush}"
                     Width="40" Height="40" Padding="0" BorderThickness="0" Click="LogoButton_Click"
                     ToolTipService.ToolTip="ClashTray">
                 <Image x:Name="ThemeLogo" Source="ms-appx:///Assets/Themes/Light/logo.png" Width="40" Height="40" Stretch="Uniform"/>

@@ -37,19 +37,21 @@
                 <Setter Property="Background" Value="{ThemeResource ClashTraySurfaceBrush}"/>
                 <Setter Property="BorderBrush" Value="{ThemeResource ClashTrayStrokeBrush}"/>
                 <Setter Property="BorderThickness" Value="1"/>
-                <Setter Property="CornerRadius" Value="10"/>
+                <Setter Property="CornerRadius" Value="8"/>
             </Style>
             <Style x:Key="ClashTrayCardStyle" TargetType="Border">
-                <Setter Property="Background" Value="{ThemeResource ClashTraySurfaceBrush}" />
-                <Setter Property="CornerRadius" Value="12" />
-                <Setter Property="Padding" Value="12" /><Setter Property="BorderBrush" Value="{ThemeResource ClashTrayStrokeBrush}"/><Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Background" Value="{ThemeResource ClashTraySurfaceBrush}"/>
+                <Setter Property="BorderBrush" Value="{ThemeResource ClashTrayStrokeBrush}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="CornerRadius" Value="8"/>
+                <Setter Property="Padding" Value="10"/>
             </Style>
 
             <Style x:Key="ClashTrayIconButtonStyle" TargetType="Button">
                 <Setter Property="Width" Value="34" />
                 <Setter Property="Height" Value="34" />
                 <Setter Property="Padding" Value="0" />
-                <Setter Property="CornerRadius" Value="9" />
+                <Setter Property="CornerRadius" Value="8" />
                 <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -66,7 +68,7 @@
                 <Setter Property="MinHeight" Value="36" />
                 <Setter Property="HorizontalAlignment" Value="Stretch" />
                 <Setter Property="Padding" Value="8,6" />
-                <Setter Property="CornerRadius" Value="10" />
+                <Setter Property="CornerRadius" Value="8" />
                 <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -80,7 +82,7 @@
                 <Setter Property="FontSize" Value="13" />
                 <Setter Property="FontWeight" Value="SemiBold" />
                 <Setter Property="Padding" Value="4,2" />
-                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="CornerRadius" Value="6" />
                 <Setter Property="BorderThickness" Value="0" />
                 <Setter Property="Background" Value="Transparent" />
                 <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
