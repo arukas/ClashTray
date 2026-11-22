@@ -300,6 +300,8 @@
   <!-- Dialogs -->
   <data name="DialogAddSubscriptionTitle" xml:space="preserve"><value>添加订阅</value></data>
   <data name="DialogSubscriptionUrlLabel" xml:space="preserve"><value>订阅地址</value></data>
+  <data name="DialogSubscriptionUrlPlaceholder" xml:space="preserve"><value>https://example.com/mihomo.yaml</value></data>
+  <data name="DialogSubscriptionUrlInvalid" xml:space="preserve"><value>请输入有效的 HTTP 或 HTTPS 订阅地址。</value></data>
   <data name="DialogOptionalNamePlaceholder" xml:space="preserve"><value>可选名称</value></data>
   <data name="DialogAdd" xml:space="preserve"><value>添加</value></data>
   <data name="DialogCancel" xml:space="preserve"><value>取消</value></data>

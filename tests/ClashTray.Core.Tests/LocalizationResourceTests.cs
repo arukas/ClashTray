@@ -86,6 +86,7 @@ public sealed class LocalizationResourceTests
             "DialogCancel", "MenuQuit", "TrayTooltipStopped", "MenuEnableSystemProxy", "MenuDisableTun",
             "LanguageRestartPrompt", "ConfigImportPrompt", "DelayTimeout", "DelayNotTested", "CurrentLabel",
             "QuitButton.Content", "SystemProxySwitch.AutomationProperties.Name", "LanguageBox.Header", "TrafficGraphSummaryFormat",
+            "DialogSubscriptionUrlPlaceholder", "DialogSubscriptionUrlInvalid",
             "ControllerPortOneTimeStartSucceeded", "ControllerPortOneTimeStartAlreadyRunning",
             "ControllerPortOneTimeStartBusy", "ControllerPortOneTimeStartCoreMissing",
             "ControllerPortOneTimeStartConfigurationMissing", "ControllerPortOneTimeStartInvalidConfiguration",

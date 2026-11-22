@@ -300,6 +300,8 @@ Reason: the configuration does not contain a usable interface address.</value></
   <!-- Dialogs -->
   <data name="DialogAddSubscriptionTitle" xml:space="preserve"><value>Add subscription</value></data>
   <data name="DialogSubscriptionUrlLabel" xml:space="preserve"><value>Subscription URL</value></data>
+  <data name="DialogSubscriptionUrlPlaceholder" xml:space="preserve"><value>https://example.com/mihomo.yaml</value></data>
+  <data name="DialogSubscriptionUrlInvalid" xml:space="preserve"><value>Enter a valid HTTP or HTTPS subscription URL.</value></data>
   <data name="DialogOptionalNamePlaceholder" xml:space="preserve"><value>Optional name</value></data>
   <data name="DialogAdd" xml:space="preserve"><value>Add</value></data>
   <data name="DialogCancel" xml:space="preserve"><value>Cancel</value></data>

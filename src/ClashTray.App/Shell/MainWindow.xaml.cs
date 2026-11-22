@@ -456,9 +456,29 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            TextBox urlBox = new TextBox { PlaceholderText = "https://example.com/mihomo.yaml", MinWidth = 320 };
+            TextBox urlBox = new TextBox
+            {
+                PlaceholderText = LocalizationService.Get("DialogSubscriptionUrlPlaceholder"),
+                MinWidth = 320
+            };
+            InfoBar validation = new InfoBar
+            {
+                Severity = InfoBarSeverity.Error,
+                IsClosable = false,
+                IsOpen = false,
+                Margin = new Thickness(0, 4, 0, 0)
+            };
             TextBox nameBox = new TextBox { PlaceholderText = LocalizationService.Get("DialogOptionalNamePlaceholder"), Margin = new Thickness(0, 8, 0, 0) };
-            StackPanel content = new StackPanel { Children = { new TextBlock { Text = LocalizationService.Get("DialogSubscriptionUrlLabel") }, urlBox, nameBox } };
+            StackPanel content = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock { Text = LocalizationService.Get("DialogSubscriptionUrlLabel") },
+                    urlBox,
+                    validation,
+                    nameBox
+                }
+            };
             ContentDialog dialog = new ContentDialog
             {
                 Title = LocalizationService.Get("DialogAddSubscriptionTitle"),
@@ -467,10 +487,20 @@ public sealed partial class MainWindow : Window
                 CloseButtonText = LocalizationService.Get("DialogCancel"),
                 XamlRoot = RootGrid.XamlRoot
             };
-            if (await dialog.ShowAsync() != ContentDialogResult.Primary
-                || !Uri.TryCreate(urlBox.Text.Trim(), UriKind.Absolute, out Uri? uri)
-                || uri is null
-                || uri.Scheme is not ("http" or "https"))
+            dialog.PrimaryButtonClick += (_, args) =>
+            {
+                if (SubscriptionImportInput.TryParseUri(urlBox.Text, out Uri? parsed))
+                {
+                    dialog.Tag = parsed;
+                    validation.IsOpen = false;
+                    return;
+                }
+
+                validation.Message = LocalizationService.Get("DialogSubscriptionUrlInvalid");
+                validation.IsOpen = true;
+                args.Cancel = true;
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary || dialog.Tag is not Uri uri)
             {
                 return;
             }
