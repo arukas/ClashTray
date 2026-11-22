@@ -1,33 +1,34 @@
 # Compact Windows flyout visual checkpoint
 
-final result: passed
+final result: passed with verification limits
 
-Scope: visual review of the revised native WinUI main panel. This is not a claim of complete product, installer, live proxy or Explorer interaction acceptance.
+Scope: visual and code review of the refined native WinUI main panel. This is not a claim of complete product, installer, live proxy or Explorer interaction acceptance.
 
-- Source visual truth: C:/Users/Zen/AppData/Local/Temp/codex-clipboard-e60601f6-0a7c-43df-b96f-c8a654a59728.png (ClashBar); user-supplied current app and Bluetooth screenshots establish layout defects and anchoring intent.
-- Implementation screenshots: D:/ClashTray/artifacts/ui-v5/nodes-dark.png, nodes-light.png, empty-dark.png, empty-light.png.
+- Last visually inspected implementation screenshots: D:/ClashTray/artifacts/continuous-refinement/task5-ui-20daa418184f472aac6864d22344d69c/nodes-dark.png, nodes-light.png, empty-dark.png, empty-light.png, page-Settings.png and page-Connections.png in the same directory.
 - Viewport: 420 x 680 effective pixels at 100%, PNGs 420 x 680.
-- Reference was displayed at 420 pixels wide with its original aspect ratio; reference includes black surrounding canvas and is taller. These are intentional native Windows size/content differences, not pixel-identical cloning.
-- State: empty/stopped and synthetic populated/running examples. Different provider/group counts and traffic values intentionally demonstrate layout; no subscription quotas or node data are fabricated in production.
-- Full-view comparison: normalized reference plus both latest theme screenshots displayed in the same comparison input. Header, modes, text tabs, metrics, config, independent capture switches, provider and group list ordering agree.
-- Focused comparison: at 420-pixel width, text, switches, current-node labels and delays are directly readable in the full captures; no extra crop needed.
+- Those captures cover the source through `abde716` (compact visual tokens). Later changes through `b0b64f4` were verified by compilation and non-interactive tests only; they are not presented as fresh visual acceptance.
+- Interactive UI smoke was paused at the user's request to avoid displaying or focusing application windows. No replacement visual claim is made for shared page styles, the revised metrics layout or the Rules binding change.
+- State: empty/stopped and synthetic populated/running examples. Provider/group counts and traffic values are diagnostic samples only; no subscription quotas or node data are fabricated in production.
+- Final non-interactive verification: Release and Debug solution builds both completed with zero warnings/errors; Integration 68/68 and Core 861/861 passed with no skips. Evidence: D:/ClashTray/artifacts/continuous-refinement/final-suite-verify-fa62ab7ebe2047a2990a09decb3000d9.
 
 ## Iteration history
 
-1. v3: dark secondary node text was too dark; default expanders consumed most node area. P1/P2.
-2. v4: secondary text moved to XAML ThemeResource style; group cards replaced by borderless rows; top/quick controls shortened. Two-line groups still showed too few rows. P2.
-3. v5: single-line group name/current node/delay/expand/test arrangement. Four sample groups fit above the footer. Both themes re-rendered and reviewed; no remaining P0/P1/P2 visual findings in this scope.
+1. v3: dark secondary node text was too dark; default expanders consumed most node area.
+2. v4: secondary text moved to XAML ThemeResource style; group cards became borderless rows; top/quick controls were shortened.
+3. v5: single-line group arrangement and both theme captures established the previous accepted visual checkpoint.
+4. Current refinement: concise footer versions, session-scoped traffic history, semantic theme status indicators, centralized shell navigation, 8px card radii and tighter spacing, shared page/list styles, stable metric columns with accessible summaries, structural Proxy comparison and stable typed Rules rows.
 
 ## Required surfaces
 
-- Typography: Segoe/Windows fallback and native Fluent icons, 22px app title, 14-15px controls/group names, 12px secondary values. Long labels ellipsize.
-- Spacing: continuous background, no stack of oversized cards, consistent gutters, right-aligned independent switches and footer. Configuration actions are in a flyout.
-- Colors: theme resources follow light/dark/system and accent; corrected dark secondary contrast. High-contrast OS rendering still needs manual verification.
-- Assets: original ClashTray icon retained, no copied ClashBar mascot/brand. Traffic graph is rendered from bounded real production metrics.
-- Copy: Chinese Windows terminology and explicit System Proxy/TUN labels; placeholders are confined to diagnostic samples.
+- Typography: Segoe/Windows fallback and native Fluent icons, 20px page titles, 13-14px controls/group names and 12px secondary values. Long labels ellipsize or wrap within the compact panel.
+- Spacing: continuous background, 8px card radii, 10px standard card padding and 6px proxy-group spacing. Configuration actions remain in a flyout; System Proxy and TUN remain independent.
+- Colors: canvas/surface/stroke resources follow light/dark/system and accent. Core and endpoint indicators use semantic system success/caution/critical/neutral brushes with text state retained. High-contrast OS rendering still needs manual verification.
+- Assets: original ClashTray icon retained, no copied ClashBar mascot/brand. Traffic uses 60 bounded real samples with monotonic sampling and resets on unavailable data or controller-generation changes.
+- Copy: Chinese Windows terminology and explicit System Proxy/TUN labels remain. The traffic accessibility summary has matching zh-CN and en-US resources.
 
 ## Remaining verification
 
-- Native window geometry and in-process visibility/dismissal passed; DWM corners/shadows not present in RenderTargetBitmap captures.
-- Actual Explorer click delivery, real mixed-DPI monitor transitions, config flyout focus and live proxy actions remain to be exercised.
-- User accepted this checkpoint and requested commit; installer generation deferred.
+- Actual Explorer click delivery, real mixed-DPI monitor transitions, config flyout focus, physical input and live proxy actions remain to be exercised.
+- OS high contrast, physical screen readers and the final Rules ordinary-Binding rendering still require interactive verification. No UI process was launched for these scenarios after the user's restriction.
+- Native window geometry and in-process visibility/dismissal passed in the earlier smoke captures; DWM corners/shadows are not present in RenderTargetBitmap captures.
+- Installer generation, clean install, upgrade, uninstall and real network-state acceptance were not part of this refinement.
