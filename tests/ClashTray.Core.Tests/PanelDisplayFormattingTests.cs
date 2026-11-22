@@ -1,4 +1,5 @@
 using ClashTray.App;
+using ClashTray.Contracts;
 
 namespace ClashTray.Core.Tests;
 
@@ -13,6 +14,36 @@ public sealed class PanelDisplayFormattingTests
     public void ApplicationVersionOmitsSourceRevision(string version, string expected)
     {
         Assert.AreEqual(expected, PanelDisplayFormatting.NormalizeInformationalVersion(version));
+    }
+
+    [TestMethod]
+    [DataRow(CoreState.Missing, "Neutral")]
+    [DataRow(CoreState.Stopped, "Neutral")]
+    [DataRow(CoreState.Validating, "Pending")]
+    [DataRow(CoreState.Starting, "Pending")]
+    [DataRow(CoreState.Running, "Running")]
+    [DataRow(CoreState.Stopping, "Pending")]
+    [DataRow(CoreState.Restarting, "Pending")]
+    [DataRow(CoreState.Failed, "Failed")]
+    [DataRow((CoreState)999, "Neutral")]
+    public void CoreStatesMapToSemanticTones(CoreState state, string expected)
+    {
+        Assert.AreEqual(Enum.Parse<PanelStatusTone>(expected), PanelStatusPresentation.CoreTone(state));
+    }
+
+    [TestMethod]
+    [DataRow(EndpointSessionState.Disconnected, "Neutral")]
+    [DataRow(EndpointSessionState.Connecting, "Pending")]
+    [DataRow(EndpointSessionState.Connected, "Running")]
+    [DataRow(EndpointSessionState.Reconnecting, "Pending")]
+    [DataRow(EndpointSessionState.AuthenticationFailed, "Failed")]
+    [DataRow(EndpointSessionState.CertificateFailed, "Failed")]
+    [DataRow(EndpointSessionState.Incompatible, "Failed")]
+    [DataRow(EndpointSessionState.Failed, "Failed")]
+    [DataRow((EndpointSessionState)999, "Neutral")]
+    public void EndpointStatesMapToSemanticTones(EndpointSessionState state, string expected)
+    {
+        Assert.AreEqual(Enum.Parse<PanelStatusTone>(expected), PanelStatusPresentation.EndpointTone(state));
     }
 
     [TestMethod]

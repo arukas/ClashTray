@@ -18,7 +18,12 @@
             <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
                 <TextBlock Text="ClashTray" FontSize="20" FontWeight="SemiBold"/>
                 <StackPanel Orientation="Horizontal" Spacing="6">
-                    <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="Gray" VerticalAlignment="Center"/>
+                    <Grid Width="7" Height="7" VerticalAlignment="Center">
+                        <Ellipse x:Name="StatusNeutral" Width="7" Height="7" Fill="{ThemeResource TextFillColorTertiaryBrush}"/>
+                        <Ellipse x:Name="StatusRunning" Width="7" Height="7" Fill="{ThemeResource SystemFillColorSuccessBrush}" Visibility="Collapsed"/>
+                        <Ellipse x:Name="StatusPending" Width="7" Height="7" Fill="{ThemeResource SystemFillColorCautionBrush}" Visibility="Collapsed"/>
+                        <Ellipse x:Name="StatusFailed" Width="7" Height="7" Fill="{ThemeResource SystemFillColorCriticalBrush}" Visibility="Collapsed"/>
+                    </Grid>
                     <TextBlock x:Name="CoreStateText" x:Uid="CoreStateText" FontSize="12"/>
                     <Button x:Name="ControllerEndpointButton" x:Uid="ControllerEndpointButton" FontSize="12" Padding="0" BorderThickness="0" Background="Transparent" Click="ControllerEndpointButton_Click" IsEnabled="False"/>
                 </StackPanel>

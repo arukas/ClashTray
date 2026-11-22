@@ -239,24 +239,9 @@ public sealed partial class MainWindow : Window
                 : core.State == CoreState.Running
                     ? LocalizationService.Get("ToolTipRestartCore")
                     : LocalizationService.Get("ToolTipStartCore"));
-        StatusDot.Fill = new SolidColorBrush(localController
-            ? core.State switch
-            {
-                CoreState.Running => Colors.Green,
-                CoreState.Failed => Colors.Red,
-                CoreState.Starting or CoreState.Stopping or CoreState.Restarting or CoreState.Validating => Colors.Orange,
-                _ => Colors.Gray
-            }
-            : _activeEndpointState switch
-            {
-                EndpointSessionState.Connected => Colors.Green,
-                EndpointSessionState.Connecting or EndpointSessionState.Reconnecting => Colors.Orange,
-                EndpointSessionState.AuthenticationFailed
-                    or EndpointSessionState.CertificateFailed
-                    or EndpointSessionState.Incompatible
-                    or EndpointSessionState.Failed => Colors.Red,
-                _ => Colors.Gray
-            });
+        ApplyStatusTone(localController
+            ? PanelStatusPresentation.CoreTone(core.State)
+            : PanelStatusPresentation.EndpointTone(_activeEndpointState));
         string appVersion = PanelDisplayFormatting.NormalizeInformationalVersion(
             typeof(MainWindow)
                 .Assembly
@@ -942,6 +927,14 @@ public sealed partial class MainWindow : Window
             HidePanel();
             e.Handled = true;
         }
+    }
+
+    private void ApplyStatusTone(PanelStatusTone tone)
+    {
+        StatusNeutral.Visibility = tone == PanelStatusTone.Neutral ? Visibility.Visible : Visibility.Collapsed;
+        StatusRunning.Visibility = tone == PanelStatusTone.Running ? Visibility.Visible : Visibility.Collapsed;
+        StatusPending.Visibility = tone == PanelStatusTone.Pending ? Visibility.Visible : Visibility.Collapsed;
+        StatusFailed.Visibility = tone == PanelStatusTone.Failed ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private static string FormatCoreState(CoreState state) =>

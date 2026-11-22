@@ -152,6 +152,7 @@ public sealed partial class MainWindow
             }
         }
         await VerifyTrafficHistoryLifecycleAsync(directory, sample, empty);
+        await VerifyStatusIndicatorsAsync(directory, sample);
         await VerifyNodeScrollingAsync(directory, sample);
         await VerifyProxyDelayDisplayAsync(directory, sample);
         await VerifyRemoteFreshnessPresentationAsync(directory, sample);
@@ -211,6 +212,58 @@ public sealed partial class MainWindow
         }
         NavigateTo(_proxyPage, PanelPage.Proxy);
     }
+
+    private async Task VerifyStatusIndicatorsAsync(string directory, RuntimeSnapshot sample)
+    {
+        (CoreState State, string Indicator)[] localCases =
+        [
+            (CoreState.Running, "StatusRunning"),
+            (CoreState.Failed, "StatusFailed"),
+            (CoreState.Starting, "StatusPending"),
+            (CoreState.Stopped, "StatusNeutral")
+        ];
+        Dictionary<string, string> checks = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach ((CoreState state, string expected) in localCases)
+        {
+            UpdateSnapshot(sample with { Core = sample.Core with { State = state } });
+            string actual = CurrentStatusIndicator ?? "<none>";
+            checks[$"Local{state}"] = actual;
+            if (actual != expected || CoreStateText.Text != FormatCoreState(state))
+            {
+                throw new InvalidOperationException($"Core status {state} did not show {expected}.");
+            }
+        }
+
+        AppSnapshot app = RuntimeSnapshotAdapter.ToAppSnapshot(sample, _runtime!.Settings);
+        EndpointDescriptor remote = new EndpointDescriptor(
+            new EndpointId("status-remote"),
+            EndpointKind.Remote,
+            "status-remote",
+            new Uri("https://smoke.invalid/"),
+            EndpointTransportSecurity.HttpsSystemTrust);
+        UpdateAppSnapshot(app with
+        {
+            ActiveController = app.ActiveController with
+            {
+                Endpoint = remote,
+                Generation = app.ActiveController.Generation + 1,
+                State = EndpointSessionState.AuthenticationFailed,
+                Capabilities = EndpointCapability.None
+            }
+        });
+        string remoteState = CurrentStatusIndicator ?? "<none>";
+        checks["RemoteAuthenticationFailed"] = remoteState;
+        await File.WriteAllTextAsync(Path.Combine(directory, "status-indicator-checks.json"), JsonSerializer.Serialize(checks, DiagnosticJsonOptions));
+        if (remoteState != "StatusFailed"
+            || CoreStateText.Text != LocalizationService.Get("ControllerStateAuthenticationFailed"))
+        {
+            throw new InvalidOperationException("Remote authentication failure did not show StatusFailed.");
+        }
+    }
+
+    private string CurrentStatusIndicator =>
+        new FrameworkElement[] { StatusNeutral, StatusRunning, StatusPending, StatusFailed }
+            .FirstOrDefault(indicator => indicator.Visibility == Visibility.Visible)?.Name ?? "<none>";
 
     private async Task VerifyTrafficHistoryLifecycleAsync(string directory, RuntimeSnapshot sample, RuntimeSnapshot empty)
     {
