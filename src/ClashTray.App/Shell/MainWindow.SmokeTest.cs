@@ -124,10 +124,15 @@ public sealed partial class MainWindow
                 ApplyTheme(theme);
                 if (populated)
                 {
-                    _trafficHistory.Clear();
+                    SmokeTrafficClock trafficClock = new SmokeTrafficClock();
+                    _trafficHistory = new TrafficSampleBuffer(trafficClock);
                     for (int i = 0; i < 60; i++)
                     {
-                        _trafficHistory.Enqueue((2000 + 1000 * Math.Sin(i / 3d), 80000 + 60000 * Math.Sin(i / 4d)));
+                        if (!_trafficHistory.TryAdd(2000 + 1000 * Math.Sin(i / 3d), 80000 + 60000 * Math.Sin(i / 4d)))
+                        {
+                            throw new InvalidOperationException("Synthetic traffic sample was not accepted.");
+                        }
+                        trafficClock.Advance();
                     }
 
                     DrawTraffic();
@@ -146,6 +151,7 @@ public sealed partial class MainWindow
                 await encoder.FlushAsync();
             }
         }
+        await VerifyTrafficHistoryLifecycleAsync(directory, sample, empty);
         await VerifyNodeScrollingAsync(directory, sample);
         await VerifyProxyDelayDisplayAsync(directory, sample);
         await VerifyRemoteFreshnessPresentationAsync(directory, sample);
@@ -205,6 +211,52 @@ public sealed partial class MainWindow
         }
         NavigateTo(_proxyPage, PanelPage.Proxy);
     }
+
+    private async Task VerifyTrafficHistoryLifecycleAsync(string directory, RuntimeSnapshot sample, RuntimeSnapshot empty)
+    {
+        UpdateSnapshot(sample);
+        UpdateSnapshot(empty);
+        RootGrid.UpdateLayout();
+        bool unavailableCleared = _trafficHistory.Count == 0
+            && IsFlat(UploadLine.Points)
+            && IsFlat(DownloadLine.Points);
+
+        UpdateSnapshot(sample);
+        bool resumedImmediately = _trafficHistory.Count == 1
+            && _trafficHistory.Samples[0].UploadBytesPerSecond == sample.Core.UploadBytesPerSecond;
+
+        RuntimeSnapshot changed = sample with
+        {
+            Core = sample.Core with { UploadBytesPerSecond = 4096 }
+        };
+        AppSnapshot changedApp = RuntimeSnapshotAdapter.ToAppSnapshot(changed, _runtime!.Settings);
+        UpdateAppSnapshot(changedApp with
+        {
+            ActiveController = changedApp.ActiveController with
+            {
+                Generation = changedApp.ActiveController.Generation + 1
+            }
+        });
+        bool generationReset = _trafficHistory.Count == 1
+            && _trafficHistory.Samples[0].UploadBytesPerSecond == 4096;
+
+        await File.WriteAllTextAsync(Path.Combine(directory, "traffic-history-checks.json"), JsonSerializer.Serialize(new
+        {
+            UnavailableCleared = unavailableCleared,
+            ResumedImmediately = resumedImmediately,
+            GenerationReset = generationReset,
+            SampleCount = _trafficHistory.Count,
+            NetworkStateChanged = false,
+            TunTouched = false
+        }, DiagnosticJsonOptions));
+        if (!unavailableCleared || !resumedImmediately || !generationReset)
+        {
+            throw new InvalidOperationException("Traffic history did not reset and resume with its controller session.");
+        }
+    }
+
+    private static bool IsFlat(PointCollection points) =>
+        points.Count > 0 && points.All(point => point.Y == points[0].Y);
 
     private async Task VerifyNodeScrollingAsync(string directory, RuntimeSnapshot sample)
     {
@@ -1327,6 +1379,15 @@ public sealed partial class MainWindow
         encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
             (uint)renderer.PixelWidth, (uint)renderer.PixelHeight, 96, 96, pixels.ToArray());
         await encoder.FlushAsync();
+    }
+
+    private sealed class SmokeTrafficClock : TimeProvider
+    {
+        private long _timestamp;
+
+        public override long GetTimestamp() => _timestamp;
+
+        public void Advance() => _timestamp += TimeSpan.TicksPerSecond;
     }
 
     private static IEnumerable<T> VisualDescendants<T>(DependencyObject root) where T : DependencyObject

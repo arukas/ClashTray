@@ -50,8 +50,8 @@ public sealed partial class MainWindow : Window
     private PanelSnapshotContext? _snapshotContext;
     private EndpointKind _activeEndpointKind => _snapshotContext?.Controller.Endpoint.Kind ?? EndpointKind.Local;
     private EndpointCommandTarget? _activeCommandTarget => _snapshotContext?.CommandTarget;
-    private readonly Queue<(double Up, double Down)> _trafficHistory = new();
-    private DateTime _lastTrafficSample;
+    private TrafficSampleBuffer _trafficHistory = new();
+    private string? _trafficControllerIdentity;
     private EndpointSessionState _activeEndpointState => _snapshotContext?.Controller.State ?? EndpointSessionState.Disconnected;
     private DateTimeOffset? _activeControllerLastConfirmedAt => _snapshotContext?.Controller.LastConfirmedAt;
     private string _activeEndpointDisplayName => _snapshotContext?.Controller.Endpoint.DisplayName ?? EndpointId.Local.Value;
@@ -323,15 +323,24 @@ public sealed partial class MainWindow : Window
         TotalTrafficText.Text = core.TrafficAvailable
             ? LocalizationService.Format("TotalTrafficFormat", FormatBytes(core.UploadBytes), FormatBytes(core.DownloadBytes))
             : LocalizationService.Get("TotalTrafficUnavailable");
-        if (core.TrafficAvailable && DateTime.UtcNow - _lastTrafficSample >= TimeSpan.FromSeconds(1))
+        string trafficControllerIdentity = context.ControllerIdentity;
+        if (!string.Equals(_trafficControllerIdentity, trafficControllerIdentity, StringComparison.Ordinal))
         {
-            _lastTrafficSample = DateTime.UtcNow;
-            _trafficHistory.Enqueue((core.UploadBytesPerSecond, core.DownloadBytesPerSecond));
-            while (_trafficHistory.Count > 60)
-            {
-                _trafficHistory.Dequeue();
-            }
+            _trafficControllerIdentity = trafficControllerIdentity;
+            _trafficHistory.Reset();
+            DrawTraffic();
+        }
 
+        if (!core.TrafficAvailable)
+        {
+            if (_trafficHistory.Count > 0)
+            {
+                _trafficHistory.Reset();
+                DrawTraffic();
+            }
+        }
+        else if (_trafficHistory.TryAdd(core.UploadBytesPerSecond, core.DownloadBytesPerSecond))
+        {
             DrawTraffic();
         }
 
@@ -906,19 +915,21 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        (double Up, double Down)[] samples = _trafficHistory.ToArray();
+        IReadOnlyList<TrafficSample> samples = _trafficHistory.Samples;
         double width = Math.Max(1, TrafficGraph.ActualWidth);
-        double peak = samples.Length == 0 ? 1 : Math.Max(1, samples.Max(s => Math.Max(s.Up, s.Down)));
+        double peak = samples.Count == 0
+            ? 1
+            : Math.Max(1, samples.Max(sample => Math.Max(sample.UploadBytesPerSecond, sample.DownloadBytesPerSecond)));
         PointCollection upload = new PointCollection();
         PointCollection download = new PointCollection();
-        for (int i = 0; i < 60; i++)
+        for (int i = 0; i < TrafficSampleBuffer.Capacity; i++)
         {
-            int index = i - (60 - samples.Length);
-            (double Up, double Down) sample = index < 0 ? (Up: 0d, Down: 0d) : samples[index];
-            double x = i * width / 59;
+            int index = i - (TrafficSampleBuffer.Capacity - samples.Count);
+            TrafficSample sample = index < 0 ? default : samples[index];
+            double x = i * width / (TrafficSampleBuffer.Capacity - 1);
             double height = Math.Max(3, TrafficGraph.ActualHeight) - 2;
-            upload.Add(new Windows.Foundation.Point(x, height - (height - 2) * Math.Max(0, sample.Up) / peak));
-            download.Add(new Windows.Foundation.Point(x, height - (height - 2) * Math.Max(0, sample.Down) / peak));
+            upload.Add(new Windows.Foundation.Point(x, height - (height - 2) * Math.Max(0, sample.UploadBytesPerSecond) / peak));
+            download.Add(new Windows.Foundation.Point(x, height - (height - 2) * Math.Max(0, sample.DownloadBytesPerSecond) / peak));
         }
         UploadLine.Points = upload;
         DownloadLine.Points = download;
