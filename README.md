@@ -6,7 +6,7 @@
 
 当前发布目标仅为 Windows x64；不提供 x86、ARM64、macOS 或 Linux 版本。
 
-当前正式版本为 **0.3.9**，见 [发布说明](docs/releases/0.3.9.md)。本次完成六项代码设计优化，修复状态快照的重入及并发发布顺序，拆分启动恢复、控制器上下文、设置页面和服务生命周期职责，并使用单调时钟限制快照更新。
+当前预发布版本为 **0.3.10-alpha.1**，见 [发布说明](docs/releases/0.3.10.md)。本轮统一紧凑 Fluent 视觉和页面样式，改进流量历史、状态指示、订阅验证、主题应用、Proxy 比较和 Rules 稳定行模型，并完成真实 WinUI 合成场景截图验证。
 
 [![CI](https://github.com/arukas/ClashTray/actions/workflows/ci.yml/badge.svg)](https://github.com/arukas/ClashTray/actions/workflows/ci.yml) [![Release](https://github.com/arukas/ClashTray/actions/workflows/release.yml/badge.svg)](https://github.com/arukas/ClashTray/actions/workflows/release.yml)
 
@@ -76,10 +76,10 @@ dotnet test ClashTray.sln --configuration Debug --property:Platform=x64 --no-bui
 
 ```powershell
 # 默认 Full：包含经过校验的 Mihomo 核心
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.9 -Variant Full
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.10-alpha.1 -Variant Full
 
 # 旧版 Windows 10 兼容包：自包含、包含核心、关闭 CET
-.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.9 -Variant NoCET
+.\packaging\Build-EXE.ps1 -Configuration Release -PackageVersion 0.3.10-alpha.1 -Variant NoCET
 ```
 
 从 [文档索引](docs/README.md) 可直接找到 [开发环境](docs/setup.md)、[模块边界](docs/module-map.md)、[测试环境](docs/test-environment.md) 与 [发布流程](docs/release.md)。旧的 `Build-MSIX.ps1` 和 `packaging/ClashTray.Package` 保留作实验性 / 历史打包材料；当前发布路径是 Inno Setup LZMA2 solid 压缩的 EXE 安装器。
