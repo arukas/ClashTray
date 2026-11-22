@@ -44,9 +44,9 @@
                         </Flyout>
                     </Button.Flyout>
                 </Button>
-                <Button x:Name="PinButton" x:Uid="PinButton" Style="{StaticResource ClashTrayIconButtonStyle}" Click="PinButton_Click"><FontIcon Glyph="&#xE718;" FontSize="16"/></Button>
+                <Button x:Name="PinButton" x:Uid="PinButton" Style="{StaticResource ClashTrayIconButtonStyle}" Click="PinButton_Click"><FontIcon x:Name="PinButtonIcon" Glyph="&#xE718;" FontSize="16"/></Button>
                 <Button x:Uid="ReloadConfigurationButton" Style="{StaticResource ClashTrayIconButtonStyle}" Click="RefreshConfigurationButton_Click"><FontIcon Glyph="&#xE8F7;" FontSize="16"/></Button>
-                <Button x:Name="CoreActionButton" x:Uid="CoreActionButton" Style="{StaticResource ClashTrayAccentIconButtonStyle}" Click="CoreActionButton_Click"><FontIcon Glyph="&#xE768;" FontSize="16"/></Button>
+                <Button x:Name="CoreActionButton" x:Uid="CoreActionButton" Style="{StaticResource ClashTrayAccentIconButtonStyle}" Click="CoreActionButton_Click"><FontIcon x:Name="CoreActionButtonIcon" Glyph="&#xE768;" FontSize="16"/></Button>
             </StackPanel>
         </Grid>
         <Border Grid.Row="1" Style="{StaticResource ClashTrayGroupCardStyle}" Padding="3" Margin="0,2,0,8">

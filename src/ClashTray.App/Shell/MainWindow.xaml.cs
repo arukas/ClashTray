@@ -227,11 +227,7 @@ public sealed partial class MainWindow : Window
         CoreStateText.Text = localController
             ? FormatCoreState(core.State)
             : FormatEndpointState(_activeEndpointState);
-        CoreActionButton.Content = new FontIcon
-        {
-            Glyph = core.State == CoreState.Running ? "\uF305" : "\uE768",
-            FontSize = 16
-        };
+        CoreActionButtonIcon.Glyph = core.State == CoreState.Running ? "\uF305" : "\uE768";
         ToolTipService.SetToolTip(
             CoreActionButton,
             !localController
@@ -559,11 +555,7 @@ public sealed partial class MainWindow : Window
     private void PinButton_Click(object sender, RoutedEventArgs e)
     {
         _isPinned = !_isPinned;
-        PinButton.Content = new FontIcon
-        {
-            Glyph = "\uE718",
-            FontSize = 16
-        };
+        PinButtonIcon.Glyph = "\uE718";
         ToolTipService.SetToolTip(PinButton, _isPinned ? LocalizationService.Get("ToolTipUnpinWindow") : LocalizationService.Get("ToolTipPinWindow"));
         ApplyWindowMode();
         if (!_isPinned)
