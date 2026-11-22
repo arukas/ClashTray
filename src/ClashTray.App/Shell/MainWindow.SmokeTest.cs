@@ -12,6 +12,7 @@ using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Streams;
 using ClashTray.Core;
+using ClashTray.Presentation;
 
 namespace ClashTray.App;
 
@@ -156,6 +157,8 @@ public sealed partial class MainWindow
         await VerifyNodeScrollingAsync(directory, sample);
         await VerifyProxyDelayDisplayAsync(directory, sample);
         await VerifyRemoteFreshnessPresentationAsync(directory, sample);
+        await VerifyRulesInteractionsAsync(directory, sample);
+        await VerifySubscriptionValidationAsync(directory);
         await VerifyConnectionsAndLogsInteractionsAsync(directory, sample);
         await VerifyNetworkSwitchErrorPresentationAsync(directory);
         await VerifySsidFeatureScopeAsync(directory);
@@ -431,6 +434,170 @@ public sealed partial class MainWindow
             InputLimits = "Wheel, touch and physical keyboard require manual verification."
         }, DiagnosticJsonOptions));
         DashboardScrollViewer.ChangeView(null, 0, null, true);
+    }
+
+    private async Task VerifyRulesInteractionsAsync(string directory, RuntimeSnapshot sample)
+    {
+        RuleInfo[] rules =
+        [
+            new("DOMAIN", "duplicate.test", "DIRECT", 0),
+            new("DOMAIN", "duplicate.test", "DIRECT", 0),
+            new("DOMAIN", "needle.example.test", "Proxy", 1),
+            new("IP-CIDR", "203.0.113.0/24", "DIRECT", 2)
+        ];
+        RuntimeSnapshot populated = sample with
+        {
+            Rules = rules,
+            RulesSummary = new ControllerListSummary(rules.Length, false)
+        };
+        UpdateSnapshot(populated);
+        NavigateTo(PanelPage.Rules);
+        await Task.Delay(100);
+        RootGrid.UpdateLayout();
+
+        ListView list = (ListView)_rulesPage!.FindName("RulesListView");
+        TextBox search = (TextBox)_rulesPage.FindName("SearchBox");
+        ComboBox filter = (ComboBox)_rulesPage.FindName("FilterBox");
+        if (list.Items.Count != rules.Length
+            || list.Items.Cast<RuleRowViewModel>().Count(row => row.Rule.Payload == "duplicate.test") != 2)
+        {
+            throw new InvalidOperationException("Rules did not preserve duplicate source entries.");
+        }
+
+        RuleRowViewModel first = (RuleRowViewModel)list.Items[0];
+        await WaitForSmokeConditionAsync(
+            () => VisualDescendants<TextBlock>(list).Any(text => text.Text.Contains("duplicate.test", StringComparison.Ordinal)),
+            "rule text rendering");
+        // Capture after the ListView entrance transition has settled.
+        await Task.Delay(1000);
+        RootGrid.UpdateLayout();
+        await SaveDiagnosticFrameAsync(directory, "rules-populated");
+        TextBlock rendered = VisualDescendants<TextBlock>(list).First(text => text.Text.Contains("duplicate.test", StringComparison.Ordinal));
+        ListViewItem? container = list.ContainerFromIndex(0) as ListViewItem;
+        await File.WriteAllTextAsync(Path.Combine(directory, "rules-render-diagnostics.json"), JsonSerializer.Serialize(new
+        {
+            rendered.Text,
+            TextWidth = rendered.ActualWidth,
+            TextHeight = rendered.ActualHeight,
+            TextOpacity = rendered.Opacity,
+            TextVisibility = rendered.Visibility.ToString(),
+            TextForeground = (rendered.Foreground as SolidColorBrush)?.Color.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ContainerWidth = container?.ActualWidth,
+            ContainerHeight = container?.ActualHeight,
+            ContainerOpacity = container?.Opacity,
+            ContainerVisibility = container?.Visibility.ToString(),
+            ListWidth = list.ActualWidth,
+            ListHeight = list.ActualHeight,
+            ListOpacity = list.Opacity,
+            ListVisibility = list.Visibility.ToString()
+        }, DiagnosticJsonOptions));
+
+        search.Text = "needle";
+        await WaitForSmokeConditionAsync(() => list.Items.Count == 1, "rule search");
+        if (((RuleRowViewModel)list.Items[0]).Rule.Payload != "needle.example.test")
+        {
+            throw new InvalidOperationException("Rule search returned the wrong row.");
+        }
+
+        search.Text = string.Empty;
+        await WaitForSmokeConditionAsync(() => list.Items.Count == rules.Length, "clearing rule search");
+        if (!ReferenceEquals(first, list.Items[0]))
+        {
+            throw new InvalidOperationException("Rule filtering discarded a stable row instance.");
+        }
+
+        filter.SelectedIndex = 1;
+        if (list.Items.Count != 3)
+        {
+            throw new InvalidOperationException("Domain rule filtering was incorrect.");
+        }
+
+        filter.SelectedIndex = 2;
+        if (list.Items.Count != 1 || ((RuleRowViewModel)list.Items[0]).Rule.Type != "IP-CIDR")
+        {
+            throw new InvalidOperationException("IP rule filtering was incorrect.");
+        }
+
+        filter.SelectedIndex = 0;
+        RuleInfo[] refreshed = rules.Select(rule => rule with { }).ToArray();
+        _rulesPage.UpdateSnapshot(CreateLocalSmokeContext(populated with { Rules = refreshed }));
+        if (list.Items.Count != rules.Length || !ReferenceEquals(first, list.Items[0]))
+        {
+            throw new InvalidOperationException("Equivalent rule data recreated a stable row.");
+        }
+
+        _rulesPage.UpdateSnapshot(CreateReadOnlySmokeContext(populated, "smoke-rules", 1));
+        RuleRowViewModel previousGeneration = (RuleRowViewModel)list.Items[0];
+        _rulesPage.UpdateSnapshot(CreateReadOnlySmokeContext(populated, "smoke-rules", 2));
+        if (ReferenceEquals(previousGeneration, list.Items[0]))
+        {
+            throw new InvalidOperationException("Rule rows leaked across controller generations.");
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(directory, "rules-checks.json"), JsonSerializer.Serialize(new
+        {
+            DuplicateRowsPreserved = true,
+            TypedTemplateRendered = true,
+            SearchAndTypeFilters = true,
+            StableRowsRetained = true,
+            EquivalentDataRetained = true,
+            GenerationSwitchRecreatedRows = true,
+            NetworkStateChanged = false,
+            TunTouched = false
+        }, DiagnosticJsonOptions));
+        NavigateTo(PanelPage.Proxy);
+    }
+
+    private async Task VerifySubscriptionValidationAsync(string directory)
+    {
+        int configurationCount = _runtime!.Snapshot.Configurations.Count;
+        Task importTask = ImportSubscriptionAsync();
+        await WaitForSmokeConditionAsync(() => FindSubscriptionDialog() is not null, "subscription dialog");
+        ContentDialog dialog = FindSubscriptionDialog()!;
+        TextBox urlBox = VisualDescendants<TextBox>(dialog).First();
+        InfoBar validation = VisualDescendants<InfoBar>(dialog).Single();
+        urlBox.Text = "not-a-valid-subscription-url";
+        Button addButton = VisualDescendants<Button>(dialog).Single(button =>
+            Equals(button.Content, LocalizationService.Get("DialogAdd")));
+        IInvokeProvider addInvoker = (IInvokeProvider)new ButtonAutomationPeer(addButton).GetPattern(PatternInterface.Invoke);
+        addInvoker.Invoke();
+        await WaitForSmokeConditionAsync(() => validation.IsOpen, "subscription validation error");
+
+        bool remainedOpen = FindSubscriptionDialog() is not null && !importTask.IsCompleted;
+        bool correctMessage = validation.Message == LocalizationService.Get("DialogSubscriptionUrlInvalid");
+        await Task.Delay(500);
+        await SaveDiagnosticFrameAsync(directory, "subscription-invalid", dialog);
+        if (!remainedOpen || !correctMessage)
+        {
+            throw new InvalidOperationException("Invalid subscription input did not keep the dialog open with localized guidance.");
+        }
+
+        Button cancelButton = VisualDescendants<Button>(dialog).Single(button =>
+            Equals(button.Content, LocalizationService.Get("DialogCancel")));
+        IInvokeProvider cancelInvoker = (IInvokeProvider)new ButtonAutomationPeer(cancelButton).GetPattern(PatternInterface.Invoke);
+        cancelInvoker.Invoke();
+        await importTask;
+        bool importNotStarted = _runtime.Snapshot.Configurations.Count == configurationCount;
+        if (!importNotStarted)
+        {
+            throw new InvalidOperationException("Invalid subscription input started an import unexpectedly.");
+        }
+
+        await File.WriteAllTextAsync(Path.Combine(directory, "subscription-validation-checks.json"), JsonSerializer.Serialize(new
+        {
+            InvalidInputRemainedOpen = remainedOpen,
+            LocalizedGuidanceVisible = correctMessage,
+            CancelClosedDialog = importTask.IsCompletedSuccessfully,
+            ImportNotStarted = importNotStarted,
+            NetworkStateChanged = false,
+            TunTouched = false
+        }, DiagnosticJsonOptions));
+
+        ContentDialog? FindSubscriptionDialog() =>
+            VisualTreeHelper.GetOpenPopupsForXamlRoot(RootGrid.XamlRoot)
+                .Select(popup => popup.Child as ContentDialog ?? VisualDescendants<ContentDialog>(popup.Child).FirstOrDefault())
+                .FirstOrDefault(candidate => candidate is not null
+                    && Equals(candidate.Title, LocalizationService.Get("DialogAddSubscriptionTitle")));
     }
 
     private async Task VerifyConnectionsAndLogsInteractionsAsync(string directory, RuntimeSnapshot sample)
@@ -1418,12 +1585,12 @@ public sealed partial class MainWindow
         }, DiagnosticJsonOptions));
         ResetLogoClicks();
     }
-    private async Task SaveDiagnosticFrameAsync(string directory, string name)
+    private async Task SaveDiagnosticFrameAsync(string directory, string name, UIElement? element = null)
     {
         await Task.Delay(200);
         RootGrid.UpdateLayout();
         RenderTargetBitmap renderer = new RenderTargetBitmap();
-        await renderer.RenderAsync(RootGrid);
+        await renderer.RenderAsync(element ?? RootGrid);
         IBuffer pixels = await renderer.GetPixelsAsync();
         StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(Path.GetFullPath(directory));
         StorageFile file = await folder.CreateFileAsync($"{name}.png", CreationCollisionOption.ReplaceExisting);
