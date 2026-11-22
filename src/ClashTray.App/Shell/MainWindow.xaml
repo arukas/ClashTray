@@ -58,15 +58,9 @@
             </Grid>
         </Border>
         <Grid Grid.Row="2" Margin="0,0,0,8" ColumnSpacing="4">
-            <Grid.Resources><ResourceDictionary><ResourceDictionary.ThemeDictionaries><ResourceDictionary x:Key="Light"><StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="AccentTextFillColorPrimaryBrush"/>
-<StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="AccentTextFillColorPrimaryBrush"/>
-<StaticResource x:Key="ToggleButtonBackgroundCheckedPressed" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundCheckedPressed" ResourceKey="AccentTextFillColorPrimaryBrush"/></ResourceDictionary>
-<ResourceDictionary x:Key="Default"><StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="AccentTextFillColorPrimaryBrush"/>
-<StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="AccentTextFillColorPrimaryBrush"/>
-<StaticResource x:Key="ToggleButtonBackgroundCheckedPressed" ResourceKey="ClashTraySurfaceBrush"/><StaticResource x:Key="ToggleButtonForegroundCheckedPressed" ResourceKey="AccentTextFillColorPrimaryBrush"/></ResourceDictionary>
-<ResourceDictionary x:Key="HighContrast"><SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="{ThemeResource SystemColorHighlightColor}"/><SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="{ThemeResource SystemColorHighlightTextColor}"/>
-<SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="{ThemeResource SystemColorHighlightColor}"/><SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver" Color="{ThemeResource SystemColorHighlightTextColor}"/>
-<SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="{ThemeResource SystemColorHighlightColor}"/><SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed" Color="{ThemeResource SystemColorHighlightTextColor}"/></ResourceDictionary></ResourceDictionary.ThemeDictionaries></ResourceDictionary></Grid.Resources>
+            <Grid.Resources>
+                <ResourceDictionary Source="ms-appx:///Themes/Navigation.xaml"/>
+            </Grid.Resources>
             <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
             <ToggleButton x:Name="ProxyPageButton" x:Uid="ProxyPageButton" Style="{StaticResource ClashTrayNavButtonStyle}" Click="ProxyPageButton_Click"/>
             <ToggleButton x:Name="RulesPageButton" x:Uid="RulesPageButton" Grid.Column="1" Style="{StaticResource ClashTrayNavButtonStyle}" Click="RulesPageButton_Click"/>

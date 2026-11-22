@@ -191,7 +191,7 @@ public sealed partial class MainWindow
         }, DiagnosticJsonOptions));
         foreach ((UIElement, PanelPage) page in new[] { ((UIElement)_rulesPage!, PanelPage.Rules), ((UIElement)_connectionsPage!, PanelPage.Connections), ((UIElement)_logsPage!, PanelPage.Logs), ((UIElement)_settingsPage!, PanelPage.Settings) })
         {
-            NavigateTo(page.Item1, page.Item2);
+            NavigateTo(page.Item2);
             await Task.Delay(100);
             RootGrid.UpdateLayout();
             bool listPage = page.Item2 is PanelPage.Rules or PanelPage.Connections or PanelPage.Logs;
@@ -210,7 +210,7 @@ public sealed partial class MainWindow
 
             await SaveDiagnosticFrameAsync(directory, $"page-{page.Item2}");
         }
-        NavigateTo(_proxyPage, PanelPage.Proxy);
+        NavigateTo(PanelPage.Proxy);
     }
 
     private async Task VerifyStatusIndicatorsAsync(string directory, RuntimeSnapshot sample)
@@ -452,7 +452,7 @@ public sealed partial class MainWindow
                 $"payload-{index:000}"))
             .ToArray();
 
-        NavigateTo(_connectionsPage!, PanelPage.Connections);
+        NavigateTo(PanelPage.Connections);
         System.Diagnostics.Stopwatch connectionUpdate = System.Diagnostics.Stopwatch.StartNew();
         _connectionsPage!.UpdateSnapshot(
             CreateReadOnlySmokeContext(sample with { Connections = connections }, "smoke-controller", 1));
@@ -559,7 +559,7 @@ public sealed partial class MainWindow
                 sequence == 78 ? "needle-log-078" : $"event-bucket-{sequence % 10:00}",
                 Sequence: sequence))
             .ToArray();
-        NavigateTo(_logsPage!, PanelPage.Logs);
+        NavigateTo(PanelPage.Logs);
         System.Diagnostics.Stopwatch logUpdate = System.Diagnostics.Stopwatch.StartNew();
         _logsPage!.UpdateSnapshot(
             CreateReadOnlySmokeContext(sample with { Logs = logs }, "smoke-logs", 1));
@@ -790,14 +790,14 @@ public sealed partial class MainWindow
 
         await SaveDiagnosticFrameAsync(directory, "remote-stale-controller");
 
-        NavigateTo(_rulesPage, PanelPage.Rules);
+        NavigateTo(PanelPage.Rules);
         await Task.Delay(50);
         if (((Button)_rulesPage!.FindName("RefreshRulesButton")).IsEnabled)
         {
             throw new InvalidOperationException("Remote stale rule refresh was not disabled.");
         }
 
-        NavigateTo(_connectionsPage, PanelPage.Connections);
+        NavigateTo(PanelPage.Connections);
         await Task.Delay(50);
         ListView remoteConnections = (ListView)_connectionsPage!.FindName("ConnectionsListView");
         remoteConnections.SelectedIndex = 0;
@@ -808,14 +808,14 @@ public sealed partial class MainWindow
             throw new InvalidOperationException("Remote stale connection actions were not disabled.");
         }
 
-        NavigateTo(_logsPage, PanelPage.Logs);
+        NavigateTo(PanelPage.Logs);
         await Task.Delay(50);
         if (((Button)_logsPage!.FindName("ClearLogsButton")).IsEnabled)
         {
             throw new InvalidOperationException("Remote stale log clearing was not disabled.");
         }
 
-        NavigateTo(_settingsPage, PanelPage.Settings);
+        NavigateTo(PanelPage.Settings);
         await Task.Delay(50);
         ListView remoteProviders = (ListView)FindSettingsControl(_settingsPage!, "ProvidersListView");
         remoteProviders.SelectedIndex = 0;
@@ -828,7 +828,7 @@ public sealed partial class MainWindow
             throw new InvalidOperationException("Remote stale maintenance actions were not disabled.");
         }
 
-        NavigateTo(_proxyPage, PanelPage.Proxy);
+        NavigateTo(PanelPage.Proxy);
         ControllerSessionSnapshot connectedController = remoteController with
         {
             State = EndpointSessionState.Connected,
@@ -874,21 +874,21 @@ public sealed partial class MainWindow
             throw new InvalidOperationException("Remote capability restrictions were not reflected in the proxy controls.");
         }
 
-        NavigateTo(_rulesPage, PanelPage.Rules);
+        NavigateTo(PanelPage.Rules);
         await Task.Delay(50);
         if (((Button)_rulesPage!.FindName("RefreshRulesButton")).IsEnabled)
         {
             throw new InvalidOperationException("Remote capability restrictions were not reflected in rule refresh.");
         }
 
-        NavigateTo(_connectionsPage, PanelPage.Connections);
+        NavigateTo(PanelPage.Connections);
         await Task.Delay(50);
         if (((Button)_connectionsPage!.FindName("CloseAllButton")).IsEnabled)
         {
             throw new InvalidOperationException("Remote capability restrictions were not reflected in connection actions.");
         }
 
-        NavigateTo(_settingsPage, PanelPage.Settings);
+        NavigateTo(PanelPage.Settings);
         await Task.Delay(50);
         if (((Button)FindSettingsControl(_settingsPage!, "ClearDnsButton")).IsEnabled
             || ((Button)FindSettingsControl(_settingsPage!, "ClearFakeIpButton")).IsEnabled
@@ -899,7 +899,7 @@ public sealed partial class MainWindow
         }
 
         UpdateAppSnapshot(remoteSnapshot with { ActiveController = connectedController });
-        NavigateTo(_proxyPage, PanelPage.Proxy);
+        NavigateTo(PanelPage.Proxy);
 
         await File.WriteAllTextAsync(
             Path.Combine(directory, "remote-freshness-checks.json"),
@@ -928,7 +928,7 @@ public sealed partial class MainWindow
     private async Task VerifySettingsSectionsAsync(string directory, RuntimeSnapshot sample)
     {
         SettingsPage page = _settingsPage!;
-        NavigateTo(page, PanelPage.Settings);
+        NavigateTo(PanelPage.Settings);
         EndpointSettingsSection endpoints = (EndpointSettingsSection)page.FindName("EndpointSection");
         EndpointDescriptor local = _runtime!.AppSnapshot.ActiveController.Endpoint;
         EndpointDescriptor remote = new(new("smoke-settings"), EndpointKind.Remote, "Settings endpoint",
@@ -975,7 +975,7 @@ public sealed partial class MainWindow
     private async Task VerifySettingsDraftAsync(string directory)
     {
         SettingsPage page = _settingsPage!;
-        NavigateTo(page, PanelPage.Settings);
+        NavigateTo(PanelPage.Settings);
         await Task.Delay(100);
         ToggleSwitch windows = (ToggleSwitch)page.FindName("StartWithWindowsSwitch");
         ToggleSwitch core = (ToggleSwitch)page.FindName("StartCoreSwitch");
@@ -1082,7 +1082,7 @@ public sealed partial class MainWindow
             WindowsStartupRegistryChanged = false,
             ManualChecks = "Windows sign-in startup and automatic core launch after sign-in were not exercised."
         }, DiagnosticJsonOptions));
-        NavigateTo(_proxyPage, PanelPage.Proxy);
+        NavigateTo(PanelPage.Proxy);
     }
 
     private static TextBox? FindSettingsNumberInput(DependencyObject parent, int depth = 0)
@@ -1124,7 +1124,7 @@ public sealed partial class MainWindow
             "Mapped configuration is unavailable.",
             ErrorCode.NetworkRuleTargetMissing);
 
-        NavigateTo(_settingsPage!, PanelPage.Settings);
+        NavigateTo(PanelPage.Settings);
         UpdateSnapshot(local with { NetworkSwitch = status });
         RootGrid.UpdateLayout();
         string expectedMissingTarget = LocalizationService.Format(
@@ -1169,7 +1169,7 @@ public sealed partial class MainWindow
 
     private async Task VerifySsidFeatureScopeAsync(string directory)
     {
-        NavigateTo(_settingsPage!, PanelPage.Settings);
+        NavigateTo(PanelPage.Settings);
         RootGrid.UpdateLayout();
 
         if (FindSettingsControl(_settingsPage!, "NetworkSwitchCard") is not Border networkSwitchCard

@@ -1,0 +1,30 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+            <StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="ClashTraySurfaceBrush"/>
+            <StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="AccentTextFillColorPrimaryBrush"/>
+            <StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="ClashTraySurfaceBrush"/>
+            <StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="AccentTextFillColorPrimaryBrush"/>
+            <StaticResource x:Key="ToggleButtonBackgroundCheckedPressed" ResourceKey="ClashTraySurfaceBrush"/>
+            <StaticResource x:Key="ToggleButtonForegroundCheckedPressed" ResourceKey="AccentTextFillColorPrimaryBrush"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Default">
+            <StaticResource x:Key="ToggleButtonBackgroundChecked" ResourceKey="ClashTraySurfaceBrush"/>
+            <StaticResource x:Key="ToggleButtonForegroundChecked" ResourceKey="AccentTextFillColorPrimaryBrush"/>
+            <StaticResource x:Key="ToggleButtonBackgroundCheckedPointerOver" ResourceKey="ClashTraySurfaceBrush"/>
+            <StaticResource x:Key="ToggleButtonForegroundCheckedPointerOver" ResourceKey="AccentTextFillColorPrimaryBrush"/>
+            <StaticResource x:Key="ToggleButtonBackgroundCheckedPressed" ResourceKey="ClashTraySurfaceBrush"/>
+            <StaticResource x:Key="ToggleButtonForegroundCheckedPressed" ResourceKey="AccentTextFillColorPrimaryBrush"/>
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="HighContrast">
+            <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="{ThemeResource SystemColorHighlightColor}"/>
+            <SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="{ThemeResource SystemColorHighlightTextColor}"/>
+            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="{ThemeResource SystemColorHighlightColor}"/>
+            <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver" Color="{ThemeResource SystemColorHighlightTextColor}"/>
+            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="{ThemeResource SystemColorHighlightColor}"/>
+            <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed" Color="{ThemeResource SystemColorHighlightTextColor}"/>
+        </ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>

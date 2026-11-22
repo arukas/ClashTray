@@ -84,7 +84,7 @@ public sealed partial class MainWindow : Window
         _settingsPage = new SettingsPage(runtime);
         ProxyPageContent.Content = _proxyPage;
         ApplyTheme(runtime.Settings.Theme);
-        NavigateTo(_proxyPage, PanelPage.Proxy);
+        NavigateTo(PanelPage.Proxy);
         UpdateAppSnapshot(runtime.AppSnapshot);
     }
 
@@ -569,43 +569,20 @@ public sealed partial class MainWindow : Window
 
     private async void CoreActionButton_Click(object sender, RoutedEventArgs e) => await _app.ToggleCoreAsync();
 
-    private async void RuleModeButton_Click(object sender, RoutedEventArgs e)
+    private async void RuleModeButton_Click(object sender, RoutedEventArgs e) => await SetModeAsync(ProxyMode.Rule);
+
+    private async void GlobalModeButton_Click(object sender, RoutedEventArgs e) => await SetModeAsync(ProxyMode.Global);
+
+    private async void DirectModeButton_Click(object sender, RoutedEventArgs e) => await SetModeAsync(ProxyMode.Direct);
+
+    private async Task SetModeAsync(ProxyMode mode)
     {
-        if (!ActiveControllerWritable)
+        if (!ActiveControllerWritable || !HasActiveEndpointCapability(EndpointCapability.SwitchMode))
         {
             return;
         }
 
-        if (HasActiveEndpointCapability(EndpointCapability.SwitchMode))
-        {
-            await _app.SetModeAsync(ProxyMode.Rule, _activeCommandTarget);
-        }
-    }
-
-    private async void GlobalModeButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (!ActiveControllerWritable)
-        {
-            return;
-        }
-
-        if (HasActiveEndpointCapability(EndpointCapability.SwitchMode))
-        {
-            await _app.SetModeAsync(ProxyMode.Global, _activeCommandTarget);
-        }
-    }
-
-    private async void DirectModeButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (!ActiveControllerWritable)
-        {
-            return;
-        }
-
-        if (HasActiveEndpointCapability(EndpointCapability.SwitchMode))
-        {
-            await _app.SetModeAsync(ProxyMode.Direct, _activeCommandTarget);
-        }
+        await _app.SetModeAsync(mode, _activeCommandTarget);
     }
 
     private async void ImportLocalButton_Click(object sender, RoutedEventArgs e) => await ImportLocalConfigurationAsync();
@@ -687,21 +664,15 @@ public sealed partial class MainWindow : Window
         return _runtime?.Snapshot.Configurations.FirstOrDefault(configuration => configuration.Id == id);
     }
 
-    private void RulesButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_rulesPage, PanelPage.Rules);
+    private void ProxyPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(PanelPage.Proxy);
 
-    private void ConnectionsButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_connectionsPage, PanelPage.Connections);
+    private void RulesPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(PanelPage.Rules);
 
-    private void LogsButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_logsPage, PanelPage.Logs);
+    private void ConnectionsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(PanelPage.Connections);
 
-    private void ProxyPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_proxyPage, PanelPage.Proxy);
+    private void LogsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(PanelPage.Logs);
 
-    private void RulesPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_rulesPage, PanelPage.Rules);
-
-    private void ConnectionsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_connectionsPage, PanelPage.Connections);
-
-    private void LogsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_logsPage, PanelPage.Logs);
-
-    private void SettingsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(_settingsPage, PanelPage.Settings);
+    private void SettingsPageButton_Click(object sender, RoutedEventArgs e) => NavigateTo(PanelPage.Settings);
 
     private async void QuitButton_Click(object sender, RoutedEventArgs e) => await _app.RequestQuitEnsuringExitAsync();
 
@@ -762,10 +733,19 @@ public sealed partial class MainWindow : Window
         HidePanel();
     }
 
-    private void NavigateTo(UIElement? page, PanelPage target)
+    private void NavigateTo(PanelPage target)
     {
+        UIElement? page = target switch
+        {
+            PanelPage.Proxy => _proxyPage,
+            PanelPage.Rules => _rulesPage,
+            PanelPage.Connections => _connectionsPage,
+            PanelPage.Logs => _logsPage,
+            PanelPage.Settings => _settingsPage,
+            _ => null
+        };
         _activePage = target;
-        bool isDashboard = page == _proxyPage;
+        bool isDashboard = target == PanelPage.Proxy;
         bool isListPage = target is PanelPage.Rules or PanelPage.Connections or PanelPage.Logs;
         DashboardScrollViewer.Visibility = isDashboard ? Visibility.Visible : Visibility.Collapsed;
         OtherPageHost.Visibility = isDashboard ? Visibility.Collapsed : Visibility.Visible;
